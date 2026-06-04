@@ -3,9 +3,11 @@ import { CommonModule } from '@angular/common';
 import { NavigationComponent } from './modules/navigation/navigation.component';
 import { EditorComponent } from './modules/editor/editor.component';
 import { WelcomeComponent } from './modules/welcome/welcome.component';
+import { DialogContainerComponent } from './modules/dialogs/dialog-container.component';
 import { ArchiveService, MDZipArchive } from './core/services/archive.service';
 import { StorageService } from './core/services/storage.service';
 import { ValidationService } from './core/services/validation.service';
+import { DialogService } from './core/services/dialog.service';
 import { Subject } from 'rxjs';
 import { takeUntil } from 'rxjs/operators';
 
@@ -17,6 +19,7 @@ import { takeUntil } from 'rxjs/operators';
     NavigationComponent,
     EditorComponent,
     WelcomeComponent,
+    DialogContainerComponent,
   ],
   template: `
     <div class="app-container">
@@ -57,6 +60,8 @@ import { takeUntil } from 'rxjs/operators';
       <div class="status-bar">
         <span>{{ statusMessage }}</span>
       </div>
+
+      <app-dialog-container></app-dialog-container>
     </div>
   `,
   styles: [`
@@ -140,7 +145,8 @@ export class AppComponent implements OnInit, OnDestroy {
   constructor(
     private archiveService: ArchiveService,
     private storageService: StorageService,
-    private validationService: ValidationService
+    private validationService: ValidationService,
+    private dialogService: DialogService
   ) {}
 
   ngOnInit() {
@@ -212,20 +218,23 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   onEditManifest() {
-    this.statusMessage = 'Manifest editing... (Not yet implemented)';
-    // TODO: Implement manifest editor
+    if (!this.currentArchive) return;
+
+    this.dialogService.openManifestDialog(this.currentArchive.manifest);
+    this.statusMessage = 'Editing manifest...';
   }
 
   onValidate() {
     if (!this.currentArchive) return;
 
     const result = this.validationService.validateArchive(this.currentArchive);
+    this.dialogService.openValidationDialog(result);
+
     if (result.valid) {
       this.statusMessage = 'Archive is valid ✓';
     } else {
       const errorCount = result.errors.filter((e) => e.type === 'error').length;
       this.statusMessage = `Validation failed: ${errorCount} error(s)`;
-      console.log('Validation errors:', result.errors);
     }
   }
 
