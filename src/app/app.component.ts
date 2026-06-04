@@ -1,7 +1,7 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { NavigationComponent } from './modules/navigation/navigation.component';
-import { EditorComponent } from './modules/editor/editor.component';
+import { WorkspaceComponent } from './modules/workspace/workspace.component';
 import { WelcomeComponent } from './modules/welcome/welcome.component';
 import { DialogContainerComponent } from './modules/dialogs/dialog-container.component';
 import { ArchiveService, MDZipArchive } from './core/services/archive.service';
@@ -17,7 +17,7 @@ import { takeUntil } from 'rxjs/operators';
   imports: [
     CommonModule,
     NavigationComponent,
-    EditorComponent,
+    WorkspaceComponent,
     WelcomeComponent,
     DialogContainerComponent,
   ],
@@ -53,7 +53,7 @@ import { takeUntil } from 'rxjs/operators';
             (openRecent)="onOpenRecent($event)"
           ></app-welcome>
 
-          <app-editor *ngIf="currentArchive"></app-editor>
+          <app-workspace *ngIf="currentArchive"></app-workspace>
         </div>
       </div>
 
