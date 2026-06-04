@@ -1,0 +1,43 @@
+{
+  "name": "mdzip-studio",
+  "version": "0.1.0",
+  "description": "Reference desktop application for the MDZip ecosystem",
+  "main": "electron/main.js",
+  "homepage": "./",
+  "scripts": {
+    "start": "concurrently \"npm run start:angular\" \"wait-on http://localhost:4200 && npm run start:electron\"",
+    "start:angular": "ng serve --port 4200",
+    "start:electron": "electron .",
+    "build": "npm run build:angular && npm run build:electron",
+    "build:angular": "ng build --configuration production",
+    "build:electron": "electron-builder",
+    "test": "ng test",
+    "lint": "ng lint"
+  },
+  "dependencies": {
+    "@angular/animations": "^17.0.0",
+    "@angular/common": "^17.0.0",
+    "@angular/compiler": "^17.0.0",
+    "@angular/core": "^17.0.0",
+    "@angular/forms": "^17.0.0",
+    "@angular/platform-browser": "^17.0.0",
+    "@angular/platform-browser-dynamic": "^17.0.0",
+    "@angular/router": "^17.0.0",
+    "rxjs": "^7.8.0",
+    "tslib": "^2.6.0",
+    "zone.js": "^0.14.0",
+    "mdzip-core-js": "^0.1.0",
+    "mdzip-editor": "^0.1.0"
+  },
+  "devDependencies": {
+    "@angular-devkit/build-angular": "^17.0.0",
+    "@angular/cli": "^17.0.0",
+    "@angular/compiler-cli": "^17.0.0",
+    "@types/node": "^20.0.0",
+    "concurrently": "^8.0.0",
+    "electron": "^27.0.0",
+    "electron-builder": "^24.0.0",
+    "typescript": "^5.2.0",
+    "wait-on": "^7.0.0"
+  }
+}

@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Angular
+dist/
+out-tsc/
+.angular/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+Thumbs.db
+.env.local
+.env.*.local
+
+# Build output
+*.js.map
+*.js
+
+# Electron
+dist_electron/
