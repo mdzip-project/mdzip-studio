@@ -1,71 +1,61 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterModule } from '@angular/router';
+import { NavigationComponent } from './modules/navigation/navigation.component';
+import { EditorComponent } from './modules/editor/editor.component';
+import { WelcomeComponent } from './modules/welcome/welcome.component';
+import { ArchiveService, MDZipArchive } from './core/services/archive.service';
+import { StorageService } from './core/services/storage.service';
+import { ValidationService } from './core/services/validation.service';
+import { Subject } from 'rxjs';
+import { takeUntil } from 'rxjs/operators';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, RouterModule],
+  imports: [
+    CommonModule,
+    NavigationComponent,
+    EditorComponent,
+    WelcomeComponent,
+  ],
   template: `
     <div class="app-container">
       <div class="menu-bar">
-        <div class="menu-item">MDZip Studio</div>
+        <div class="app-title">MDZip Studio</div>
+        <div class="archive-info" *ngIf="currentArchive">
+          {{ currentArchive.name }}
+          <span class="badge">{{ currentArchive.mode }}</span>
+        </div>
       </div>
+
       <div class="main-content">
         <div class="navigation-pane">
-          <nav>
-            <div class="nav-section">
-              <h3>Archive</h3>
-              <button (click)="newArchive()" class="nav-button">New</button>
-              <button (click)="openArchive()" class="nav-button">Open</button>
-            </div>
-            <div class="nav-section" *ngIf="archiveOpen">
-              <h3>Contents</h3>
-              <div class="nav-item">Documents</div>
-              <div class="nav-item">Assets</div>
-              <div class="nav-item">Manifest</div>
-            </div>
-          </nav>
+          <app-navigation
+            (newArchive)="onNewArchive()"
+            (openArchive)="onOpenArchive()"
+            (addDocument)="onAddDocument()"
+            (addAsset)="onAddAsset()"
+            (editManifest)="onEditManifest()"
+            (validate)="onValidate()"
+            (documentSelected)="onDocumentSelected($event)"
+          ></app-navigation>
         </div>
+
         <div class="workspace-area">
-          <div class="welcome-screen" *ngIf="!archiveOpen">
-            <h1>Welcome to MDZip Studio</h1>
-            <p>Create, view, and edit MDZip archives</p>
-            <div class="action-buttons">
-              <button (click)="newArchive()" class="primary-button">
-                Create New Archive
-              </button>
-              <button (click)="openArchive()" class="secondary-button">
-                Open Archive
-              </button>
-            </div>
-            <div class="recent-files" *ngIf="recentFiles.length > 0">
-              <h3>Recent Files</h3>
-              <ul>
-                <li *ngFor="let file of recentFiles">{{ file }}</li>
-              </ul>
-            </div>
-          </div>
-          <div class="editor-area" *ngIf="archiveOpen">
-            <div class="editor-tabs">
-              <div class="tab" [class.active]="activeTab === 'editor'">
-                Editor
-              </div>
-              <div class="tab" [class.active]="activeTab === 'preview'">
-                Preview
-              </div>
-              <div class="tab" [class.active]="activeTab === 'manifest'">
-                Manifest
-              </div>
-            </div>
-            <div class="editor-content">
-              <p>Archive: {{ currentArchive }}</p>
-            </div>
-          </div>
+          <app-welcome
+            *ngIf="!currentArchive"
+            [recentFiles]="recentFiles"
+            (newArchive)="onNewArchive()"
+            (openArchive)="onOpenArchive()"
+            (openRecent)="onOpenRecent($event)"
+          ></app-welcome>
+
+          <app-editor *ngIf="currentArchive"></app-editor>
         </div>
       </div>
+
       <div class="status-bar">
-        <span>Ready</span>
+        <span>{{ statusMessage }}</span>
       </div>
     </div>
   `,
@@ -74,17 +64,39 @@ import { RouterModule } from '@angular/router';
       display: flex;
       flex-direction: column;
       height: 100vh;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
-        Ubuntu, Cantarell, sans-serif;
       background: #ffffff;
       color: #333;
     }
 
     .menu-bar {
-      background: #f5f5f5;
-      border-bottom: 1px solid #ddd;
+      background: #2d2d2d;
+      color: white;
       padding: 8px 16px;
       font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      border-bottom: 1px solid #1e1e1e;
+    }
+
+    .app-title {
+      font-size: 14px;
+    }
+
+    .archive-info {
+      font-size: 12px;
+      opacity: 0.8;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .badge {
+      background: #007acc;
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-size: 10px;
+      text-transform: uppercase;
     }
 
     .main-content {
@@ -97,43 +109,7 @@ import { RouterModule } from '@angular/router';
       width: 250px;
       border-right: 1px solid #ddd;
       overflow-y: auto;
-      padding: 16px;
       background: #fafafa;
-    }
-
-    nav {
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-
-    .nav-section h3 {
-      margin: 0 0 8px 0;
-      font-size: 12px;
-      text-transform: uppercase;
-      color: #666;
-      font-weight: 600;
-    }
-
-    .nav-button,
-    .nav-item {
-      display: block;
-      padding: 8px 12px;
-      background: none;
-      border: none;
-      text-align: left;
-      cursor: pointer;
-      border-radius: 4px;
-      transition: background 0.2s;
-      font-size: 14px;
-    }
-
-    .nav-button:hover {
-      background: #e0e0e0;
-    }
-
-    .nav-item {
-      color: #666;
     }
 
     .workspace-area {
@@ -141,120 +117,6 @@ import { RouterModule } from '@angular/router';
       display: flex;
       flex-direction: column;
       overflow: hidden;
-    }
-
-    .welcome-screen {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      flex: 1;
-      padding: 40px;
-      text-align: center;
-    }
-
-    .welcome-screen h1 {
-      margin: 0 0 16px 0;
-      font-size: 32px;
-    }
-
-    .welcome-screen p {
-      margin: 0 0 32px 0;
-      color: #666;
-      font-size: 16px;
-    }
-
-    .action-buttons {
-      display: flex;
-      gap: 12px;
-      justify-content: center;
-      margin-bottom: 40px;
-    }
-
-    .primary-button,
-    .secondary-button {
-      padding: 10px 20px;
-      font-size: 14px;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-
-    .primary-button {
-      background: #007acc;
-      color: white;
-    }
-
-    .primary-button:hover {
-      background: #005a9e;
-    }
-
-    .secondary-button {
-      background: #e0e0e0;
-      color: #333;
-    }
-
-    .secondary-button:hover {
-      background: #d0d0d0;
-    }
-
-    .recent-files {
-      text-align: left;
-      margin-top: 40px;
-      border-top: 1px solid #ddd;
-      padding-top: 20px;
-    }
-
-    .recent-files h3 {
-      margin: 0 0 12px 0;
-    }
-
-    .recent-files ul {
-      list-style: none;
-      padding: 0;
-      margin: 0;
-    }
-
-    .recent-files li {
-      padding: 6px 0;
-      color: #666;
-    }
-
-    .editor-area {
-      display: flex;
-      flex-direction: column;
-      flex: 1;
-    }
-
-    .editor-tabs {
-      display: flex;
-      gap: 0;
-      border-bottom: 1px solid #ddd;
-      background: #f5f5f5;
-    }
-
-    .tab {
-      padding: 12px 16px;
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      font-size: 14px;
-      transition: all 0.2s;
-    }
-
-    .tab:hover {
-      background: #e0e0e0;
-    }
-
-    .tab.active {
-      border-bottom-color: #007acc;
-      background: #ffffff;
-    }
-
-    .editor-content {
-      flex: 1;
-      padding: 16px;
-      overflow-y: auto;
     }
 
     .status-bar {
@@ -269,30 +131,110 @@ import { RouterModule } from '@angular/router';
     }
   `],
 })
-export class AppComponent implements OnInit {
-  archiveOpen = false;
-  currentArchive: string = '';
-  activeTab: 'editor' | 'preview' | 'manifest' = 'editor';
+export class AppComponent implements OnInit, OnDestroy {
+  currentArchive: MDZipArchive | null = null;
   recentFiles: string[] = [];
+  statusMessage = 'Ready';
+  private destroy$ = new Subject<void>();
+
+  constructor(
+    private archiveService: ArchiveService,
+    private storageService: StorageService,
+    private validationService: ValidationService
+  ) {}
 
   ngOnInit() {
-    // Load recent files on init
-    this.loadRecentFiles();
+    this.archiveService.currentArchive
+      .pipe(takeUntil(this.destroy$))
+      .subscribe((archive) => {
+        this.currentArchive = archive;
+      });
+
+    this.recentFiles = this.storageService.getRecentFiles();
   }
 
-  newArchive() {
-    console.log('Creating new archive...');
-    // TODO: Implement archive creation
-    this.archiveOpen = true;
-    this.currentArchive = 'Untitled Archive';
+  ngOnDestroy() {
+    this.destroy$.next();
+    this.destroy$.complete();
   }
 
-  openArchive() {
-    console.log('Opening archive...');
-    // TODO: Implement file open dialog
+  onNewArchive() {
+    const name = prompt('Archive name:', 'My Archive');
+    if (!name) return;
+
+    const mode = confirm('Create as Project mode? (OK=Project, Cancel=Document)')
+      ? 'project'
+      : 'document';
+
+    const archive = this.archiveService.createNewArchive(name, mode);
+    this.statusMessage = `Created new ${mode} archive: ${name}`;
+
+    // Add an initial document
+    this.archiveService.addDocument({
+      id: '1',
+      name: 'index.md',
+      content: '# Welcome\n\nStart editing your MDZip archive here.',
+      modified: new Date(),
+    });
   }
 
-  private loadRecentFiles() {
-    // TODO: Load from local storage or electron IPC
+  onOpenArchive() {
+    this.statusMessage = 'Opening archive... (Not yet implemented)';
+    // TODO: Implement file dialog
+  }
+
+  onAddDocument() {
+    const name = prompt('Document name:', 'new-document.md');
+    if (!name) return;
+
+    this.archiveService.addDocument({
+      id: Date.now().toString(),
+      name,
+      content: '',
+      modified: new Date(),
+    });
+
+    this.statusMessage = `Added document: ${name}`;
+  }
+
+  onAddAsset() {
+    const name = prompt('Asset name:', 'image.png');
+    if (!name) return;
+
+    this.archiveService.addAsset({
+      id: Date.now().toString(),
+      name,
+      type: 'image/png',
+      size: 0,
+    });
+
+    this.statusMessage = `Added asset: ${name}`;
+  }
+
+  onEditManifest() {
+    this.statusMessage = 'Manifest editing... (Not yet implemented)';
+    // TODO: Implement manifest editor
+  }
+
+  onValidate() {
+    if (!this.currentArchive) return;
+
+    const result = this.validationService.validateArchive(this.currentArchive);
+    if (result.valid) {
+      this.statusMessage = 'Archive is valid ✓';
+    } else {
+      const errorCount = result.errors.filter((e) => e.type === 'error').length;
+      this.statusMessage = `Validation failed: ${errorCount} error(s)`;
+      console.log('Validation errors:', result.errors);
+    }
+  }
+
+  onDocumentSelected(id: string) {
+    this.statusMessage = `Selected document`;
+  }
+
+  onOpenRecent(path: string) {
+    this.statusMessage = `Opening ${path}... (Not yet implemented)`;
+    // TODO: Implement opening recent files
   }
 }
