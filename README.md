@@ -122,17 +122,23 @@ MDZip Studio supports standard Markdown editing with CommonMark syntax and previ
 mdzip-studio (Electron + Angular)
 ```
 
-## Phase 1 Features (MVP)
+## Features
 
-- [x] Application structure and setup
-- [ ] Open MDZip archive
-- [ ] Create new MDZip archive
-- [ ] Browse archive contents
-- [ ] View and edit Markdown
-- [ ] Manage assets
-- [ ] Edit manifest
-- [ ] Validate archive
-- [ ] Save archive
+- Create, open, and save `.mdz` archives and standalone Markdown files
+- Browse archive contents (documents and assets) in a tree view
+- Edit Markdown with a live split editor/preview
+- Manage embedded assets and images
+- Edit archive manifest metadata
+- Validate archives against the MDZip specification
+- Convert a Markdown file into an `.mdz` archive
+- Read-only files are indicated in the title and protected from accidental
+  in-place saves (Save As writes a copy)
+
+### Desktop integration (Windows)
+
+- `.mdz` file association — double-click to open in MDZip Studio
+- Optional Explorer **preview handler** for `.mdz` files (all-users install)
+- Native Open/Save dialogs and menus
 
 ## References
 
@@ -149,4 +155,4 @@ mdzip-studio (Electron + Angular)
 
 ## License
 
-See LICENSE file for details
+Apache License 2.0 — see the [LICENSE](LICENSE) file for details.
