@@ -11,15 +11,15 @@ import { CommonModule } from '@angular/common';
         <div class="logo">📦</div>
         <h1>MDZip Studio</h1>
         <p class="subtitle">
-          Create, view, and edit MDZip archives
+          Create, view, and edit MDZip documents
         </p>
 
         <div class="action-buttons">
           <button (click)="onNewArchive()" class="primary-button">
-            <span class="icon">+</span> Create New Archive
+            <span class="icon">+</span> Create New Document
           </button>
           <button (click)="onOpenArchive()" class="secondary-button">
-            <span class="icon">📂</span> Open Archive
+            <span class="icon">📂</span> Open Document
           </button>
         </div>
 
@@ -38,16 +38,16 @@ import { CommonModule } from '@angular/common';
           <h3>Getting Started</h3>
           <ul>
             <li>
-              <strong>Create</strong> a new MDZip archive to get started
+              <strong>Create</strong> a new MDZip document to get started
             </li>
             <li>
               <strong>Add Documents</strong> as Markdown files
             </li>
             <li>
-              <strong>Manage Assets</strong> like images and attachments
+              <strong>Manage Media</strong> like images and attachments
             </li>
             <li>
-              <strong>Edit Manifest</strong> to configure the archive
+              <strong>Review Internals</strong> when you need advanced settings
             </li>
             <li>
               <strong>Validate</strong> before saving

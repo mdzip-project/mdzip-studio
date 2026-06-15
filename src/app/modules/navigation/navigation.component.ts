@@ -9,7 +9,7 @@ import { ArchiveService, Document, Asset } from '../../core/services/archive.ser
   template: `
     <div class="navigation-container">
       <div class="nav-section">
-        <h3>Archive</h3>
+        <h3>Document</h3>
         <button (click)="onNewArchive()" class="nav-button">
           <span class="icon">+</span> New
         </button>
@@ -37,7 +37,7 @@ import { ArchiveService, Document, Asset } from '../../core/services/archive.ser
       </div>
 
       <div class="nav-section" *ngIf="archiveOpen">
-        <h3>Assets</h3>
+        <h3>Media</h3>
         <div class="nav-items">
           <div
             *ngFor="let asset of assets"

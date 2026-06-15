@@ -1,5 +1,4 @@
-import { Injectable } from '@angular/core';
-import { BehaviorSubject, Observable } from 'rxjs';
+import { Injectable, computed, signal } from '@angular/core';
 
 export interface MDZipArchive {
   name: string;
@@ -22,6 +21,7 @@ export interface Asset {
   name: string;
   type: string;
   size: number;
+  previewUrl?: string;
 }
 
 export interface Manifest {
@@ -35,16 +35,10 @@ export interface Manifest {
   providedIn: 'root',
 })
 export class ArchiveService {
-  private currentArchive$ = new BehaviorSubject<MDZipArchive | null>(null);
-  private recentFiles$ = new BehaviorSubject<string[]>([]);
-
-  get currentArchive(): Observable<MDZipArchive | null> {
-    return this.currentArchive$.asObservable();
-  }
-
-  get recentFiles(): Observable<string[]> {
-    return this.recentFiles$.asObservable();
-  }
+  readonly currentArchive = signal<MDZipArchive | null>(null);
+  readonly recentFiles = signal<string[]>([]);
+  readonly documents = computed(() => this.currentArchive()?.documents ?? []);
+  readonly assets = computed(() => this.currentArchive()?.assets ?? []);
 
   createNewArchive(name: string, mode: 'document' | 'project'): MDZipArchive {
     const archive: MDZipArchive = {
@@ -59,8 +53,12 @@ export class ArchiveService {
       },
     };
 
-    this.currentArchive$.next(archive);
+    this.currentArchive.set(archive);
     return archive;
+  }
+
+  loadArchive(archive: MDZipArchive): void {
+    this.currentArchive.set(archive);
   }
 
   openArchive(path: string): Promise<MDZipArchive> {
@@ -80,9 +78,9 @@ export class ArchiveService {
   }
 
   saveArchive(): Promise<void> {
-    const archive = this.currentArchive$.value;
+    const archive = this.currentArchive();
     if (!archive) {
-      return Promise.reject(new Error('No archive open'));
+      return Promise.reject(new Error('No document open'));
     }
     // TODO: Implement archive saving
     return Promise.resolve();
@@ -94,64 +92,83 @@ export class ArchiveService {
   }
 
   addDocument(document: Document): void {
-    const archive = this.currentArchive$.value;
+    const archive = this.currentArchive();
     if (!archive) return;
 
-    archive.documents.push(document);
-    this.currentArchive$.next(archive);
+    this.currentArchive.update((current) =>
+      current
+        ? {
+            ...current,
+            documents: [...current.documents, document],
+          }
+        : current
+    );
   }
 
   updateDocument(id: string, content: string): void {
-    const archive = this.currentArchive$.value;
-    if (!archive) return;
-
-    const doc = archive.documents.find((d) => d.id === id);
-    if (doc) {
-      doc.content = content;
-      doc.modified = new Date();
-      this.currentArchive$.next(archive);
-    }
+    this.currentArchive.update((archive) =>
+      archive
+        ? {
+            ...archive,
+            documents: archive.documents.map((doc) =>
+              doc.id === id ? { ...doc, content, modified: new Date() } : doc
+            ),
+          }
+        : archive
+    );
   }
 
   removeDocument(id: string): void {
-    const archive = this.currentArchive$.value;
-    if (!archive) return;
-
-    archive.documents = archive.documents.filter((d) => d.id !== id);
-    this.currentArchive$.next(archive);
+    this.currentArchive.update((archive) =>
+      archive
+        ? {
+            ...archive,
+            documents: archive.documents.filter((document) => document.id !== id),
+          }
+        : archive
+    );
   }
 
   addAsset(asset: Asset): void {
-    const archive = this.currentArchive$.value;
-    if (!archive) return;
-
-    archive.assets.push(asset);
-    this.currentArchive$.next(archive);
+    this.currentArchive.update((archive) =>
+      archive
+        ? {
+            ...archive,
+            assets: [...archive.assets, asset],
+          }
+        : archive
+    );
   }
 
   removeAsset(id: string): void {
-    const archive = this.currentArchive$.value;
-    if (!archive) return;
-
-    archive.assets = archive.assets.filter((a) => a.id !== id);
-    this.currentArchive$.next(archive);
+    this.currentArchive.update((archive) =>
+      archive
+        ? {
+            ...archive,
+            assets: archive.assets.filter((asset) => asset.id !== id),
+          }
+        : archive
+    );
   }
 
   updateManifest(manifest: Partial<Manifest>): void {
-    const archive = this.currentArchive$.value;
-    if (!archive) return;
-
-    archive.manifest = { ...archive.manifest, ...manifest };
-    this.currentArchive$.next(archive);
+    this.currentArchive.update((archive) =>
+      archive
+        ? {
+            ...archive,
+            manifest: { ...archive.manifest, ...manifest },
+          }
+        : archive
+    );
   }
 
   closeArchive(): void {
-    this.currentArchive$.next(null);
+    this.currentArchive.set(null);
   }
 
   addToRecentFiles(path: string): void {
-    const recent = this.recentFiles$.value;
+    const recent = this.recentFiles();
     const filtered = recent.filter((f) => f !== path);
-    this.recentFiles$.next([path, ...filtered].slice(0, 10));
+    this.recentFiles.set([path, ...filtered].slice(0, 10));
   }
 }

@@ -79,6 +79,16 @@ MDZip Studio is built with:
 - **mdzip-core-js**: Archive format library
 - **mdzip-editor**: Markdown editor component
 
+## Markdown Support
+
+MDZip Studio supports standard Markdown editing with CommonMark syntax and previews content with GitHub Flavored Markdown-style rendering.
+
+- CommonMark-based editing
+- GFM-style preview rendering
+- Sanitized HTML output
+- Highlighted fenced code blocks
+- Common Markdown extras such as tables, task lists, strikethrough, and autolinks
+
 ### Dependency Hierarchy
 
 ```

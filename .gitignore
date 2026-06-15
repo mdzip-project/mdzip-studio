@@ -1,14 +1,20 @@
 # Dependencies
 node_modules/
-package-lock.json
 yarn.lock
 
-# Angular
+# Angular build output
 dist/
 out-tsc/
 .angular/
 
-# IDE
+# Electron build output
+dist_electron/
+
+# Generated Windows preview-handler binaries
+# (built from the sibling ../mdzip-win-prev repo via `dotnet publish`)
+build/preview-handler/
+
+# IDE / editor
 .vscode/
 .idea/
 *.swp
@@ -18,12 +24,12 @@ out-tsc/
 
 # OS
 Thumbs.db
+
+# Environment
+.env
 .env.local
 .env.*.local
 
-# Build output
-*.js.map
-*.js
-
-# Electron
-dist_electron/
+# Local tooling / machine-specific (not for distribution)
+.mcp.json
+.playwright-mcp/

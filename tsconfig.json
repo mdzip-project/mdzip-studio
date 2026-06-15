@@ -13,7 +13,7 @@
     "declaration": false,
     "downlevelIteration": true,
     "experimentalDecorators": true,
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "importHelpers": true,
     "target": "ES2022",
     "module": "ES2022",
@@ -23,7 +23,7 @@
       "@app/*": ["src/app/*"],
       "@core/*": ["src/app/core/*"],
       "@shared/*": ["src/app/shared/*"],
-      "@modules/*": ["src/app/modules/*"]
+      "@modules/*": ["src/app/modules/*"],
     }
   },
   "angularCompilerOptions": {

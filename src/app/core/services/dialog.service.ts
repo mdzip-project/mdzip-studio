@@ -1,5 +1,4 @@
-import { Injectable } from '@angular/core';
-import { BehaviorSubject, Observable } from 'rxjs';
+import { Injectable, signal } from '@angular/core';
 
 export interface DialogConfig {
   title: string;
@@ -13,14 +12,10 @@ export interface DialogConfig {
   providedIn: 'root',
 })
 export class DialogService {
-  private openDialogs$ = new BehaviorSubject<DialogConfig | null>(null);
-
-  get openDialog(): Observable<DialogConfig | null> {
-    return this.openDialogs$.asObservable();
-  }
+  readonly openDialog = signal<DialogConfig | null>(null);
 
   openManifestDialog(manifest: unknown): void {
-    this.openDialogs$.next({
+    this.openDialog.set({
       title: 'Edit Manifest',
       type: 'manifest',
       data: manifest,
@@ -28,7 +23,7 @@ export class DialogService {
   }
 
   openValidationDialog(data: unknown): void {
-    this.openDialogs$.next({
+    this.openDialog.set({
       title: 'Validation Results',
       type: 'validation',
       data,
@@ -36,12 +31,12 @@ export class DialogService {
   }
 
   closeDialog(): void {
-    this.openDialogs$.next(null);
+    this.openDialog.set(null);
   }
 
   confirmDialog(message: string): Promise<boolean> {
     return new Promise((resolve) => {
-      this.openDialogs$.next({
+      this.openDialog.set({
         title: 'Confirm',
         type: 'confirm',
         data: message,

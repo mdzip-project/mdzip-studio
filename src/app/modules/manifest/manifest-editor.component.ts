@@ -1,235 +1,173 @@
-import { Component, Input, Output, EventEmitter, OnInit } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { Component, EventEmitter, Input, Output } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Manifest } from '../../core/services/archive.service';
+
+export type ManifestEditorChange =
+  | { field: 'title' | 'author' | 'description' | 'entryPoint'; value: string }
+  | { field: 'mode'; value: 'document' | 'project' };
 
 @Component({
   selector: 'app-manifest-editor',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [FormsModule],
   template: `
-    <div class="manifest-container">
+    <section class="manifest-editor">
       <div class="manifest-header">
-        <h2>Archive Manifest</h2>
-        <button (click)="close()" class="close-btn">✕</button>
+        <div>
+          <h3>Manifest</h3>
+          <p>These fields are written into the MDZip manifest.</p>
+        </div>
       </div>
 
-      <form (ngSubmit)="save()" class="manifest-form">
-        <div class="form-group">
-          <label>Mode</label>
-          <select [(ngModel)]="editingManifest.mode" name="mode">
+      <div class="form-grid">
+        <label>
+          Title
+          <input
+            type="text"
+            [ngModel]="title"
+            (ngModelChange)="emitTextChange('title', $event)"
+          />
+        </label>
+        <label>
+          Author
+          <input
+            type="text"
+            [ngModel]="author"
+            (ngModelChange)="emitTextChange('author', $event)"
+          />
+        </label>
+        <label class="full-width">
+          Description
+          <textarea
+            rows="5"
+            [ngModel]="description"
+            (ngModelChange)="emitTextChange('description', $event)"
+          ></textarea>
+        </label>
+        <label>
+          Mode
+          <select [ngModel]="mode" (ngModelChange)="emitModeChange($event)">
             <option value="document">Document</option>
             <option value="project">Project</option>
           </select>
-        </div>
-
-        <div class="form-group">
-          <label>Version</label>
-          <input
-            type="text"
-            [(ngModel)]="editingManifest.version"
-            name="version"
-            placeholder="1.0.0"
-          />
-        </div>
-
-        <div class="form-group">
-          <label>Entry Point</label>
-          <input
-            type="text"
-            [(ngModel)]="editingManifest.entryPoint"
-            name="entryPoint"
-            placeholder="index.md"
-          />
-        </div>
-
-        <div class="form-group">
-          <label>Metadata (JSON)</label>
-          <textarea
-            [(ngModel)]="metadataJson"
-            name="metadata"
-            placeholder="{}"
-            rows="6"
-          ></textarea>
-        </div>
-
-        <div class="form-actions">
-          <button type="submit" class="primary-btn">Save</button>
-          <button type="button" (click)="close()" class="secondary-btn">
-            Cancel
-          </button>
-        </div>
-      </form>
-
-      <div class="manifest-preview" *ngIf="manifest">
-        <h3>Preview</h3>
-        <pre>{{ manifest | json }}</pre>
+        </label>
+        <label>
+          Format
+          <input type="text" [ngModel]="'MDZip ' + version" readonly />
+        </label>
+        <label class="full-width">
+          Entry point
+          <select
+            [ngModel]="entryPoint"
+            (ngModelChange)="emitTextChange('entryPoint', $event)"
+          >
+            @for (document of documents; track document) {
+              <option [value]="document">{{ document }}</option>
+            }
+          </select>
+        </label>
       </div>
-    </div>
+    </section>
   `,
   styles: [`
-    .manifest-container {
-      display: flex;
-      flex-direction: column;
-      height: 100%;
-      overflow-y: auto;
+    :host {
+      display: block;
+      min-width: 0;
+    }
+
+    .manifest-editor {
+      min-width: 0;
     }
 
     .manifest-header {
       display: flex;
+      align-items: flex-start;
       justify-content: space-between;
-      align-items: center;
-      padding: 16px;
-      border-bottom: 1px solid #ddd;
-      background: #f5f5f5;
+      gap: 12px;
     }
 
-    .manifest-header h2 {
+    h3,
+    p {
       margin: 0;
-      font-size: 18px;
     }
 
-    .close-btn {
-      background: none;
-      border: none;
-      font-size: 24px;
-      cursor: pointer;
-      color: #666;
+    h3 {
+      font-size: 16px;
     }
 
-    .manifest-form {
-      padding: 20px;
-      flex: 1;
+    p {
+      margin-top: 4px;
+      color: #68717d;
     }
 
-    .form-group {
-      margin-bottom: 20px;
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    label {
       display: flex;
       flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+      color: #4c5663;
+      font-weight: 700;
     }
 
-    .form-group label {
-      font-weight: 600;
-      margin-bottom: 8px;
-      color: #333;
-      font-size: 14px;
+    input,
+    select,
+    textarea {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px 12px;
+      border: 1px solid #cfd6df;
+      border-radius: 7px;
+      background: #ffffff;
+      color: #20242a;
+      font: inherit;
     }
 
-    .form-group input,
-    .form-group select,
-    .form-group textarea {
-      padding: 8px 12px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-family: inherit;
-      font-size: 14px;
-    }
-
-    .form-group input:focus,
-    .form-group select:focus,
-    .form-group textarea:focus {
-      outline: none;
-      border-color: #007acc;
-      box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.1);
-    }
-
-    .form-group textarea {
-      resize: vertical;
+    textarea {
       min-height: 120px;
-      font-family: 'Courier New', monospace;
+      resize: vertical;
     }
 
-    .form-actions {
-      display: flex;
-      gap: 12px;
-      margin-top: 24px;
+    input[readonly] {
+      background: #f4f6f8;
+      color: #68717d;
     }
 
-    .primary-btn,
-    .secondary-btn {
-      padding: 10px 20px;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-weight: 500;
-      transition: all 0.2s;
+    .full-width {
+      grid-column: 1 / -1;
     }
 
-    .primary-btn {
-      background: #007acc;
-      color: white;
-    }
-
-    .primary-btn:hover {
-      background: #005a9e;
-    }
-
-    .secondary-btn {
-      background: #e0e0e0;
-      color: #333;
-    }
-
-    .secondary-btn:hover {
-      background: #d0d0d0;
-    }
-
-    .manifest-preview {
-      padding: 20px;
-      border-top: 1px solid #ddd;
-      background: #f9f9f9;
-    }
-
-    .manifest-preview h3 {
-      margin: 0 0 12px 0;
-      font-size: 14px;
-    }
-
-    .manifest-preview pre {
-      margin: 0;
-      padding: 12px;
-      background: white;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      overflow-x: auto;
-      font-size: 12px;
-      line-height: 1.5;
+    @media (max-width: 760px) {
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
     }
   `],
 })
-export class ManifestEditorComponent implements OnInit {
-  @Input() manifest!: Manifest;
-  @Output() saved = new EventEmitter<Manifest>();
-  @Output() closed = new EventEmitter<void>();
+export class ManifestEditorComponent {
+  @Input() title = '';
+  @Input() author = '';
+  @Input() description = '';
+  @Input() mode: 'document' | 'project' = 'document';
+  @Input() version = '1.0.0';
+  @Input() entryPoint = 'index.md';
+  @Input() documents: readonly string[] = [];
 
-  editingManifest: Manifest = {
-    version: '1.0.0',
-    mode: 'document',
-    entryPoint: 'index.md',
-  };
-  metadataJson = '{}';
+  @Output() readonly fieldChange = new EventEmitter<ManifestEditorChange>();
 
-  ngOnInit() {
-    if (this.manifest) {
-      this.editingManifest = { ...this.manifest };
-      this.metadataJson = JSON.stringify(this.manifest.metadata || {}, null, 2);
-    }
+  emitTextChange(
+    field: 'title' | 'author' | 'description' | 'entryPoint',
+    value: string
+  ): void {
+    this.fieldChange.emit({ field, value });
   }
 
-  save() {
-    try {
-      const metadata = JSON.parse(this.metadataJson);
-      const updatedManifest: Manifest = {
-        ...this.editingManifest,
-        metadata,
-      };
-      this.saved.emit(updatedManifest);
-      this.close();
-    } catch (e) {
-      alert('Invalid JSON in metadata');
-    }
-  }
-
-  close() {
-    this.closed.emit();
+  emitModeChange(value: 'document' | 'project'): void {
+    this.fieldChange.emit({ field: 'mode', value });
   }
 }

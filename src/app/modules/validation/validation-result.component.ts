@@ -16,7 +16,7 @@ import { ValidationError } from '../../core/services/validation.service';
       <div [ngClass]="'result-' + (valid ? 'valid' : 'invalid')">
         <div class="result-icon">{{ valid ? '✓' : '✕' }}</div>
         <div class="result-text">
-          {{ valid ? 'Archive is valid' : 'Archive has errors' }}
+          {{ valid ? 'Document checks passed' : 'Document has errors' }}
         </div>
       </div>
 

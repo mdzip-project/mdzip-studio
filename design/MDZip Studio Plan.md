@@ -11,7 +11,7 @@ MDZip Studio is the reference desktop application for the MDZip ecosystem.
 
 It is not intended to compete with:
 
-* Visual Studio Code
+* Visual Studio Code (we have an extension already)
 
 * Obsidian
 
@@ -25,7 +25,7 @@ Instead, MDZip Studio serves as:
 
 * A reference implementation of MDZip
 
-* A desktop host for `mdzip-editor`
+* A desktop host for `@mdzip/editor-ng`
 
 * A showcase for MDZip capabilities
 
@@ -51,9 +51,9 @@ The application should demonstrate how MDZip archives are:
 
 ## Primary Goals
 
-* Open existing `.mdz` files
+* Open/edit existing `.mdz` and `.md` files
 
-* Create new `.mdz` files
+* Create new `.mdz`  and `.md` files
 
 * Browse archive contents
 
@@ -102,20 +102,22 @@ The focus should remain on MDZip.
 ## Dependency Hierarchy
 
 ```text
-mdzip-core-js
+@mdzip/core-js
       ↓
-mdzip-editor
+@mdzip/editor
+      ↓
+@mdzip/editor-ng
       ↓
 mdzip-studio
 ```
 
-MDZip Studio should consume `mdzip-editor`.
+MDZip Studio should consume `@mdzip/ditor-ng`.
 
 The application should not duplicate functionality already provided by:
 
-* mdzip-core-js
+* @mdzip/core-js
 
-* mdzip-editor
+* @mdzip/editor-ng (although there may be cases where we want studio to provide some functionality instead of the library)
 
 ***
 
@@ -155,11 +157,11 @@ Target platforms:
 
 Support:
 
-* Open MDZip archive
+* Open .md and MDZip archive
 
-* Create MDZip archive
+* Create .md and MDZip archive
 
-* Save MDZip archive
+* Save .md MDZip archive
 
 * Save As
 
@@ -387,9 +389,9 @@ Suggested layout:
 +--------------------------------------------------+
 | Menu / Toolbar                                   |
 +--------------------------------------------------+
-| Navigation | Editor / Preview Area              |
-|            |                                    |
-|            |                                    |
+| Navigation | Editor / Preview Area               |
+|            |                                     |
+|            |                                     |
 +--------------------------------------------------+
 | Status Bar                                       |
 +--------------------------------------------------+

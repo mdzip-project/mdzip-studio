@@ -34,9 +34,14 @@ export class StorageService {
 
   clear(): void {
     try {
-      Object.keys(localStorage)
-        .filter((key) => key.startsWith(this.prefix))
-        .forEach((key) => localStorage.removeItem(key));
+      const keysToRemove: string[] = [];
+      for (let index = 0; index < localStorage.length; index++) {
+        const key = localStorage.key(index);
+        if (key?.startsWith(this.prefix)) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach((key) => localStorage.removeItem(key));
     } catch (e) {
       console.error('Failed to clear storage:', e);
     }
