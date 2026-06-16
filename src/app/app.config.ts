@@ -12,6 +12,8 @@ export const appConfig: ApplicationConfig = {
     providePrimeNG({
       theme: {
         preset: Aura,
+        // Default darkModeSelector ('system') so PrimeNG dialogs follow the OS
+        // color scheme, matching the app chrome (see app.component.scss).
       },
     }),
   ],

@@ -28,7 +28,7 @@
             "assets": ["src/favicon.ico", "src/assets"],
             "styles": ["src/styles.scss"],
             "scripts": [],
-            "allowedCommonJsDependencies": ["isomorphic-dompurify"]
+            "allowedCommonJsDependencies": ["isomorphic-dompurify", "dayjs", "cytoscape-cose-bilkent", "cytoscape-fcose", "@braintree/sanitize-url"]
           },
           "configurations": {
             "production": {

@@ -9,14 +9,17 @@ import { TreeModule } from 'primeng/tree';
 import { TreeNode } from 'primeng/api';
 import { MdzArchiveCore, MdzManifest, MdzPackagerCore } from '@mdzip/core-js';
 import {
+  MdzipColorScheme,
   MdzipConversionAction,
   MdzipConversionContext,
   MdzipDocumentChangeEvent,
   MdzipEntryRenderContext,
+  MdzipMarkdownRenderExtension,
   MdzipWorkspaceChange,
   MdzipWorkspaceSave,
   MdzipWorkspaceSnapshot,
 } from '@mdzip/editor';
+import { mdzipMermaidExtension } from '@mdzip/editor/mermaid';
 import { MdzipEntryRendererDirective, MdzipWorkspaceComponent } from '@mdzip/editor-ng';
 import { NgIconComponent, provideIcons } from '@ng-icons/core';
 import {
@@ -72,6 +75,11 @@ interface ElectronMarkdownImageResult {
   relativePath: string;
 }
 
+interface MarkdownDefaultStatus {
+  supported: boolean;
+  isDefault: boolean;
+}
+
 interface ElectronBridge {
   isElectron?: boolean;
   platform?: string;
@@ -98,6 +106,8 @@ interface ElectronBridge {
     fileName: string;
     bytes: number[];
   }) => Promise<ElectronMarkdownImageResult>;
+  getMarkdownDefaultStatus?: () => Promise<MarkdownDefaultStatus>;
+  promptMarkdownDefault?: () => Promise<MarkdownDefaultStatus>;
 }
 
 declare global {
@@ -161,7 +171,10 @@ interface ArchiveTreeData {
         @if (!isDesktopShell()) {
         <div class="menubar">
           <div class="menubar-brand">
-            <img class="brand-icon" src="assets/mdzip-mark/mdzip-mark-square.svg" alt="" />
+            <picture>
+              <source srcset="assets/mdzip-mark/mdzip-mark-square-dark.svg" media="(prefers-color-scheme: dark)" />
+              <img class="brand-icon" src="assets/mdzip-mark/mdzip-mark-square.svg" alt="" />
+            </picture>
             <span class="doc-title">{{ documentTitleDisplay() || 'MDZip Studio' }}</span>
           </div>
           <nav class="menu-nav">
@@ -220,7 +233,10 @@ interface ArchiveTreeData {
         <section class="content">
           @if (!currentArchive()) {
             <div class="empty-state">
-              <img class="empty-mark" src="assets/mdzip-mark/mdzip-mark-open-square.svg" alt="" />
+              <picture>
+                <source srcset="assets/mdzip-mark/mdzip-mark-open-square-dark.svg" media="(prefers-color-scheme: dark)" />
+                <img class="empty-mark" src="assets/mdzip-mark/mdzip-mark-open-square.svg" alt="" />
+              </picture>
               <h2>Create or open a document</h2>
               <p>Write, add images, and save everything together in one portable file.</p>
               <div class="empty-actions">
@@ -259,6 +275,7 @@ interface ArchiveTreeData {
                 mode="editable"
                 [sourceFormat]="sourceFormat()"
                 [controls]="workspaceControls()"
+                [markdownExtensions]="markdownExtensions"
                 [onConversionRequested]="handleConversionRequested"
                 initialLayout="split"
                 [navigationButtonActive]="false"
@@ -385,11 +402,14 @@ interface ArchiveTreeData {
         <p-tabpanels>
           <p-tabpanel value="about">
             <div class="about-dialog">
-              <img class="about-mark" src="assets/mdzip-mark/mdzip-mark-square.svg" alt="MDZip" />
+              <picture>
+                <source srcset="assets/mdzip-mark/mdzip-mark-square-dark.svg" media="(prefers-color-scheme: dark)" />
+                <img class="about-mark" src="assets/mdzip-mark/mdzip-mark-square.svg" alt="MDZip" />
+              </picture>
               <div class="about-body">
                 <h2>MDZip Studio</h2>
                 <p class="about-version">Version {{ appVersion }}</p>
-                <p>A Markdown editor that saves as <strong>MDZip</strong> when you need it - portable documents with embedded images and assets. It uses CommonMark-based editing, GFM-style preview rendering, HTML sanitization, and highlighted fenced code blocks.</p>
+                <p>A Markdown editor that saves as <strong>MDZip</strong> when you need it - portable documents with embedded images and assets. It uses CommonMark-based editing, GFM-style preview rendering, HTML sanitization, highlighted fenced code blocks, and inline Mermaid diagrams.</p>
                 <div class="about-links">
                   <a href="https://mdzip.org" target="_blank" rel="noopener">mdzip.org</a>
                   <a href="https://github.com/mdzip-project" target="_blank" rel="noopener">GitHub</a>
@@ -462,6 +482,16 @@ interface ArchiveTreeData {
       </p-tabs>
       <ng-template pTemplate="footer">
         <p-button label="Close" (onClick)="aboutOpen.set(false)" />
+      </ng-template>
+    </p-dialog>
+
+    <p-dialog header="Default Markdown editor" [visible]="mdDefaultPromptOpen()" (visibleChange)="mdDefaultPromptOpen.set($event)" [modal]="true" [closable]="!mdDefaultBusy()" [style]="{ width: 'min(92vw, 460px)' }">
+      <div class="dialog-form">
+        <p>Make MDZip Studio the default app for opening <strong>.md</strong> files? Windows will ask you to confirm the choice.</p>
+      </div>
+      <ng-template pTemplate="footer">
+        <p-button label="Not now" severity="secondary" [text]="true" [disabled]="mdDefaultBusy()" (onClick)="dismissMarkdownDefaultPrompt()" />
+        <p-button label="Set as Default" [loading]="mdDefaultBusy()" (onClick)="setMarkdownDefault()" />
       </ng-template>
     </p-dialog>
   `,
@@ -548,6 +578,11 @@ export class AppComponent implements OnDestroy {
       : 'hosted-editor'
   );
 
+  // Mermaid render extension (lazy-loads the mermaid library only when a
+  // document actually contains a ```mermaid block). theme: 'auto' follows the
+  // editor's color scheme. Stable reference: the workspace diffs extensions by name.
+  readonly markdownExtensions: readonly MdzipMarkdownRenderExtension[] = [mdzipMermaidExtension()];
+
   readonly appVersion = APP_VERSION;
   readonly newDialogOpen = signal(false);
   newArchiveName = 'My Archive';
@@ -555,6 +590,9 @@ export class AppComponent implements OnDestroy {
   readonly aboutOpen = signal(false);
   readonly aboutTab = signal<'about' | 'libraries' | 'license' | 'debug'>('about');
   readonly debugCopied = signal(false);
+  readonly mdDefaultPromptOpen = signal(false);
+  readonly mdDefaultBusy = signal(false);
+  private static readonly MD_DEFAULT_PROMPT_KEY = 'mdDefaultPromptSeen';
   readonly imageDestinationDialogOpen = signal(false);
   readonly imageSubfolder = signal('images');
   readonly canWriteLinkedMarkdownImage = computed(() =>
@@ -621,6 +659,15 @@ export class AppComponent implements OnDestroy {
 
   private readonly closeMenuOnDocumentClick = () => this.openMenu.set(null);
 
+  // The editor reads the OS color scheme once when its view is created but does
+  // not track later OS changes. Follow live OS changes here and push them into
+  // the open editor; the user can still flip the editor's own toggle afterward
+  // (until the next OS change). The app chrome follows the OS via CSS media query.
+  private readonly osColorSchemeQuery = window.matchMedia?.('(prefers-color-scheme: dark)');
+  private readonly handleOsColorSchemeChange = (event: MediaQueryListEvent) => {
+    this.ngZone.run(() => this.applyOsColorSchemeToEditor(event.matches ? 'dark' : 'light'));
+  };
+
   private readonly handleLinkMouseOver = (e: MouseEvent) => {
     if (!this.isDesktopShell()) return;
     const href = (e.target as Element).closest('a')?.getAttribute('href');
@@ -638,6 +685,7 @@ export class AppComponent implements OnDestroy {
   private readonly handleSaveArchiveAsCommand = () => void this.saveArchive(true);
   private readonly handleExportDraftCommand = () => this.exportDraft();
   private readonly handleShowAboutCommand = () => this.showAbout();
+  private readonly handleSetMdDefaultCommand = () => void this.promptMarkdownDefaultManually();
 
   private readonly handleKeyDown = (e: KeyboardEvent): void => {
     const ctrl = e.ctrlKey || e.metaKey;
@@ -674,10 +722,12 @@ export class AppComponent implements OnDestroy {
     window.addEventListener('mdzip-studio:save-archive-as', this.handleSaveArchiveAsCommand);
     window.addEventListener('mdzip-studio:export-draft', this.handleExportDraftCommand);
     window.addEventListener('mdzip-studio:show-about', this.handleShowAboutCommand);
+    window.addEventListener('mdzip-studio:set-md-default', this.handleSetMdDefaultCommand);
     document.addEventListener('keydown', this.handleKeyDown);
     document.addEventListener('click', this.closeMenuOnDocumentClick);
     document.addEventListener('mouseover', this.handleLinkMouseOver);
     document.addEventListener('mouseout', this.handleLinkMouseOut);
+    this.osColorSchemeQuery?.addEventListener('change', this.handleOsColorSchemeChange);
     this.removeOpenDocumentRequestedListener = window.mdzipStudio?.onOpenDocumentRequested?.(
       () => this.ngZone.run(() => {
         if (this.pendingElectronOpen) {
@@ -703,6 +753,8 @@ export class AppComponent implements OnDestroy {
     } else {
       this.createUntitledArchive();
     }
+
+    void this.maybePromptMarkdownDefault();
   }
 
   ngOnDestroy(): void {
@@ -712,10 +764,12 @@ export class AppComponent implements OnDestroy {
     window.removeEventListener('mdzip-studio:save-archive-as', this.handleSaveArchiveAsCommand);
     window.removeEventListener('mdzip-studio:export-draft', this.handleExportDraftCommand);
     window.removeEventListener('mdzip-studio:show-about', this.handleShowAboutCommand);
+    window.removeEventListener('mdzip-studio:set-md-default', this.handleSetMdDefaultCommand);
     document.removeEventListener('keydown', this.handleKeyDown);
     document.removeEventListener('click', this.closeMenuOnDocumentClick);
     document.removeEventListener('mouseover', this.handleLinkMouseOver);
     document.removeEventListener('mouseout', this.handleLinkMouseOut);
+    this.osColorSchemeQuery?.removeEventListener('change', this.handleOsColorSchemeChange);
     this.removeOpenDocumentRequestedListener?.();
     if (this.workspaceLoadTimeoutId !== null) clearTimeout(this.workspaceLoadTimeoutId);
   }
@@ -738,6 +792,66 @@ export class AppComponent implements OnDestroy {
     this.aboutTab.set('about');
     this.debugCopied.set(false);
     this.aboutOpen.set(true);
+  }
+
+  // First run only: offer to become the default .md editor when we aren't
+  // already. Runs at most once automatically (tracked in storage) so we never
+  // nag; the Help menu re-triggers it on demand afterwards.
+  private async maybePromptMarkdownDefault(): Promise<void> {
+    const bridge = window.mdzipStudio;
+    if (!bridge?.getMarkdownDefaultStatus) return;
+    if (this.storageService.getItem<boolean>(AppComponent.MD_DEFAULT_PROMPT_KEY, false)) return;
+    try {
+      const status = await bridge.getMarkdownDefaultStatus();
+      if (!status.supported || status.isDefault) return;
+      this.mdDefaultPromptOpen.set(true);
+    } catch {
+      // Best-effort: never block startup on the association check.
+    }
+  }
+
+  // Help menu entry: open the prompt on demand, regardless of the first-run flag.
+  private async promptMarkdownDefaultManually(): Promise<void> {
+    const bridge = window.mdzipStudio;
+    if (!bridge?.promptMarkdownDefault) return;
+    try {
+      const status = await bridge.getMarkdownDefaultStatus?.();
+      if (status?.isDefault) {
+        this.statusMessage.set('MDZip Studio is already the default for .md files');
+        return;
+      }
+    } catch {
+      // Ignore status failures and just offer the dialog.
+    }
+    this.mdDefaultPromptOpen.set(true);
+  }
+
+  async setMarkdownDefault(): Promise<void> {
+    const bridge = window.mdzipStudio;
+    this.storageService.setItem(AppComponent.MD_DEFAULT_PROMPT_KEY, true);
+    if (!bridge?.promptMarkdownDefault) {
+      this.mdDefaultPromptOpen.set(false);
+      return;
+    }
+    this.mdDefaultBusy.set(true);
+    try {
+      const status = await bridge.promptMarkdownDefault();
+      this.statusMessage.set(
+        status.isDefault
+          ? 'MDZip Studio is now the default for .md files'
+          : 'You can set the default anytime from Help'
+      );
+    } catch {
+      this.statusMessage.set('Could not open the Windows default-app dialog');
+    } finally {
+      this.mdDefaultBusy.set(false);
+      this.mdDefaultPromptOpen.set(false);
+    }
+  }
+
+  dismissMarkdownDefaultPrompt(): void {
+    this.storageService.setItem(AppComponent.MD_DEFAULT_PROMPT_KEY, true);
+    this.mdDefaultPromptOpen.set(false);
   }
 
   async copyDebugInfo(): Promise<void> {
@@ -1535,6 +1649,17 @@ export class AppComponent implements OnDestroy {
       ? (this.currentArchive()?.name ?? 'Untitled')
       : event.snapshot.currentPath;
     this.statusMessage.set(event.snapshot.dirty ? `Editing ${displayName}` : `Viewing ${displayName}`);
+  }
+
+  // The Angular workspace wrapper doesn't expose setColorScheme, but the
+  // underlying MdzipWorkspaceView (held privately) does. Reach it to retheme the
+  // live editor without recreating the view — recreation would drop unsaved
+  // edits, cursor, and scroll. No-ops safely if no document is open.
+  private applyOsColorSchemeToEditor(scheme: MdzipColorScheme): void {
+    const view = (this.workspaceEditor as unknown as {
+      view?: { setColorScheme?: (scheme: MdzipColorScheme) => void } | null;
+    } | undefined)?.view;
+    view?.setColorScheme?.(scheme);
   }
 
   onWorkspaceManifestChanged(event: MdzipDocumentChangeEvent): void {

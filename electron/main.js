@@ -1,7 +1,20 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, shell } = require('electron');
 const fs = require('fs/promises');
 const { constants: fsConstants } = require('fs');
+const { execFile } = require('child_process');
+const os = require('os');
 const path = require('path');
+
+// ProgID the installer registers for .md (see build/installer.nsh). Used to
+// detect whether Studio is already the default Markdown editor.
+const MD_PROGID = 'MDZip.Studio.Markdown';
+
+// Light/dark window icons (bundled under electron/, so available in dev and in
+// the packaged asar). The window icon follows the OS theme via nativeTheme.
+const LIGHT_WINDOW_ICON = path.join(__dirname, 'icons', 'mdzip-mark-light.ico');
+const DARK_WINDOW_ICON = path.join(__dirname, 'icons', 'mdzip-mark-dark.ico');
+const windowIconForTheme = () =>
+  nativeTheme.shouldUseDarkColors ? DARK_WINDOW_ICON : LIGHT_WINDOW_ICON;
 
 let mainWindow;
 let currentDocumentPath = null;
@@ -37,6 +50,79 @@ async function readDocument(filePath) {
     bytes: new Uint8Array(bytes),
     readOnly: await isPathReadOnly(resolvedPath),
   };
+}
+
+// Read the ProgID Windows currently uses to open .md for this user. The
+// per-extension UserChoice is the value Explorer actually honors; an absent key
+// means no explicit default has been set.
+function getMarkdownDefaultProgId() {
+  if (process.platform !== 'win32') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    execFile(
+      'reg',
+      [
+        'query',
+        'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.md\\UserChoice',
+        '/v',
+        'ProgId',
+      ],
+      { windowsHide: true },
+      (error, stdout) => {
+        if (error) {
+          resolve(null);
+          return;
+        }
+        const match = /ProgId\s+REG_SZ\s+(\S+)/i.exec(stdout ?? '');
+        resolve(match ? match[1] : null);
+      }
+    );
+  });
+}
+
+// Show the Windows "How do you want to open .md files?" dialog via
+// SHOpenWithDialog. OAIF_REGISTER_EXT records the user's choice as the new
+// default (the only sanctioned way to set the protected UserChoice), while
+// omitting OAIF_EXEC means the throwaway file is never actually opened. Runs in
+// the (unelevated) user session, so the choice lands in the real user's hive.
+function showMarkdownOpenWithDialog(options) {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    'Add-Type -Namespace MdzipStudio -Name Shell -MemberDefinition @"',
+    '[StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]',
+    'public struct OPENASINFO {',
+    '  [MarshalAs(UnmanagedType.LPWStr)] public string FileName;',
+    '  [MarshalAs(UnmanagedType.LPWStr)] public string ClassName;',
+    '  public int InFlags;',
+    '}',
+    '[DllImport("shell32.dll", CharSet=CharSet.Unicode, SetLastError=true)]',
+    'public static extern int SHOpenWithDialog(IntPtr hwnd, ref OPENASINFO info);',
+    '"@',
+    '$info = [MdzipStudio.Shell+OPENASINFO]::new()',
+    '$info.FileName = $env:MDZIP_OPENAS_PATH',
+    '$info.ClassName = $null',
+    '# OAIF_ALLOW_REGISTRATION (0x01) | OAIF_REGISTER_EXT (0x02)',
+    '$info.InFlags = 0x03',
+    '$h = [long]0',
+    '[void][long]::TryParse($env:MDZIP_OWNER_HWND, [ref]$h)',
+    '[void][MdzipStudio.Shell]::SHOpenWithDialog([IntPtr]::new($h), [ref]$info)',
+  ].join('\n');
+
+  return new Promise((resolve) => {
+    const child = execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+      {
+        windowsHide: true,
+        env: {
+          ...process.env,
+          MDZIP_OPENAS_PATH: options.filePath,
+          MDZIP_OWNER_HWND: options.hwnd,
+        },
+      },
+      () => resolve()
+    );
+    child.on('error', () => resolve());
+  });
 }
 
 function queueOpenDocument(filePath) {
@@ -76,7 +162,7 @@ function createWindow() {
     show: false,
     width: 1200,
     height: 800,
-    icon: isDev ? path.join(__dirname, '../build/icon.ico') : app.getPath('exe'),
+    icon: windowIconForTheme(),
     title: 'MDZip Studio',
     webPreferences: {
       nodeIntegration: false,
@@ -212,6 +298,43 @@ ipcMain.handle('mdzip:save-document', async (_event, payload) => {
   };
 });
 
+ipcMain.handle('mdzip:get-md-default-status', async () => {
+  if (process.platform !== 'win32') {
+    return { supported: false, isDefault: false };
+  }
+  const progId = await getMarkdownDefaultProgId();
+  return { supported: true, isDefault: progId === MD_PROGID };
+});
+
+ipcMain.handle('mdzip:prompt-md-default', async () => {
+  if (process.platform !== 'win32') {
+    return { supported: false, isDefault: false };
+  }
+
+  // SHOpenWithDialog needs a file whose extension is .md; the file is never
+  // opened (no OAIF_EXEC), so a throwaway in the temp dir is enough.
+  const tempPath = path.join(os.tmpdir(), `mdzip-set-default-${Date.now()}.md`);
+  await fs.writeFile(tempPath, '');
+
+  let hwnd = '0';
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      hwnd = mainWindow.getNativeWindowHandle().readBigUInt64LE(0).toString();
+    } catch {
+      hwnd = '0';
+    }
+  }
+
+  try {
+    await showMarkdownOpenWithDialog({ filePath: tempPath, hwnd });
+  } finally {
+    fs.unlink(tempPath).catch(() => {});
+  }
+
+  const progId = await getMarkdownDefaultProgId();
+  return { supported: true, isDefault: progId === MD_PROGID };
+});
+
 ipcMain.handle('mdzip:write-markdown-image', async (_event, payload) => {
   const documentPath = path.resolve(String(payload.documentPath ?? ''));
   const documentDirectory = path.dirname(documentPath);
@@ -304,6 +427,12 @@ const createMenu = () => {
     {
       label: 'Help',
       submenu: [
+        ...(process.platform === 'win32'
+          ? [
+              { label: 'Set as Default for .md Files...', click: () => dispatchAppEvent('mdzip-studio:set-md-default') },
+              { type: 'separator' },
+            ]
+          : []),
         { label: 'About MDZip Studio', click: () => dispatchAppEvent('mdzip-studio:show-about') },
       ],
     },
@@ -326,3 +455,13 @@ const createMenu = () => {
 };
 
 app.on('ready', createMenu);
+
+// Swap the window/taskbar icon when the OS theme changes (the BrowserWindow is
+// created with the correct one for the current theme).
+app.on('ready', () => {
+  nativeTheme.on('updated', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setIcon(windowIconForTheme());
+    }
+  });
+});

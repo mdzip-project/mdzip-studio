@@ -18,13 +18,13 @@ export const FIRST_PARTY_LIBRARIES: LibraryInfo[] = [
   },
   {
     "name": "@mdzip/editor",
-    "version": "1.3.8",
+    "version": "1.3.11",
     "license": "Apache-2.0",
     "homepage": "https://mdzip.org"
   },
   {
     "name": "@mdzip/editor-ng",
-    "version": "1.3.8",
+    "version": "1.3.11",
     "license": "Apache-2.0",
     "homepage": "https://mdzip.org"
   }
@@ -114,6 +114,12 @@ export const OPEN_SOURCE_LIBRARIES: LibraryInfo[] = [
     "version": "42.3.3",
     "license": "MIT",
     "homepage": "https://www.npmjs.com/package/electron"
+  },
+  {
+    "name": "mermaid",
+    "version": "11.15.0",
+    "license": "MIT",
+    "homepage": "https://www.npmjs.com/package/mermaid"
   },
   {
     "name": "primeicons",

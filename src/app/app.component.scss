@@ -1120,3 +1120,126 @@ p-button {
   padding: 12px;
   margin: 0;
 }
+
+/* ─── Dark mode ───
+   The app chrome follows the OS color scheme (independent of the editor's own
+   light/dark toggle), matching PrimeNG dialogs, which also follow the OS.
+   Component-scoped rules inside the media query still apply to dialog content
+   rendered in overlays. Palette matches the editor's VS Code-style dark theme. */
+
+@media (prefers-color-scheme: dark) {
+  .app-shell { background: #1e1e1e; color: #d4d4d4; }
+
+  .panel-header p,
+  .empty-state p,
+  .asset-card p,
+  .asset-card small { color: #8c8c8c; }
+
+  /* Menu bar */
+  .app-chrome { border-bottom-color: #3c3c3c; }
+  .menubar { background: #252526; border-bottom-color: #3c3c3c; }
+  .doc-title { color: #e6e8ec; }
+  .menu-root-btn { color: #d4d4d4; }
+  .menu-root-btn:hover,
+  .menu-root-btn.active { background: #3a3a3a; }
+  .menu-popup { background: #2d2d2d; border-color: #454545; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5); }
+  .menu-item { color: #d4d4d4; }
+  .menu-item ng-icon { color: #9aa0a6; }
+  .menu-item kbd { color: #8c8c8c; }
+  .menu-item:hover:not(:disabled) { background: #1f6feb; color: #ffffff; }
+  .menu-item:disabled { color: #6b7178; }
+  .menu-sep { background: #3c3c3c; }
+  .menubar-status { color: #8c8c8c; }
+  .menubar-status.valid { color: #4ec98a; }
+  .menubar-status.invalid { color: #f08a8a; }
+
+  /* Toolbar */
+  .toolbar { background: #252526; }
+  .tb-btn { color: #cccccc; }
+  .tb-btn:hover:not(:disabled) { background: #3a3a3a; border-color: #454545; }
+  .tb-btn:active:not(:disabled) { background: #434343; border-color: #555a62; }
+  .tb-btn:disabled { color: #6b7178; }
+  .tb-sep { background: #3c3c3c; }
+
+  /* Status bar + loading overlay */
+  .statusbar { border-top-color: #3c3c3c; color: #8c8c8c; }
+  .statusbar-url { color: #9aa0a6; }
+  .loading-overlay { background: rgba(30, 30, 30, 0.85); color: #9aa0a6; }
+  .loading-spinner { border-color: #3c3c3c; border-top-color: #5b6af0; }
+
+  /* Empty state / recent files */
+  .recent-files h3 { color: #9aa0a6; }
+  .recent-item { background: #2d2d2d; border-color: #3c3c3c; color: #d4d4d4; }
+  .recent-item ng-icon { color: #8c8c8c; }
+  .recent-item:hover { border-color: #3b6fb0; background: #333842; }
+  .recent-path { color: #8c8c8c; }
+
+  /* Internals / manifest view */
+  .studio-entry-view { background: #1e1e1e; }
+  .studio-entry-view-header p { color: #8c8c8c; }
+  .studio-entry-view app-manifest-editor { background: #2d2d2d; border-color: #3c3c3c; }
+  .internals-section { background: #2d2d2d; border-color: #3c3c3c; }
+  .subsection-header p { color: #8c8c8c; }
+  .validation-summary-status,
+  .validation-summary-status p { color: #8c8c8c; }
+  .validation-summary-status.valid { color: #4ec98a; }
+  .validation-summary-status.invalid { color: #f08a8a; }
+  .empty-note { color: #8c8c8c; }
+
+  /* Assets */
+  .asset-card,
+  .asset-list-row,
+  .issue { background: #2d2d2d; border-color: #3c3c3c; }
+  .asset-card:hover,
+  .asset-card.active,
+  .asset-list-row:hover,
+  .asset-list-row.active { border-color: #3b6fb0; background: #333842; }
+  .asset-thumb,
+  .asset-list-thumb { background: #252526; }
+  .asset-thumb.file-thumb,
+  .asset-thumb.file-thumb ng-icon,
+  .asset-list-thumb.file-thumb ng-icon,
+  .asset-list-header { color: #8c8c8c; }
+  .asset-list-name { color: #d4d4d4; }
+
+  /* Generic controls */
+  .icon-action { background: #2d2d2d; border-color: #454545; }
+  .icon-action.danger { background: transparent; border-color: transparent; color: #f08a8a; }
+  .icon-action.danger:hover { background: rgba(240, 112, 112, 0.12); border-color: #7a4444; }
+  .view-toggle { background: #2d2d2d; border-color: #454545; }
+  .view-toggle-btn { color: #cccccc; }
+  .view-toggle-btn:hover { background: #3a3a3a; }
+  .view-toggle-btn.active { background: rgba(31, 111, 235, 0.22); color: #6ea8ff; }
+  .tree-label ng-icon { color: #9aa0a6; }
+
+  /* Forms + dialog content (rendered in overlays, outside .app-shell) */
+  .form-grid input,
+  .form-grid select,
+  .form-grid textarea,
+  .dialog-form input,
+  .dialog-form select { background: #2d2d2d; border-color: #454545; color: #d4d4d4; }
+  .form-grid input[readonly] { background: #252526; color: #8c8c8c; }
+  .form-grid label,
+  .dialog-form label { color: #cfd3d8; }
+
+  .image-destination-dialog > p { color: #8c8c8c; }
+  .destination-option { background: #2d2d2d; border-color: #454545; color: #d4d4d4; }
+  button.destination-option:hover:not(:disabled),
+  .destination-subfolder:focus-within { border-color: #3b6fb0; background: #28303a; }
+  .destination-option span { color: #8c8c8c; }
+  .destination-subfolder label { color: #cfd3d8; }
+  .destination-subfolder input { background: #2d2d2d; border-color: #454545; color: #d4d4d4; }
+  .destination-note { color: #d9a441 !important; }
+
+  /* About dialog */
+  .about-version { color: #8c8c8c; }
+  .about-body p,
+  .about-section-note { color: #b8bcc2; }
+  .about-links a,
+  .library-table a { color: #4fc1ff; }
+  .about-section-title { color: #8c8c8c; }
+  .library-table th { color: #8c8c8c; border-bottom-color: #3c3c3c; }
+  .library-table td { color: #b8bcc2; border-bottom-color: #333842; }
+  .debug-table td:first-child { color: #d4d4d4; }
+  .license-text { background: #252526; border-color: #3c3c3c; color: #b8bcc2; }
+}

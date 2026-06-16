@@ -127,6 +127,7 @@ mdzip-studio (Electron + Angular)
 - Create, open, and save `.mdz` archives and standalone Markdown files
 - Browse archive contents (documents and assets) in a tree view
 - Edit Markdown with a live split editor/preview
+- Render Mermaid diagrams (` ```mermaid ` blocks) inline in the preview
 - Manage embedded assets and images
 - Edit archive manifest metadata
 - Validate archives against the MDZip specification
@@ -137,6 +138,9 @@ mdzip-studio (Electron + Angular)
 ### Desktop integration (Windows)
 
 - `.mdz` file association — double-click to open in MDZip Studio
+- `.md` files list MDZip Studio under **Open with**; an optional installer
+  checkbox can also make it the default `.md` editor (Windows protects an
+  existing default, so it applies only when `.md` has no current association)
 - Optional Explorer **preview handler** for `.mdz` files (all-users install)
 - Native Open/Save dialogs and menus
 

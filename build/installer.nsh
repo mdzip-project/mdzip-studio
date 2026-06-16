@@ -5,12 +5,16 @@
 !define MDZIP_CLSID "{CA7A244F-7A83-4B5E-9D7A-9F13EF5E8B3A}"
 !define MDZIP_PREVIEW_IID "{8895b1c6-b41f-4c1c-a562-0D564250836F}"
 !define MDZIP_PROGID "MDZip.Studio.Document"
+; Separate ProgID for .md so plain Markdown does NOT inherit the .mdz preview handler.
+!define MDZIP_MD_PROGID "MDZip.Studio.Markdown"
 !define MDZIP_CAPABILITIES "Software\MDZip Studio\Capabilities"
 !define MDZIP_RUNTIME_URL "https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe"
 
 !ifndef BUILD_UNINSTALLER
 Var ExplorerIntegrationCheckbox
 Var InstallExplorerIntegration
+Var MakeMdDefaultCheckbox
+Var MakeMdDefault
 
 Function CustomizeInstallScopePage
   FindWindow $0 "#32770" "" $HWNDPARENT
@@ -59,10 +63,15 @@ FunctionEnd
 
 !macro customInit
   StrCpy $InstallExplorerIntegration "0"
+  StrCpy $MakeMdDefault "0"
   ${GetParameters} $R0
   ${GetOptions} $R0 "/mdzipExplorerIntegration" $R1
   ${IfNot} ${Errors}
     StrCpy $InstallExplorerIntegration "1"
+  ${EndIf}
+  ${GetOptions} $R0 "/mdzipMakeMdDefault" $R1
+  ${IfNot} ${Errors}
+    StrCpy $MakeMdDefault "1"
   ${EndIf}
 !macroend
 
@@ -91,13 +100,24 @@ FunctionEnd
       "Install Windows Explorer integration"
     Pop $ExplorerIntegrationCheckbox
 
-    ${NSD_CreateLabel} 14u 58u 94% 32u \
-      "Adds .mdz file registration and Explorer previews. Installs the Microsoft .NET 8 Desktop Runtime if needed."
+    ${NSD_CreateLabel} 14u 58u 94% 24u \
+      "Adds .mdz and .md file registration and Explorer previews. Installs the Microsoft .NET 8 Desktop Runtime if needed."
+    Pop $0
+
+    ${NSD_CreateCheckbox} 0 88u 100% 14u \
+      "Make MDZip Studio the default editor for .md files"
+    Pop $MakeMdDefaultCheckbox
+
+    ${NSD_CreateLabel} 14u 104u 94% 28u \
+      "Optional. Windows protects an existing .md default, so this applies only when .md has no current default; otherwise confirm via Open with > Always or Settings > Default apps."
     Pop $0
 
     ; Explorer integration is the recommended default for all-users installs.
     StrCpy $InstallExplorerIntegration "1"
     ${NSD_Check} $ExplorerIntegrationCheckbox
+
+    ; Changing the .md default is opt-in (left unchecked by default).
+    StrCpy $MakeMdDefault "0"
 
     nsDialogs::Show
   FunctionEnd
@@ -108,6 +128,13 @@ FunctionEnd
       StrCpy $InstallExplorerIntegration "1"
     ${Else}
       StrCpy $InstallExplorerIntegration "0"
+    ${EndIf}
+
+    ${NSD_GetState} $MakeMdDefaultCheckbox $0
+    ${If} $0 == ${BST_CHECKED}
+      StrCpy $MakeMdDefault "1"
+    ${Else}
+      StrCpy $MakeMdDefault "0"
     ${EndIf}
   FunctionEnd
 
@@ -153,11 +180,31 @@ FunctionEnd
     WriteRegStr HKLM "Software\Classes\${MDZIP_PROGID}\shell\open\command" "" \
       '$\"$INSTDIR\${APP_EXECUTABLE_FILENAME}$\" $\"%1$\"'
 
+    ; Dedicated .md ProgID: open command + icon only, no .mdz preview handler.
+    WriteRegStr HKLM "Software\Classes\${MDZIP_MD_PROGID}" "" "Markdown Document"
+    WriteRegStr HKLM "Software\Classes\${MDZIP_MD_PROGID}\DefaultIcon" "" \
+      "$INSTDIR\${APP_EXECUTABLE_FILENAME},0"
+    WriteRegStr HKLM "Software\Classes\${MDZIP_MD_PROGID}\shell\open\command" "" \
+      '$\"$INSTDIR\${APP_EXECUTABLE_FILENAME}$\" $\"%1$\"'
+
+    ; List Studio as a candidate for .md (no default hijack): it appears under
+    ; "Open with" and can be chosen as the default via Settings > Default apps.
+    WriteRegStr HKLM "Software\Classes\.md\OpenWithProgids" "${MDZIP_MD_PROGID}" ""
+
     WriteRegStr HKLM "${MDZIP_CAPABILITIES}" "ApplicationName" "MDZip Studio"
     WriteRegStr HKLM "${MDZIP_CAPABILITIES}" "ApplicationDescription" \
       "Create, edit, validate, and preview MDZip documents."
     WriteRegStr HKLM "${MDZIP_CAPABILITIES}\FileAssociations" ".mdz" "${MDZIP_PROGID}"
+    WriteRegStr HKLM "${MDZIP_CAPABILITIES}\FileAssociations" ".md" "${MDZIP_MD_PROGID}"
     WriteRegStr HKLM "Software\RegisteredApplications" "MDZip Studio" "${MDZIP_CAPABILITIES}"
+
+    ${If} $MakeMdDefault == "1"
+      ; Best-effort per-user default. Windows 10/11 protects an existing .md
+      ; UserChoice, so this only takes effect when .md has no current default.
+      ; In all-users (elevated) installs HKCU is the setup account's hive, so
+      ; the end user may still need to confirm via Open with > Always.
+      WriteRegStr HKCU "Software\Classes\.md" "" "${MDZIP_MD_PROGID}"
+    ${EndIf}
 
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\PreviewHandlers" \
       "${MDZIP_CLSID}" "MDZip Preview Handler"
@@ -172,6 +219,20 @@ FunctionEnd
     DeleteRegKey HKLM "Software\Classes\.mdz\ShellEx\${MDZIP_PREVIEW_IID}"
   ${EndIf}
   DeleteRegValue HKLM "Software\Classes\.mdz\OpenWithProgids" "${MDZIP_PROGID}"
+  DeleteRegValue HKLM "Software\Classes\.md\OpenWithProgids" "${MDZIP_MD_PROGID}"
+
+  ; Drop the .md default only if it still points at Studio (don't clobber a
+  ; choice the user later made for another editor). The Capabilities key, and
+  ; its .md/.mdz FileAssociations values, are removed with the key below.
+  ReadRegStr $0 HKCU "Software\Classes\.md" ""
+  ${If} $0 == "${MDZIP_MD_PROGID}"
+    DeleteRegValue HKCU "Software\Classes\.md" ""
+  ${EndIf}
+
+  ReadRegStr $0 HKLM "Software\Classes\${MDZIP_MD_PROGID}\shell\open\command" ""
+  ${If} $0 == '$\"$INSTDIR\${APP_EXECUTABLE_FILENAME}$\" $\"%1$\"'
+    DeleteRegKey HKLM "Software\Classes\${MDZIP_MD_PROGID}"
+  ${EndIf}
 
   ReadRegStr $0 HKLM "Software\Classes\${MDZIP_PROGID}\shell\open\command" ""
   ${If} $0 == '$\"$INSTDIR\${APP_EXECUTABLE_FILENAME}$\" $\"%1$\"'

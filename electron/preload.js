@@ -18,5 +18,7 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
     return () => ipcRenderer.removeListener('mdzip:open-document-requested', listener);
   },
   saveDocument: (payload) => ipcRenderer.invoke('mdzip:save-document', payload),
+  getMarkdownDefaultStatus: () => ipcRenderer.invoke('mdzip:get-md-default-status'),
+  promptMarkdownDefault: () => ipcRenderer.invoke('mdzip:prompt-md-default'),
   writeMarkdownImage: (payload) => ipcRenderer.invoke('mdzip:write-markdown-image', payload),
 });
