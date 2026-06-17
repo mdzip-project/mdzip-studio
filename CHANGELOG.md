@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.16] - 2026-06-17
+
+### Fixed
+
+- Opening a Markdown (`.md`) file flagged it as having unsaved changes (Save
+  enabled and dotted) even though nothing was edited, because the file's on-disk
+  path wasn't recorded. Opening a `.md` now records its path, so it isn't
+  flagged unsaved and **Save** writes back to the same file instead of prompting
+  Save As.
+
 ## [1.3.15] - 2026-06-17
 
 ### Fixed
@@ -97,7 +107,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.15...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.16...HEAD
+[1.3.16]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.15...v1.3.16
 [1.3.15]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.14...v1.3.15
 [1.3.14]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.13...v1.3.14
 [1.3.13]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.12...v1.3.13

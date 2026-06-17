@@ -1737,6 +1737,15 @@ export class AppComponent implements OnDestroy {
           content,
           modified: new Date(),
         });
+        // Record the on-disk path (createNewArchive doesn't) so an opened .md
+        // counts as saved — no false unsaved dot — and Save writes back in place
+        // instead of prompting Save As. New documents pass no filePath and stay
+        // path-less (correctly unsaved).
+        if (filePath) {
+          this.archiveService.currentArchive.update((archive) =>
+            archive ? { ...archive, path: filePath } : archive
+          );
+        }
         this.sourceFormat.set('markdown');
         this.workspaceBytes.set(bytes);
       } else {
