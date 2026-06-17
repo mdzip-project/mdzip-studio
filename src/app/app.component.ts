@@ -909,19 +909,12 @@ export class AppComponent implements OnDestroy {
     ) ?? null;
     if (window.mdzipStudio?.takePendingOpenDocument) {
       // Electron may have launched us with a file (double-click / "Open with").
-      // Open it first and only fall back to a blank untitled doc if nothing was
-      // pending. Creating the untitled archive up-front would feed the workspace
-      // an empty `index.md` and then race its async parse against the incoming
-      // document, leaving the editor stuck on the empty untitled archive.
+      // Open it if one is pending; otherwise leave the workspace empty so the
+      // welcome screen shows (no archive open) instead of a blank new document.
       this.isLoading.set(true);
       void this.openPendingElectronDocument().then((opened) => {
-        if (!opened) {
-          this.isLoading.set(false);
-          this.createUntitledArchive();
-        }
+        if (!opened) this.isLoading.set(false);
       });
-    } else {
-      this.createUntitledArchive();
     }
 
     void this.maybePromptMarkdownDefault();
@@ -1430,26 +1423,6 @@ export class AppComponent implements OnDestroy {
       }
     );
     return new Uint8Array(await result.blob.arrayBuffer());
-  }
-
-  private createUntitledArchive(): void {
-    this.archiveService.createNewArchive('Untitled', 'document');
-    this.archiveService.addDocument({
-      id: crypto.randomUUID(),
-      name: 'index.md',
-      content: '',
-      modified: new Date(),
-    });
-    this.selectedDocumentId.set(this.archiveService.documents()[0]?.id ?? null);
-    this.validationIssues.set([]);
-    this.saveValidationState.set('unchecked');
-    this.latestWorkspaceBytes.set(null);
-    this.latestWorkspaceSnapshot.set(null);
-    this.sourceFormat.set('markdown');
-    this.workspaceBytes.set(new TextEncoder().encode(''));
-    this.navigationActive.set(false);
-    this.readOnly.set(false);
-    this.statusMessage.set('New document');
   }
 
   async createArchiveFromDialog(): Promise<void> {
