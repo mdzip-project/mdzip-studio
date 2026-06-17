@@ -175,7 +175,7 @@ FunctionEnd
 
     WriteRegStr HKLM "Software\Classes\${MDZIP_PROGID}" "" "MDZip Document"
     WriteRegStr HKLM "Software\Classes\${MDZIP_PROGID}\DefaultIcon" "" \
-      "$INSTDIR\${APP_EXECUTABLE_FILENAME},0"
+      "$INSTDIR\resources\file-icons\mdz.ico"
     WriteRegStr HKLM "Software\Classes\${MDZIP_PROGID}\ShellEx\${MDZIP_PREVIEW_IID}" "" "${MDZIP_CLSID}"
     WriteRegStr HKLM "Software\Classes\${MDZIP_PROGID}\shell\open\command" "" \
       '$\"$INSTDIR\${APP_EXECUTABLE_FILENAME}$\" $\"%1$\"'
@@ -183,7 +183,7 @@ FunctionEnd
     ; Dedicated .md ProgID: open command + icon only, no .mdz preview handler.
     WriteRegStr HKLM "Software\Classes\${MDZIP_MD_PROGID}" "" "Markdown Document"
     WriteRegStr HKLM "Software\Classes\${MDZIP_MD_PROGID}\DefaultIcon" "" \
-      "$INSTDIR\${APP_EXECUTABLE_FILENAME},0"
+      "$INSTDIR\resources\file-icons\md.ico"
     WriteRegStr HKLM "Software\Classes\${MDZIP_MD_PROGID}\shell\open\command" "" \
       '$\"$INSTDIR\${APP_EXECUTABLE_FILENAME}$\" $\"%1$\"'
 

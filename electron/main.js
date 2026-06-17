@@ -21,6 +21,13 @@ let currentDocumentPath = null;
 let pendingOpenDocumentPath = null;
 const isDev = !app.isPackaged;
 
+// Match the AppUserModelID the NSIS installer assigns the shortcut (electron-builder
+// defaults it to the build appId). Windows keys the taskbar Jump List off this, so
+// it must be set before any setJumpList call for items to appear under our icon.
+if (process.platform === 'win32') {
+  app.setAppUserModelId('org.mdzip.studio');
+}
+
 function documentPathFromArgs(args) {
   const candidate = args.find((arg) =>
     typeof arg === 'string' && /\.(?:mdz|md)$/i.test(arg) && !arg.startsWith('--')
@@ -125,6 +132,41 @@ function showMarkdownOpenWithDialog(options) {
   });
 }
 
+// Folder of the most recent pick, so the (separate) read step only ever touches
+// a directory the user actually chose via the dialog.
+let lastPackFolder = null;
+
+const toPosixRelative = (root, abs) => path.relative(root, abs).split(path.sep).join('/');
+
+// Cheap scan: enumerate file paths only — no contents, no stat, no filtering
+// (like the browser's webkitdirectory listing). Symlinks are skipped so project
+// folders with linked node_modules don't loop. ~0.2s even for ~10k files; the
+// renderer's include-filters decide what actually gets read at build time.
+async function enumerateFolderPaths(root, current = root, out = []) {
+  const entries = (await fs.readdir(current, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of entries) {
+    if (entry.isSymbolicLink()) continue;
+    const abs = path.join(current, entry.name);
+    if (entry.isDirectory()) {
+      await enumerateFolderPaths(root, abs, out);
+    } else if (entry.isFile()) {
+      out.push(toPosixRelative(root, abs));
+    }
+  }
+  return out;
+}
+
+// Resolve an archive-relative path back to an absolute path inside the picked
+// folder, refusing anything that escapes it.
+function resolveInsidePackFolder(rel) {
+  const abs = path.resolve(lastPackFolder, rel);
+  const relCheck = path.relative(lastPackFolder, abs);
+  if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
+    throw new Error(`Refusing to read outside the selected folder: "${rel}".`);
+  }
+  return abs;
+}
+
 function queueOpenDocument(filePath) {
   if (!filePath) return;
   pendingOpenDocumentPath = path.resolve(filePath);
@@ -133,6 +175,50 @@ function queueOpenDocument(filePath) {
     mainWindow.show();
     mainWindow.focus();
     mainWindow.webContents.send('mdzip:open-document-requested');
+  }
+}
+
+// Build the relaunch arguments for a Jump List item. A packaged build's
+// execPath IS the app, so the file path alone suffices; in dev, execPath is
+// electron.exe and needs the app directory before the file argument.
+function jumpListLaunchArgs(filePath) {
+  const quotedFile = `"${filePath}"`;
+  return app.isPackaged ? quotedFile : `"${app.getAppPath()}" ${quotedFile}`;
+}
+
+// The per-file-type .ico files ship via extraResources (packaged) and live under
+// build/ in dev. These are the same icons the installer registers for .md/.mdz.
+const FILE_ICONS_DIR = app.isPackaged
+  ? path.join(process.resourcesPath, 'file-icons')
+  : path.join(__dirname, '..', 'build', 'file-icons');
+
+function jumpListIconFor(filePath) {
+  const iconFile = /\.md$/i.test(filePath) ? 'md.ico' : 'mdz.ico';
+  return { iconPath: path.join(FILE_ICONS_DIR, iconFile), iconIndex: 0 };
+}
+
+// Mirror the renderer's recent-files list into the Windows taskbar Jump List.
+// Each entry relaunches the exe with the file path, which the single-instance
+// handler routes through queueOpenDocument just like a double-click would.
+function updateJumpList(recentPaths) {
+  if (process.platform !== 'win32') return;
+  const items = (Array.isArray(recentPaths) ? recentPaths : [])
+    // Only .md/.mdz survive — these are what documentPathFromArgs accepts on relaunch.
+    .filter((p) => typeof p === 'string' && /\.(?:mdz|md)$/i.test(p))
+    .slice(0, 10)
+    .map((p) => ({
+      type: 'task',
+      program: process.execPath,
+      args: jumpListLaunchArgs(p),
+      title: path.basename(p),
+      description: p,
+      // Per-type document icon instead of the program's (electron.exe) icon.
+      ...jumpListIconFor(p),
+    }));
+  try {
+    app.setJumpList(items.length ? [{ type: 'custom', name: 'Recent', items }] : null);
+  } catch {
+    // setJumpList throws if Windows rejects an item; a stale list is harmless.
   }
 }
 
@@ -253,6 +339,25 @@ ipcMain.handle('mdzip:open-document', async () => {
   return readDocument(result.filePaths[0]);
 });
 
+ipcMain.handle('mdzip:open-document-path', async (_event, payload) => {
+  const filePath = payload?.filePath;
+  if (!filePath) {
+    return { canceled: true };
+  }
+  try {
+    return await readDocument(filePath);
+  } catch (error) {
+    return {
+      canceled: true,
+      error: error?.code === 'ENOENT' ? 'not-found' : error?.message ?? 'read-failed',
+    };
+  }
+});
+
+ipcMain.on('mdzip:set-recent-files', (_event, payload) => {
+  updateJumpList(payload?.paths);
+});
+
 ipcMain.handle('mdzip:take-pending-open-document', async () => {
   const filePath = pendingOpenDocumentPath;
   pendingOpenDocumentPath = null;
@@ -296,6 +401,71 @@ ipcMain.handle('mdzip:save-document', async (_event, payload) => {
     name: path.basename(filePath),
     format,
   };
+});
+
+// Step 1: pick a folder and enumerate its file paths (no contents) so the UI can
+// show options instantly. Also reads a root manifest.json, if present, to
+// pre-fill the option fields.
+ipcMain.handle('mdzip:pick-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Pack Folder to MDZip',
+    properties: ['openDirectory'],
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return { canceled: true };
+  }
+
+  const folderPath = path.resolve(result.filePaths[0]);
+  const stats = await fs.lstat(folderPath);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new Error('The selected path is not a folder.');
+  }
+
+  lastPackFolder = folderPath;
+  const paths = (await enumerateFolderPaths(folderPath)).sort();
+  let manifestText = null;
+  if (paths.some((p) => p.toLowerCase() === 'manifest.json')) {
+    try {
+      manifestText = await fs.readFile(path.join(folderPath, 'manifest.json'), 'utf8');
+    } catch {
+      manifestText = null;
+    }
+  }
+  return { canceled: false, folderPath, folderName: path.basename(folderPath), paths, manifestText };
+});
+
+// Step 2: read the specific files the renderer selected (after applying the
+// include-filters), streaming progress so the UI can show a bar + ETA. Only
+// reads inside the folder picked in step 1.
+ipcMain.handle('mdzip:read-folder', async (_event, payload) => {
+  if (!lastPackFolder) {
+    throw new Error('Select a folder before reading it.');
+  }
+  const requested = Array.isArray(payload?.paths) ? payload.paths : [];
+  const list = [];
+  for (const rel of requested) {
+    const abs = resolveInsidePackFolder(rel);
+    list.push({ rel, abs, size: (await fs.stat(abs)).size });
+  }
+  const total = list.length;
+  const bytesTotal = list.reduce((sum, file) => sum + file.size, 0);
+
+  const emit = (done, bytesDone) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('mdzip:pack-folder-progress', { done, total, bytesDone, bytesTotal });
+    }
+  };
+
+  const files = [];
+  let bytesDone = 0;
+  emit(0, 0);
+  for (let i = 0; i < list.length; i += 1) {
+    files.push({ path: list[i].rel, bytes: new Uint8Array(await fs.readFile(list[i].abs)) });
+    bytesDone += list[i].size;
+    if (i % 8 === 0 || i === list.length - 1) emit(i + 1, bytesDone);
+  }
+  return { files };
 });
 
 ipcMain.handle('mdzip:get-md-default-status', async () => {
@@ -395,9 +565,12 @@ const createMenu = () => {
       submenu: [
         { label: 'New Document', accelerator: 'CmdOrCtrl+N', click: () => dispatchAppEvent('mdzip-studio:new-archive') },
         { label: 'Open Document...', accelerator: 'CmdOrCtrl+O', click: () => dispatchAppEvent('mdzip-studio:open-archive') },
+        { label: 'Pack Folder to .mdz...', click: () => dispatchAppEvent('mdzip-studio:pack-folder') },
         { type: 'separator' },
         { label: 'Save', accelerator: 'CmdOrCtrl+S', click: () => dispatchAppEvent('mdzip-studio:save-archive') },
         { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', click: () => dispatchAppEvent('mdzip-studio:save-archive-as') },
+        { type: 'separator' },
+        { label: 'Close Document', accelerator: 'CmdOrCtrl+W', click: () => dispatchAppEvent('mdzip-studio:close-archive') },
         { type: 'separator' },
         { label: 'Exit', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
       ],

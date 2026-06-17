@@ -152,7 +152,7 @@ p {
   }
 
   &:hover:not(:disabled) {
-    background: #1f6feb;
+    background: #2c333b;
     color: #ffffff;
 
     ng-icon,
@@ -291,7 +291,16 @@ p {
   flex-direction: column;
 }
 
-.empty-state,
+.empty-state {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 14px;
+  min-height: 100%;
+  padding: 32px;
+  overflow-y: auto;
+}
+
 .center-state {
   display: grid;
   align-content: center;
@@ -305,12 +314,6 @@ p {
 .center-state h2,
 .panel-header h2 {
   font-size: 22px;
-}
-
-.empty-mark {
-  width: 96px;
-  height: 96px;
-  object-fit: contain;
 }
 
 .panel {
@@ -395,8 +398,8 @@ p {
 }
 
 .view-toggle-btn.active {
-  background: #e8f1ff;
-  color: #1f6feb;
+  background: #eef1f4;
+  color: #2c333b;
 }
 
 .form-grid input,
@@ -457,8 +460,8 @@ button.destination-option {
 
 button.destination-option:hover:not(:disabled),
 .destination-subfolder:focus-within {
-  border-color: #9fc5ff;
-  background: #f8fbff;
+  border-color: #8a929d;
+  background: #f4f6f8;
 }
 
 .destination-option span {
@@ -635,8 +638,8 @@ button.destination-option:hover:not(:disabled),
 .asset-card.active,
 .asset-list-row:hover,
 .asset-list-row.active {
-  border-color: #9fc5ff;
-  background: #f8fbff;
+  border-color: #8a929d;
+  background: #f4f6f8;
 }
 
 .asset-thumb,
@@ -810,13 +813,67 @@ button.destination-option:hover:not(:disabled),
   width: 28px;
   height: 28px;
   border: 3px solid #dde1e7;
-  border-top-color: #5b6af0;
+  border-top-color: #4c5663;
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+.progress-track {
+  width: 240px;
+  max-width: 60vw;
+  height: 6px;
+  border-radius: 999px;
+  background: #dde1e7;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #4c5663;
+  border-radius: inherit;
+  transition: width 0.15s linear;
+}
+
+.progress-detail {
+  font-size: 12px;
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+}
+
+.pack-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.dialog-form label small {
+  font-weight: 400;
+  color: #8a929d;
+}
+
+.pack-filters {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  border: 1px solid #cfd6df;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #20242a;
+  padding: 9px 11px;
+  font-family: 'Consolas', 'Menlo', monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+@media (max-width: 600px) {
+  .pack-fields {
+    grid-template-columns: 1fr;
+  }
 }
 
 .statusbar {
@@ -879,12 +936,33 @@ ng-icon {
   max-width: 420px;
 }
 
+.recent-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
 .recent-files h3 {
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
   color: #4c5663;
-  margin-bottom: 8px;
+}
+
+.recent-clear {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: #6b7280;
+  cursor: pointer;
+}
+
+.recent-clear:hover {
+  color: #1a1a1a;
+  text-decoration: underline;
 }
 
 .recent-list {
@@ -896,16 +974,11 @@ ng-icon {
 .recent-item {
   display: flex;
   align-items: center;
-  gap: 10px;
   width: 100%;
-  padding: 8px 10px;
   border: 1px solid #dfe3e8;
   border-radius: 7px;
   background: #ffffff;
   color: #20242a;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
 
   ng-icon {
     flex-shrink: 0;
@@ -914,8 +987,48 @@ ng-icon {
 }
 
 .recent-item:hover {
-  border-color: #9fc5ff;
-  background: #f8fbff;
+  border-color: #8a929d;
+  background: #f4f6f8;
+}
+
+.recent-open {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.recent-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-right: 6px;
+  padding: 4px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: #68717d;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.recent-item:hover .recent-remove,
+.recent-remove:focus-visible {
+  opacity: 1;
+}
+
+.recent-remove:hover {
+  background: #e4e7eb;
+  color: #1a1a1a;
 }
 
 .recent-meta {
@@ -1026,7 +1139,7 @@ p-button {
 
 .about-links a {
   font-size: 13px;
-  color: #1f6feb;
+  color: #2c333b;
   text-decoration: none;
 }
 
@@ -1080,7 +1193,7 @@ p-button {
 }
 
 .library-table a {
-  color: #1f6feb;
+  color: #2c333b;
   text-decoration: none;
 }
 
@@ -1146,7 +1259,7 @@ p-button {
   .menu-item { color: #d4d4d4; }
   .menu-item ng-icon { color: #9aa0a6; }
   .menu-item kbd { color: #8c8c8c; }
-  .menu-item:hover:not(:disabled) { background: #1f6feb; color: #ffffff; }
+  .menu-item:hover:not(:disabled) { background: #3a3a3a; color: #ffffff; }
   .menu-item:disabled { color: #6b7178; }
   .menu-sep { background: #3c3c3c; }
   .menubar-status { color: #8c8c8c; }
@@ -1165,13 +1278,20 @@ p-button {
   .statusbar { border-top-color: #3c3c3c; color: #8c8c8c; }
   .statusbar-url { color: #9aa0a6; }
   .loading-overlay { background: rgba(30, 30, 30, 0.85); color: #9aa0a6; }
-  .loading-spinner { border-color: #3c3c3c; border-top-color: #5b6af0; }
+  .loading-spinner { border-color: #3c3c3c; border-top-color: #8c8c8c; }
+  .progress-track { background: #3c3c3c; }
+  .pack-filters { background: #2d2d2d; border-color: #454545; color: #d4d4d4; }
+  .dialog-form label small { color: #8c8c8c; }
 
   /* Empty state / recent files */
   .recent-files h3 { color: #9aa0a6; }
+  .recent-clear { color: #9aa0a6; }
+  .recent-clear:hover { color: #f3f3f3; }
   .recent-item { background: #2d2d2d; border-color: #3c3c3c; color: #d4d4d4; }
   .recent-item ng-icon { color: #8c8c8c; }
-  .recent-item:hover { border-color: #3b6fb0; background: #333842; }
+  .recent-item:hover { border-color: #555a62; background: #33363d; }
+  .recent-remove { color: #8c8c8c; }
+  .recent-remove:hover { background: #3c4047; color: #f3f3f3; }
   .recent-path { color: #8c8c8c; }
 
   /* Internals / manifest view */
@@ -1193,7 +1313,7 @@ p-button {
   .asset-card:hover,
   .asset-card.active,
   .asset-list-row:hover,
-  .asset-list-row.active { border-color: #3b6fb0; background: #333842; }
+  .asset-list-row.active { border-color: #555a62; background: #33363d; }
   .asset-thumb,
   .asset-list-thumb { background: #252526; }
   .asset-thumb.file-thumb,
@@ -1209,7 +1329,7 @@ p-button {
   .view-toggle { background: #2d2d2d; border-color: #454545; }
   .view-toggle-btn { color: #cccccc; }
   .view-toggle-btn:hover { background: #3a3a3a; }
-  .view-toggle-btn.active { background: rgba(31, 111, 235, 0.22); color: #6ea8ff; }
+  .view-toggle-btn.active { background: rgba(255, 255, 255, 0.10); color: #e6e8ec; }
   .tree-label ng-icon { color: #9aa0a6; }
 
   /* Forms + dialog content (rendered in overlays, outside .app-shell) */
@@ -1225,7 +1345,7 @@ p-button {
   .image-destination-dialog > p { color: #8c8c8c; }
   .destination-option { background: #2d2d2d; border-color: #454545; color: #d4d4d4; }
   button.destination-option:hover:not(:disabled),
-  .destination-subfolder:focus-within { border-color: #3b6fb0; background: #28303a; }
+  .destination-subfolder:focus-within { border-color: #555a62; background: #2c2e33; }
   .destination-option span { color: #8c8c8c; }
   .destination-subfolder label { color: #cfd3d8; }
   .destination-subfolder input { background: #2d2d2d; border-color: #454545; color: #d4d4d4; }
@@ -1236,10 +1356,10 @@ p-button {
   .about-body p,
   .about-section-note { color: #b8bcc2; }
   .about-links a,
-  .library-table a { color: #4fc1ff; }
+  .library-table a { color: #cfd3d8; }
   .about-section-title { color: #8c8c8c; }
   .library-table th { color: #8c8c8c; border-bottom-color: #3c3c3c; }
-  .library-table td { color: #b8bcc2; border-bottom-color: #333842; }
+  .library-table td { color: #b8bcc2; border-bottom-color: #33363d; }
   .debug-table td:first-child { color: #d4d4d4; }
   .license-text { background: #252526; border-color: #3c3c3c; color: #b8bcc2; }
 }

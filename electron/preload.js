@@ -11,6 +11,15 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
   },
   isElectron: true,
   openDocument: () => ipcRenderer.invoke('mdzip:open-document'),
+  openDocumentByPath: (filePath) => ipcRenderer.invoke('mdzip:open-document-path', { filePath }),
+  setRecentFiles: (paths) => ipcRenderer.send('mdzip:set-recent-files', { paths }),
+  pickFolder: () => ipcRenderer.invoke('mdzip:pick-folder'),
+  readFolder: (payload) => ipcRenderer.invoke('mdzip:read-folder', payload),
+  onPackFolderProgress: (callback) => {
+    const listener = (_event, data) => callback(data);
+    ipcRenderer.on('mdzip:pack-folder-progress', listener);
+    return () => ipcRenderer.removeListener('mdzip:pack-folder-progress', listener);
+  },
   takePendingOpenDocument: () => ipcRenderer.invoke('mdzip:take-pending-open-document'),
   onOpenDocumentRequested: (callback) => {
     const listener = () => callback();

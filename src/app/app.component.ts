@@ -42,6 +42,7 @@ import {
   lucideSave,
   lucideSaveAll,
   lucideTrash2,
+  lucideX,
 } from '@ng-icons/lucide';
 import { ArchiveService, Asset, Document, Manifest, MDZipArchive } from './core/services/archive.service';
 import { StorageService } from './core/services/storage.service';
@@ -61,6 +62,7 @@ interface ElectronDocumentOpenResult {
   name?: string;
   bytes?: number[];
   readOnly?: boolean;
+  error?: string;
 }
 
 interface ElectronDocumentSaveResult {
@@ -80,6 +82,50 @@ interface MarkdownDefaultStatus {
   isDefault: boolean;
 }
 
+interface ElectronFolderFile {
+  path: string;
+  bytes: Uint8Array | number[];
+}
+
+// Path-only scan (no file contents) returned by the folder picker — like the
+// browser's webkitdirectory listing. manifestText pre-fills the option fields.
+interface ElectronPickFolderResult {
+  canceled: boolean;
+  folderPath?: string;
+  folderName?: string;
+  paths?: string[];
+  manifestText?: string | null;
+}
+
+interface ElectronReadFolderResult {
+  files?: ElectronFolderFile[];
+}
+
+interface PackFolderProgress {
+  done: number;
+  total: number;
+  bytesDone: number;
+  bytesTotal: number;
+}
+
+interface FolderFile {
+  path: string;
+  bytes: Uint8Array;
+}
+
+// Rough DEFLATE throughput used only to estimate the packing-step duration for
+// the progress bar (buildArchive gives no real progress). ~25 MB/s; the bar
+// caps at 95% so an under-estimate just holds near the end rather than lying.
+const PACK_BYTES_PER_MS = (25 * 1024 * 1024) / 1000;
+
+type PackMode = 'document' | 'project';
+
+// Where the to-be-packed files come from. Both keep the full path list up front
+// (no contents); only files matching the include-filters are read at build.
+type PackSource =
+  | { kind: 'electron' }
+  | { kind: 'browser'; entries: { path: string; file: File }[] };
+
 interface ElectronBridge {
   isElectron?: boolean;
   platform?: string;
@@ -91,6 +137,11 @@ interface ElectronBridge {
     v8?: string;
   };
   openDocument?: () => Promise<ElectronDocumentOpenResult>;
+  openDocumentByPath?: (filePath: string) => Promise<ElectronDocumentOpenResult>;
+  setRecentFiles?: (paths: string[]) => void;
+  pickFolder?: () => Promise<ElectronPickFolderResult>;
+  readFolder?: (payload: { paths: string[] }) => Promise<ElectronReadFolderResult>;
+  onPackFolderProgress?: (callback: (data: PackFolderProgress) => void) => () => void;
   takePendingOpenDocument?: () => Promise<ElectronDocumentOpenResult>;
   onOpenDocumentRequested?: (callback: () => void) => () => void;
   saveDocument?: (payload: {
@@ -157,11 +208,19 @@ interface ArchiveTreeData {
       lucideSave,
       lucideSaveAll,
       lucideTrash2,
+      lucideX,
     }),
   ],
   template: `
     <main class="app-shell">
-      @if (isLoading()) {
+      @if (packProgress()) {
+        <div class="loading-overlay" aria-live="polite" aria-label="Packing folder">
+          <div class="loading-spinner"></div>
+          <span>{{ packProgressLabel() }}</span>
+          <div class="progress-track"><div class="progress-fill" [style.width.%]="packProgressPercent()"></div></div>
+          <span class="progress-detail">{{ packProgressDetail() }}</span>
+        </div>
+      } @else if (isLoading()) {
         <div class="loading-overlay" aria-live="polite" aria-label="Opening document...">
           <div class="loading-spinner"></div>
           <span>Opening...</span>
@@ -184,6 +243,7 @@ interface ArchiveTreeData {
                 <ul class="menu-popup" role="menu" (click)="$event.stopPropagation()">
                   <li role="none"><button class="menu-item" type="button" role="menuitem" (click)="newArchive(); closeMenu()"><ng-icon name="lucidePlus" size="13" /><span>New</span><kbd>Ctrl+N</kbd></button></li>
                   <li role="none"><button class="menu-item" type="button" role="menuitem" (click)="openFilePicker(); closeMenu()"><ng-icon name="lucideFolderOpen" size="13" /><span>Open...</span><kbd>Ctrl+O</kbd></button></li>
+                  <li role="none"><button class="menu-item" type="button" role="menuitem" (click)="packFolder(); closeMenu()"><ng-icon name="lucideFolder" size="13" /><span>Pack Folder to .mdz...</span></button></li>
                   <li class="menu-sep" role="separator"></li>
                   @if (isDesktopShell()) {
                     <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="saveArchive(); closeMenu()"><ng-icon name="lucideSave" size="13" /><span>Save</span><kbd>Ctrl+S</kbd></button></li>
@@ -191,6 +251,8 @@ interface ArchiveTreeData {
                   } @else {
                     <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="saveArchive(); closeMenu()"><ng-icon name="lucideDownload" size="13" /><span>Download</span><kbd>Ctrl+S</kbd></button></li>
                   }
+                  <li class="menu-sep" role="separator"></li>
+                  <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="closeDocument(); closeMenu()"><ng-icon name="lucideX" size="13" /><span>Close Document</span><kbd>Ctrl+W</kbd></button></li>
                   <li class="menu-sep" role="separator"></li>
                   <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="exportDraft(); closeMenu()"><span></span><span>Export Draft...</span></button></li>
                 </ul>
@@ -219,7 +281,6 @@ interface ArchiveTreeData {
           <button class="tb-btn" type="button" title="Open (Ctrl+O)" (click)="openFilePicker()"><ng-icon name="lucideFolderOpen" size="15" /></button>
           @if (isDesktopShell()) {
             <button class="tb-btn" type="button" [title]="readOnly() ? readOnlyHint : 'Save (Ctrl+S)'" [disabled]="!currentArchive() || readOnly()" (click)="saveArchive()"><ng-icon name="lucideSave" size="15" /></button>
-            <button class="tb-btn" type="button" [title]="readOnly() ? 'Save As — save your changes to a new file (Ctrl+Shift+S)' : 'Save As (Ctrl+Shift+S)'" [disabled]="!currentArchive()" (click)="saveArchive(true)"><ng-icon name="lucideSaveAll" size="15" /></button>
           } @else {
             <button class="tb-btn" type="button" title="Download (Ctrl+S)" [disabled]="!currentArchive()" (click)="saveArchive()"><ng-icon name="lucideDownload" size="15" /></button>
           }
@@ -227,20 +288,20 @@ interface ArchiveTreeData {
         <input #fileInput class="file-input" type="file" accept=".md,.mdz,.json,text/markdown,application/json" (change)="openArchive($event)" />
         <input #assetInput class="file-input" type="file" multiple accept="image/*,video/*,audio/*,application/pdf,.svg" (change)="onAssetFileSelected($event)" />
         <input #markdownImageInput class="file-input" type="file" accept="image/*,.svg" (change)="onMarkdownImageSelected($event)" />
+        <input #folderInput class="file-input" type="file" webkitdirectory (change)="onFolderInputSelected($event)" />
       </header>
 
       <section class="workspace">
         <section class="content">
           @if (!currentArchive()) {
             <div class="empty-state">
-              <picture>
-                <source srcset="assets/mdzip-mark/mdzip-mark-open-square-dark.svg" media="(prefers-color-scheme: dark)" />
-                <img class="empty-mark" src="assets/mdzip-mark/mdzip-mark-open-square.svg" alt="" />
-              </picture>
               <h2>Create or open a document</h2>
               <p>Write, add images, and save everything together in one portable file.</p>
               <div class="empty-actions">
-                <p-button label="Create Document" (onClick)="newArchive()">
+                <p-button label="New Markdown (.md)" (onClick)="newArchive('markdown')">
+                  <ng-template #icon><ng-icon name="lucidePlus" size="14" /></ng-template>
+                </p-button>
+                <p-button label="New MDZip (.mdz)" (onClick)="newArchive('mdz')">
                   <ng-template #icon><ng-icon name="lucidePlus" size="14" /></ng-template>
                 </p-button>
                 <p-button label="Open Document" severity="secondary" (onClick)="openFilePicker()">
@@ -249,16 +310,24 @@ interface ArchiveTreeData {
               </div>
               @if (recentFiles().length > 0) {
                 <div class="recent-files">
-                  <h3>Recent</h3>
+                  <div class="recent-header">
+                    <h3>Recent</h3>
+                    <button class="recent-clear" type="button" (click)="clearRecentFiles()">Clear</button>
+                  </div>
                   <div class="recent-list">
                     @for (path of recentFiles(); track path) {
-                      <button class="recent-item" type="button" (click)="openFilePicker()" [title]="path">
-                        <ng-icon name="lucideClock" size="14" />
-                        <div class="recent-meta">
-                          <span class="recent-name">{{ recentFileName(path) }}</span>
-                          <span class="recent-path">{{ recentFileDir(path) }}</span>
-                        </div>
-                      </button>
+                      <div class="recent-item">
+                        <button class="recent-open" type="button" (click)="openRecent(path)" [title]="path">
+                          <ng-icon name="lucideClock" size="14" />
+                          <div class="recent-meta">
+                            <span class="recent-name">{{ recentDisplayName(path) }}</span>
+                            <span class="recent-path">{{ recentFilePath(path) }}</span>
+                          </div>
+                        </button>
+                        <button class="recent-remove" type="button" (click)="removeRecent(path)" title="Remove from recent" aria-label="Remove from recent">
+                          <ng-icon name="lucideX" size="14" />
+                        </button>
+                      </div>
                     }
                   </div>
                 </div>
@@ -278,7 +347,7 @@ interface ArchiveTreeData {
                 [markdownExtensions]="markdownExtensions"
                 [onConversionRequested]="handleConversionRequested"
                 initialLayout="split"
-                [navigationButtonActive]="false"
+                [navigationButtonActive]="navigationActive()"
                 (changed)="onWorkspaceChanged($event)"
                 (manifestChanged)="onWorkspaceManifestChanged($event)"
                 (saved)="onWorkspaceSaved($event)"
@@ -321,17 +390,64 @@ interface ArchiveTreeData {
       </footer>
     </main>
 
-    <p-dialog header="Create Document" [visible]="newDialogOpen()" (visibleChange)="newDialogOpen.set($event)" [modal]="true" [style]="{ width: 'min(92vw, 440px)' }">
+    <p-dialog [header]="newArchiveFormat() === 'mdz' ? 'New MDZip Document' : 'New Markdown Document'" [visible]="newDialogOpen()" (visibleChange)="newDialogOpen.set($event)" [modal]="true" [style]="{ width: 'min(92vw, 440px)' }">
       <div class="dialog-form">
         <label>
           Name
           <input type="text" [(ngModel)]="newArchiveName" autofocus />
+          <small>Saves as {{ (newArchiveName.trim() || 'Untitled') }}{{ newArchiveFormat() === 'mdz' ? '.mdz' : '.md' }}</small>
         </label>
       </div>
       <ng-template pTemplate="footer">
         <p-button label="Cancel" severity="secondary" [text]="true" (onClick)="newDialogOpen.set(false)" />
         <p-button label="Create" (onClick)="createArchiveFromDialog()">
           <ng-template #icon><ng-icon name="lucidePlus" size="14" /></ng-template>
+        </p-button>
+      </ng-template>
+    </p-dialog>
+
+    <p-dialog header="Pack Folder to .mdz" [visible]="packFolderDialogOpen()" (visibleChange)="packFolderDialogOpen.set($event)" [modal]="true" [style]="{ width: 'min(92vw, 560px)' }">
+      <div class="dialog-form">
+        <p>Packaging <strong>{{ packFolderName() }}</strong> — {{ packFileCount() }} file{{ packFileCount() === 1 ? '' : 's' }} found. Only files matching the include filters are added.</p>
+        <label class="full-width">
+          Include filters <small>(one glob per line)</small>
+          <textarea class="pack-filters" [ngModel]="packFilters()" (ngModelChange)="packFilters.set($event)" rows="6" spellcheck="false"></textarea>
+        </label>
+        <div class="pack-fields">
+          <label>
+            Mode
+            <select [ngModel]="packMode()" (ngModelChange)="packMode.set($any($event))">
+              <option value="document">Document — open in memory</option>
+              <option value="project">Project — save to disk first</option>
+            </select>
+          </label>
+          <label>
+            Entry point
+            <select [ngModel]="packEntryPoint()" (ngModelChange)="packEntryPoint.set($event)">
+              <option value="">auto-detect</option>
+              @for (path of packEntryOptions(); track path) {
+                <option [value]="path">{{ path }}</option>
+              }
+            </select>
+          </label>
+          <label>
+            Title
+            <input type="text" [ngModel]="packTitle()" (ngModelChange)="packTitle.set($event)" placeholder="Optional" />
+          </label>
+          <label>
+            Author
+            <input type="text" [ngModel]="packAuthor()" (ngModelChange)="packAuthor.set($event)" placeholder="Optional" />
+          </label>
+          <label class="full-width">
+            Description
+            <input type="text" [ngModel]="packDescription()" (ngModelChange)="packDescription.set($event)" placeholder="Optional" />
+          </label>
+        </div>
+      </div>
+      <ng-template pTemplate="footer">
+        <p-button label="Cancel" severity="secondary" [text]="true" (onClick)="packFolderDialogOpen.set(false)" />
+        <p-button label="Pack" (onClick)="confirmPackFolder()">
+          <ng-template #icon><ng-icon name="lucideFolder" size="14" /></ng-template>
         </p-button>
       </ng-template>
     </p-dialog>
@@ -501,6 +617,7 @@ export class AppComponent implements OnDestroy {
   @ViewChild('fileInput') private fileInput?: ElementRef<HTMLInputElement>;
   @ViewChild('assetInput') private assetInput?: ElementRef<HTMLInputElement>;
   @ViewChild('markdownImageInput') private markdownImageInput?: ElementRef<HTMLInputElement>;
+  @ViewChild('folderInput') private folderInput?: ElementRef<HTMLInputElement>;
   @ViewChild('workspaceEditor') private workspaceEditor?: MdzipWorkspaceComponent;
 
   readonly currentArchive = this.archiveService.currentArchive;
@@ -517,7 +634,11 @@ export class AppComponent implements OnDestroy {
   readonly validationIssues = signal<ValidationError[]>([]);
   readonly saveValidationState = signal<SaveValidationState>('unchecked');
   readonly recentFiles = signal<string[]>(this.storageService.getRecentFiles());
+  readonly recentTitles = signal<Record<string, string>>(this.storageService.getRecentTitles());
   readonly workspaceBytes = signal<Uint8Array | null>(null);
+  // Whether the workspace nav pane starts open. Off by default; turned on when
+  // a packed folder opens, since those archives benefit from the file tree.
+  readonly navigationActive = signal(false);
   readonly workspaceFileName = computed(() => {
     const archive = this.currentArchive();
     const name = archive ? this.toSafeFilename(archive.name) : 'document';
@@ -585,8 +706,49 @@ export class AppComponent implements OnDestroy {
 
   readonly appVersion = APP_VERSION;
   readonly newDialogOpen = signal(false);
-  newArchiveName = 'My Archive';
+  // Folder→.mdz packing state (issue #2). Modeled on mdzip.org/packager.html:
+  // a path-only scan shows the options instantly; only files matching the
+  // include-filters are read at build time.
+  readonly packFolderDialogOpen = signal(false);
+  readonly packFolderName = signal('');
+  readonly packFileCount = signal(0);
+  readonly packFilters = signal(MdzPackagerCore.DEFAULT_FILTERS.join('\n'));
+  readonly packMode = signal<PackMode>('document');
+  readonly packTitle = signal('');
+  readonly packEntryPoint = signal('');
+  readonly packAuthor = signal('');
+  readonly packDescription = signal('');
+  readonly packEntryOptions = signal<string[]>([]);
+  private packAllPaths: string[] = [];
+  private pendingPackSource: PackSource | null = null;
+  // Folder read/pack progress overlay (null when idle).
+  readonly packProgress = signal<{ phase: 'reading' | 'packing'; done: number; total: number; bytesDone: number; bytesTotal: number } | null>(null);
+  private packStartMs = 0;
+  // Estimated duration (ms) of the CPU-bound packing step. buildArchive exposes
+  // no real progress, so we drive the packing bar from elapsed/this estimate.
+  private packEstMs = 0;
+  readonly packProgressPercent = computed(() => {
+    const p = this.packProgress();
+    if (!p || p.bytesTotal === 0) return 0;
+    return Math.min(100, Math.round((p.bytesDone / p.bytesTotal) * 100));
+  });
+  readonly packProgressLabel = computed(() => {
+    const p = this.packProgress();
+    if (!p) return '';
+    return p.phase === 'packing'
+      ? `Packing… ${this.packProgressPercent()}%`
+      : `Reading files… ${this.packProgressPercent()}%`;
+  });
+  readonly packProgressDetail = computed(() => {
+    const p = this.packProgress();
+    if (!p) return '';
+    const eta = this.packEtaText();
+    if (p.phase === 'packing') return `compressing • ${eta || 'estimating…'}`;
+    return `${p.done}/${p.total} files${eta ? ` • ${eta}` : ''}`;
+  });
+  newArchiveName = 'Untitled';
   newArchiveMode: 'document' | 'project' = 'document';
+  readonly newArchiveFormat = signal<'markdown' | 'mdz'>('markdown');
   readonly aboutOpen = signal(false);
   readonly aboutTab = signal<'about' | 'libraries' | 'license' | 'debug'>('about');
   readonly debugCopied = signal(false);
@@ -683,9 +845,11 @@ export class AppComponent implements OnDestroy {
   private readonly handleOpenArchiveCommand = () => this.openFilePicker();
   private readonly handleSaveArchiveCommand = () => void this.saveArchive();
   private readonly handleSaveArchiveAsCommand = () => void this.saveArchive(true);
+  private readonly handleCloseArchiveCommand = () => this.closeDocument();
   private readonly handleExportDraftCommand = () => this.exportDraft();
   private readonly handleShowAboutCommand = () => this.showAbout();
   private readonly handleSetMdDefaultCommand = () => void this.promptMarkdownDefaultManually();
+  private readonly handlePackFolderCommand = () => void this.packFolder();
 
   private readonly handleKeyDown = (e: KeyboardEvent): void => {
     const ctrl = e.ctrlKey || e.metaKey;
@@ -702,6 +866,10 @@ export class AppComponent implements OnDestroy {
       case 's':
         e.preventDefault();
         void this.saveArchive(e.shiftKey);
+        break;
+      case 'w':
+        e.preventDefault();
+        this.closeDocument();
         break;
     }
   };
@@ -720,9 +888,11 @@ export class AppComponent implements OnDestroy {
     window.addEventListener('mdzip-studio:open-archive', this.handleOpenArchiveCommand);
     window.addEventListener('mdzip-studio:save-archive', this.handleSaveArchiveCommand);
     window.addEventListener('mdzip-studio:save-archive-as', this.handleSaveArchiveAsCommand);
+    window.addEventListener('mdzip-studio:close-archive', this.handleCloseArchiveCommand);
     window.addEventListener('mdzip-studio:export-draft', this.handleExportDraftCommand);
     window.addEventListener('mdzip-studio:show-about', this.handleShowAboutCommand);
     window.addEventListener('mdzip-studio:set-md-default', this.handleSetMdDefaultCommand);
+    window.addEventListener('mdzip-studio:pack-folder', this.handlePackFolderCommand);
     document.addEventListener('keydown', this.handleKeyDown);
     document.addEventListener('click', this.closeMenuOnDocumentClick);
     document.addEventListener('mouseover', this.handleLinkMouseOver);
@@ -755,6 +925,9 @@ export class AppComponent implements OnDestroy {
     }
 
     void this.maybePromptMarkdownDefault();
+
+    // Seed the taskbar Jump List with the recents we loaded from storage.
+    window.mdzipStudio?.setRecentFiles?.(this.recentFiles());
   }
 
   ngOnDestroy(): void {
@@ -762,9 +935,11 @@ export class AppComponent implements OnDestroy {
     window.removeEventListener('mdzip-studio:open-archive', this.handleOpenArchiveCommand);
     window.removeEventListener('mdzip-studio:save-archive', this.handleSaveArchiveCommand);
     window.removeEventListener('mdzip-studio:save-archive-as', this.handleSaveArchiveAsCommand);
+    window.removeEventListener('mdzip-studio:close-archive', this.handleCloseArchiveCommand);
     window.removeEventListener('mdzip-studio:export-draft', this.handleExportDraftCommand);
     window.removeEventListener('mdzip-studio:show-about', this.handleShowAboutCommand);
     window.removeEventListener('mdzip-studio:set-md-default', this.handleSetMdDefaultCommand);
+    window.removeEventListener('mdzip-studio:pack-folder', this.handlePackFolderCommand);
     document.removeEventListener('keydown', this.handleKeyDown);
     document.removeEventListener('click', this.closeMenuOnDocumentClick);
     document.removeEventListener('mouseover', this.handleLinkMouseOver);
@@ -867,8 +1042,81 @@ export class AppComponent implements OnDestroy {
     }
   }
 
-  newArchive(): void {
+  newArchive(format: 'markdown' | 'mdz' = 'markdown'): void {
+    this.newArchiveFormat.set(format);
+    this.newArchiveName = this.defaultArchiveName(format);
     this.newDialogOpen.set(true);
+  }
+
+  // Default name for the New dialog, by output format (and .mdz mode). A plain
+  // .md is a single document; an .mdz is a bundle/archive — and, in future,
+  // project mode would seed "My Project".
+  private defaultArchiveName(format: 'markdown' | 'mdz', mode: 'document' | 'project' = this.newArchiveMode): string {
+    if (format === 'mdz') return mode === 'project' ? 'My Project' : 'My Document';
+    return 'Untitled';
+  }
+
+  closeDocument(): void {
+    if (!this.currentArchive()) return;
+    this.archiveService.closeArchive();
+    this.selectedDocumentId.set(null);
+    this.validationIssues.set([]);
+    this.saveValidationState.set('unchecked');
+    this.latestWorkspaceBytes.set(null);
+    this.latestWorkspaceSnapshot.set(null);
+    this.sourceFormat.set('markdown');
+    this.workspaceBytes.set(new TextEncoder().encode(''));
+    this.readOnly.set(false);
+    this.statusMessage.set('Closed document');
+  }
+
+  openRecent(path: string): void {
+    // In the desktop shell a recent entry is a real filesystem path we can open
+    // directly. In the web shell it's only a file name, so fall back to the picker.
+    if (window.mdzipStudio?.openDocumentByPath) {
+      void this.openRecentElectron(path);
+      return;
+    }
+    this.openFilePicker();
+  }
+
+  private async openRecentElectron(path: string): Promise<void> {
+    let result: ElectronDocumentOpenResult;
+    try {
+      result = await window.mdzipStudio!.openDocumentByPath!(path);
+    } catch (error) {
+      this.statusMessage.set(error instanceof Error ? error.message : `Could not open ${this.recentFileName(path)}`);
+      return;
+    }
+    if (result.error === 'not-found') {
+      this.storageService.removeRecentFile(path);
+      this.syncRecentFiles();
+      this.statusMessage.set(`File no longer exists: ${this.recentFileName(path)}`);
+      return;
+    }
+    if (result.canceled) {
+      this.statusMessage.set(result.error ? `Could not open ${this.recentFileName(path)}` : 'Open canceled');
+      return;
+    }
+    await this.openElectronDocumentResult(result);
+  }
+
+  removeRecent(path: string): void {
+    this.storageService.removeRecentFile(path);
+    this.syncRecentFiles();
+  }
+
+  clearRecentFiles(): void {
+    this.storageService.clearRecentFiles();
+    this.syncRecentFiles([]);
+  }
+
+  // Mirror the recents list into the renderer signal and, on the desktop shell,
+  // the Windows taskbar Jump List so right-clicking the app icon reopens them.
+  private syncRecentFiles(files = this.storageService.getRecentFiles()): void {
+    this.recentFiles.set(files);
+    this.recentTitles.set(this.storageService.getRecentTitles());
+    window.mdzipStudio?.setRecentFiles?.(files);
   }
 
   openFilePicker(): void {
@@ -939,6 +1187,251 @@ export class AppComponent implements OnDestroy {
     return true;
   }
 
+  // ── Pack a folder of Markdown into a single .mdz (issue #2) ───────────────
+  // Mirrors mdzip.org/packager.html: a path-only scan shows the options
+  // instantly, then only files matching the include-filters are read at build.
+  async packFolder(): Promise<void> {
+    this.closeMenu();
+    if (window.mdzipStudio?.pickFolder) {
+      let scan: ElectronPickFolderResult;
+      try {
+        scan = await window.mdzipStudio.pickFolder();
+      } catch (error) {
+        this.statusMessage.set(error instanceof Error ? error.message : 'Could not read folder');
+        return;
+      }
+      if (scan.canceled) return;
+      this.openPackOptions({ kind: 'electron' }, scan.folderName ?? 'folder', scan.paths ?? [], scan.manifestText ?? null);
+      return;
+    }
+    // Browser: the <input webkitdirectory> change handler continues the flow.
+    this.folderInput?.nativeElement.click();
+  }
+
+  async onFolderInputSelected(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const picked = Array.from(input.files ?? []);
+    input.value = '';
+    if (!picked.length) return;
+
+    const firstRel = (picked[0] as File & { webkitRelativePath?: string }).webkitRelativePath || picked[0].name;
+    const folderName = firstRel.includes('/') ? firstRel.split('/')[0] : 'folder';
+    // Keep all File handles; contents are read lazily at build time.
+    const entries = picked.map((file) => {
+      const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+      const parts = rel.split('/');
+      return { path: parts.length > 1 ? parts.slice(1).join('/') : parts[0], file };
+    });
+    const manifestEntry = entries.find((entry) => entry.path.toLowerCase() === 'manifest.json');
+    const manifestText = manifestEntry ? await manifestEntry.file.text() : null;
+    this.openPackOptions({ kind: 'browser', entries }, folderName, entries.map((entry) => entry.path), manifestText);
+  }
+
+  private openPackOptions(source: PackSource, folderName: string, paths: string[], manifestText: string | null): void {
+    if (!paths.length) {
+      this.statusMessage.set('That folder has no files to pack');
+      return;
+    }
+    this.pendingPackSource = source;
+    this.packAllPaths = paths;
+    this.packFolderName.set(folderName);
+    this.packFileCount.set(paths.length);
+    this.packFilters.set(MdzPackagerCore.DEFAULT_FILTERS.join('\n'));
+    this.packEntryOptions.set(paths.filter((p) => !p.includes('/') && /\.(md|markdown)$/i.test(p)).sort());
+    this.packMode.set('document');
+    this.packTitle.set('');
+    this.packEntryPoint.set('');
+    this.packAuthor.set('');
+    this.packDescription.set('');
+    this.prefillPackOptionsFromManifest(manifestText);
+    this.packFolderDialogOpen.set(true);
+  }
+
+  // Pre-fill the option fields from a source manifest.json, like the packager.
+  private prefillPackOptionsFromManifest(manifestText: string | null): void {
+    if (!manifestText) return;
+    let manifest: Record<string, unknown>;
+    try {
+      manifest = JSON.parse(manifestText) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+    if (manifest['mode'] === 'project') this.packMode.set('project');
+    if (typeof manifest['title'] === 'string') this.packTitle.set(manifest['title']);
+    if (typeof manifest['entryPoint'] === 'string') this.packEntryPoint.set(manifest['entryPoint']);
+    if (typeof manifest['description'] === 'string') this.packDescription.set(manifest['description']);
+    const author = manifest['author'] ?? (Array.isArray(manifest['authors']) ? manifest['authors'][0] : null);
+    if (author && typeof (author as { name?: unknown }).name === 'string') {
+      this.packAuthor.set((author as { name: string }).name);
+    }
+  }
+
+  async confirmPackFolder(): Promise<void> {
+    this.packFolderDialogOpen.set(false);
+    await this.runPack();
+  }
+
+  private packFiltersList(): string[] {
+    const list = this.packFilters().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    return list.length ? list : MdzPackagerCore.DEFAULT_FILTERS.slice();
+  }
+
+  private async runPack(): Promise<void> {
+    const source = this.pendingPackSource;
+    const folderName = this.packFolderName();
+    this.pendingPackSource = null;
+    if (!source) return;
+
+    const filters = this.packFiltersList();
+    const entryPoint = this.packEntryPoint().trim();
+    // manifest.json is regenerated from the options, so never pack it as-is.
+    const selected = this.packAllPaths.filter(
+      (p) => p.toLowerCase() !== 'manifest.json' && MdzPackagerCore.matchesAnyFilter(p, filters)
+    );
+
+    try {
+      if (!selected.length) {
+        this.statusMessage.set('No files match the include filters');
+        return;
+      }
+      const files = await this.readPackFiles(source, selected);
+      // Packing is CPU-bound and buildArchive gives no real progress, but JSZip's
+      // generateAsync yields, so we animate the bar from a byte-based time estimate.
+      const bytesTotal = files.reduce((sum, file) => sum + file.bytes.length, 0);
+      this.packStartMs = performance.now();
+      this.packEstMs = Math.max(400, bytesTotal / PACK_BYTES_PER_MS);
+      this.packProgress.set({ phase: 'packing', done: files.length, total: files.length, bytesDone: 0, bytesTotal });
+      await this.yieldForPaint();
+      const packTimer = setInterval(() => {
+        const p = this.packProgress();
+        if (!p || p.phase !== 'packing') return;
+        const pct = Math.min(95, ((performance.now() - this.packStartMs) / this.packEstMs) * 100);
+        this.packProgress.set({ ...p, bytesDone: Math.round((pct / 100) * p.bytesTotal) });
+      }, 120);
+      let bytes: Uint8Array;
+      try {
+        bytes = await this.buildArchiveFromFolder(files, folderName, {
+          mode: this.packMode(),
+          entryPoint: entryPoint || undefined,
+          createIndex: !entryPoint,
+          title: this.packTitle().trim() || undefined,
+          author: this.packAuthor().trim() || undefined,
+          description: this.packDescription().trim() || undefined,
+        });
+      } finally {
+        clearInterval(packTimer);
+      }
+      this.packProgress.set(null);
+      const defaultName = `${this.toSafeFilename(folderName)}.mdz`;
+
+      if (this.packMode() === 'project') {
+        // Projects may be large, so write to disk first, then open the result.
+        if (window.mdzipStudio?.saveDocument) {
+          const result = await window.mdzipStudio.saveDocument({ defaultName, bytes: Array.from(bytes), saveAs: true });
+          if (result.canceled) { this.statusMessage.set('Pack canceled'); return; }
+          this.isLoading.set(true);
+          await this.yieldForPaint();
+          await this.openDocumentBytes(bytes, result.name ?? defaultName, result.filePath, false, true, true);
+          this.statusMessage.set(`Packed ${folderName} → ${result.name ?? defaultName}`);
+          return;
+        }
+        // Browser: "save" is a download; then open the packed bytes in memory.
+        this.downloadBlob(this.bytesToBlob(bytes, 'application/vnd.mdzip'), defaultName, 'application/vnd.mdzip');
+        this.isLoading.set(true);
+        await this.yieldForPaint();
+        await this.openDocumentBytes(bytes, defaultName, undefined, false, false, true);
+        this.statusMessage.set(`Packed ${folderName} (downloaded)`);
+        return;
+      }
+
+      // Document: open in memory, unsaved (no path → Save prompts for a location).
+      this.isLoading.set(true);
+      await this.yieldForPaint();
+      await this.openDocumentBytes(bytes, defaultName, undefined, false, false, true);
+      this.statusMessage.set(`Packed ${folderName} (unsaved)`);
+    } catch (error) {
+      this.isLoading.set(false);
+      this.statusMessage.set(error instanceof Error ? error.message : 'Could not pack folder');
+    } finally {
+      this.packProgress.set(null);
+    }
+  }
+
+  // Reads only the selected (filter-matched) files, driving the reading progress
+  // bar + ETA. Desktop streams progress over IPC; the browser reads File handles.
+  private async readPackFiles(source: PackSource, selected: string[]): Promise<FolderFile[]> {
+    this.packStartMs = performance.now();
+    if (source.kind === 'electron') {
+      const bridge = window.mdzipStudio!;
+      this.packProgress.set({ phase: 'reading', done: 0, total: selected.length, bytesDone: 0, bytesTotal: 0 });
+      const unsubscribe = bridge.onPackFolderProgress?.((data) => this.packProgress.set({ phase: 'reading', ...data }));
+      try {
+        const result = await bridge.readFolder!({ paths: selected });
+        return (result.files ?? []).map((file) => ({ path: file.path, bytes: new Uint8Array(file.bytes) }));
+      } finally {
+        unsubscribe?.();
+      }
+    }
+
+    const wanted = new Set(selected);
+    const entries = source.entries.filter((entry) => wanted.has(entry.path));
+    const total = entries.length;
+    const bytesTotal = entries.reduce((sum, entry) => sum + entry.file.size, 0);
+    this.packProgress.set({ phase: 'reading', done: 0, total, bytesDone: 0, bytesTotal });
+    const files: FolderFile[] = [];
+    let bytesDone = 0;
+    for (let i = 0; i < entries.length; i += 1) {
+      files.push({ path: entries[i].path, bytes: new Uint8Array(await entries[i].file.arrayBuffer()) });
+      bytesDone += entries[i].file.size;
+      if (i % 4 === 0 || i === entries.length - 1) {
+        this.packProgress.set({ phase: 'reading', done: i + 1, total, bytesDone, bytesTotal });
+      }
+      if (i % 16 === 0) await this.yieldForPaint(); // let the bar repaint
+    }
+    return files.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  private packEtaText(): string {
+    const p = this.packProgress();
+    if (!p) return '';
+    // Packing has no real progress; estimate remaining from the time budget.
+    if (p.phase === 'packing') {
+      const remaining = (this.packEstMs - (performance.now() - this.packStartMs)) / 1000;
+      if (remaining > 1) return `~${Math.ceil(remaining)}s left`;
+      return 'almost done';
+    }
+    if (p.bytesDone === 0) return '';
+    const elapsed = (performance.now() - this.packStartMs) / 1000;
+    const rate = p.bytesDone / elapsed;
+    if (!isFinite(rate) || rate <= 0) return '';
+    const remaining = (p.bytesTotal - p.bytesDone) / rate;
+    if (!isFinite(remaining) || remaining < 0) return '';
+    return remaining < 1 ? 'almost done' : `~${Math.ceil(remaining)}s left`;
+  }
+
+  private async buildArchiveFromFolder(
+    files: FolderFile[],
+    name: string,
+    options: { mode: PackMode; entryPoint?: string; createIndex: boolean; title?: string; author?: string; description?: string }
+  ): Promise<Uint8Array> {
+    // Files were already filtered when read; pack everything that was kept.
+    const result = await MdzPackagerCore.buildArchive(
+      files.map((file) => ({ path: file.path, data: file.bytes })),
+      name,
+      {
+        createIndex: options.createIndex,
+        mapFiles: true,
+        filters: ['**/*'],
+        title: options.title ?? name,
+        mode: options.mode,
+        entryPoint: options.entryPoint,
+        author: options.author,
+        description: options.description,
+      }
+    );
+    return new Uint8Array(await result.blob.arrayBuffer());
+  }
+
   private createUntitledArchive(): void {
     this.archiveService.createNewArchive('Untitled', 'document');
     this.archiveService.addDocument({
@@ -954,12 +1447,14 @@ export class AppComponent implements OnDestroy {
     this.latestWorkspaceSnapshot.set(null);
     this.sourceFormat.set('markdown');
     this.workspaceBytes.set(new TextEncoder().encode(''));
+    this.navigationActive.set(false);
     this.readOnly.set(false);
     this.statusMessage.set('New document');
   }
 
-  createArchiveFromDialog(): void {
+  async createArchiveFromDialog(): Promise<void> {
     const name = this.newArchiveName.trim() || 'Untitled';
+    const format = this.newArchiveFormat();
     this.archiveService.createNewArchive(name, this.newArchiveMode);
     this.archiveService.addDocument({
       id: crypto.randomUUID(),
@@ -972,8 +1467,19 @@ export class AppComponent implements OnDestroy {
     this.saveValidationState.set('unchecked');
     this.latestWorkspaceBytes.set(null);
     this.latestWorkspaceSnapshot.set(null);
-    this.sourceFormat.set('markdown');
-    this.workspaceBytes.set(new TextEncoder().encode(''));
+
+    // A markdown document is plain text the editor accepts empty. An .mdz is a
+    // zip container, so it needs valid archive bytes — feeding empty bytes makes
+    // the workspace fail to parse ("Corrupted zip"). Build them before switching
+    // sourceFormat so the workspace never sees mdz mode with zero-length bytes.
+    let bytes: Uint8Array = new TextEncoder().encode('');
+    if (format === 'mdz') {
+      const archive = this.currentArchive();
+      if (archive) bytes = await this.buildFreshArchiveBytes(archive);
+    }
+    this.sourceFormat.set(format);
+    this.workspaceBytes.set(bytes);
+    this.navigationActive.set(false);
     this.readOnly.set(false);
     this.statusMessage.set(`Created ${name}`);
     this.newDialogOpen.set(false);
@@ -1000,8 +1506,11 @@ export class AppComponent implements OnDestroy {
     return new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
   }
 
-  private async openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly = false): Promise<void> {
+  private async openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly = false, recordRecent = true, showNavigation = false): Promise<void> {
     this.readOnly.set(readOnly);
+    // Decide nav-pane visibility before the workspace (re)mounts, so the freshly
+    // created view picks it up. Off for normal opens, on for packed folders.
+    this.navigationActive.set(showNavigation);
     // isLoading is set (and a paint yielded) by the caller before reading bytes.
     this.latestWorkspaceBytes.set(null);
     this.latestWorkspaceSnapshot.set(null);
@@ -1009,12 +1518,19 @@ export class AppComponent implements OnDestroy {
     this.saveValidationState.set('unchecked');
 
     try {
+      // Title pulled from an .mdz manifest, cached so the recents list can show
+      // a friendly name instead of the bare file name.
+      let recentTitle: string | undefined;
       const lowerName = name.toLowerCase();
       if (lowerName.endsWith('.mdz')) {
         const archive = await this.parseMdzBytes(bytes, name, filePath);
         this.archiveService.loadArchive(archive);
         this.sourceFormat.set('mdz');
         this.workspaceBytes.set(bytes);
+        // parseMdzBytes falls back to the file name when the manifest has no
+        // title; only cache a real manifest title (one that differs from it).
+        const fallbackName = name.replace(/\.mdz$/i, '');
+        if (archive.name && archive.name !== fallbackName) recentTitle = archive.name;
       } else if (lowerName.endsWith('.md')) {
         const content = new TextDecoder().decode(bytes);
         const archiveName = name.replace(/\.md$/i, '');
@@ -1034,8 +1550,13 @@ export class AppComponent implements OnDestroy {
         void this.rebuildWorkspaceBytes();
       }
 
-      this.storageService.addRecentFile(filePath ?? name);
-      this.recentFiles.set(this.storageService.getRecentFiles());
+      // In-memory packs (no real path on disk) shouldn't pollute the recent list.
+      if (recordRecent) {
+        const recentKey = filePath ?? name;
+        this.storageService.addRecentFile(recentKey);
+        if (recentTitle) this.storageService.setRecentTitle(recentKey, recentTitle);
+        this.syncRecentFiles();
+      }
       this.selectedDocumentId.set(this.archiveService.documents()[0]?.id ?? null);
       this.statusMessage.set(`Opened ${name}`);
       // Defer clearing isLoading until the workspace fires its first changed event,
@@ -1750,10 +2271,13 @@ export class AppComponent implements OnDestroy {
     return path.replace(/\\/g, '/').split('/').pop() ?? path;
   }
 
-  recentFileDir(path: string): string {
-    const normalized = path.replace(/\\/g, '/');
-    const idx = normalized.lastIndexOf('/');
-    return idx > 0 ? normalized.slice(0, idx) : '';
+  // Prefer a cached .mdz manifest title; fall back to the bare file name.
+  recentDisplayName(path: string): string {
+    return this.recentTitles()[path] ?? this.recentFileName(path);
+  }
+
+  recentFilePath(path: string): string {
+    return path.replace(/\\/g, '/');
   }
 
   formatSize(bytes: number): string {
