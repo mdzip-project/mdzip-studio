@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.15] - 2026-06-17
+
+### Fixed
+
+- A freshly opened document could show the Save button's "unsaved" dot even
+  though nothing had changed. The unsaved-edits state wasn't reset on load, so
+  it could carry over from the previously open document; it's now synced from
+  the editor whenever a document loads.
+
 ## [1.3.14] - 2026-06-17
 
 ### Fixed
@@ -88,7 +97,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.14...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.15...HEAD
+[1.3.15]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.14...v1.3.15
 [1.3.14]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.13...v1.3.14
 [1.3.13]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.12...v1.3.13
 [1.3.12]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.11...v1.3.12

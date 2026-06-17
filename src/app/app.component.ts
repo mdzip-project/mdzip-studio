@@ -1699,6 +1699,9 @@ export class AppComponent implements OnDestroy {
     // isLoading is set (and a paint yielded) by the caller before reading bytes.
     this.latestWorkspaceBytes.set(null);
     this.latestWorkspaceSnapshot.set(null);
+    // Clear any dirty state carried over from a previously open document; the
+    // freshly loaded one is clean until the editor reports otherwise.
+    this.isDirty.set(false);
     this.validationIssues.set([]);
     this.saveValidationState.set('unchecked');
     // Reset relative-image resolution; set below only for a plain .md from disk.
@@ -2541,6 +2544,11 @@ export class AppComponent implements OnDestroy {
     this.clearWorkspaceLoad();
     this.latestWorkspaceBytes.set(event.bytes);
     this.latestWorkspaceSnapshot.set(event.snapshot);
+    // (changed) fires on load and on structural edits with an authoritative
+    // snapshot, so keep isDirty in sync here too. (dirtyChanged only fires on
+    // transitions, so on a clean load it wouldn't clear a stale value left over
+    // from the previously open document — which showed a false unsaved dot.)
+    this.isDirty.set(event.snapshot.dirty);
     this.saveValidationState.set('unchecked');
     // Preserve a just-set conversion message through the conversion's own
     // re-render (one-shot); normal "Viewing/Editing" resumes afterward.
