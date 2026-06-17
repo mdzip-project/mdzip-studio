@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.12] - 2026-06-17
+
+### Changed
+
+- **Help → Check for Updates…** now reports its result in a dialog ("You're up
+  to date", an update was found, or an error) instead of a native notification,
+  so the outcome is always visible. The silent startup check still uses
+  notifications.
+
 ## [1.3.11] - 2026-06-17
 
 ### Fixed
@@ -58,7 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.11...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.12...HEAD
+[1.3.12]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.11...v1.3.12
 [1.3.11]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.10...v1.3.11
 [1.3.10]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.0...v1.3.10
 [1.3.0]: https://github.com/mdzip-project/mdzip-studio/compare/v0.1.14...v1.3.0
