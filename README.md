@@ -2,6 +2,22 @@
 
 Reference desktop application for the MDZip ecosystem.
 
+## Installing (Windows)
+
+Download the latest `MDZip Studio Setup <version>.exe` from the
+[Releases page](https://github.com/mdzip-project/mdzip-studio/releases/latest)
+and run it.
+
+> **"Windows protected your PC" / "isn't commonly downloaded"** — the installer
+> is not signed with a reputation-bearing certificate, so Microsoft SmartScreen
+> warns on first download. This is expected and does not indicate a problem with
+> the file. To proceed: in the browser's download list choose **Keep**, then on
+> the SmartScreen prompt click **More info → Run anyway**.
+
+Once installed, MDZip Studio **updates itself**: it checks for new releases on
+startup (and via **Help → Check for Updates…**), then downloads and installs
+them on the next restart.
+
 ## Getting Started
 
 ### Prerequisites

@@ -1,6 +1,12 @@
 #!/usr/bin/env node
-// Generates src/app/app-about-data.ts from package.json runtime dependencies
+// Generates src/app/app-about-data.ts from the libraries that ship in the build
 // and the project LICENSE file. Run automatically via prestart/prebuild.
+//
+// The renderer libraries (Angular, PrimeNG, mermaid, etc.) are bundled into
+// dist/ by the Angular build and live in devDependencies — only electron-updater
+// is a real runtime node_modules dependency (see package.json). So we can't key
+// the credits off `dependencies` alone: we credit everything across both
+// sections except the pure build-time tooling listed below.
 
 const fs = require('fs');
 const path = require('path');
@@ -9,6 +15,20 @@ const root = path.join(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
 const FIRST_PARTY_SCOPE = '@mdzip/';
+
+// Build-only tooling that never ships to users, so it isn't credited in About.
+const BUILD_ONLY = new Set([
+  '@angular/build',
+  '@angular/cli',
+  '@angular/compiler-cli',
+  '@types/node',
+  'concurrently',
+  'electron-builder',
+  'jsdom',
+  'typescript',
+  'vitest',
+  'wait-on',
+]);
 
 function readDependency(name) {
   try {
@@ -26,15 +46,15 @@ function readDependency(name) {
   }
 }
 
-const allDeps = Object.keys(pkg.dependencies ?? {}).sort();
+const allDeps = [
+  ...Object.keys(pkg.dependencies ?? {}),
+  ...Object.keys(pkg.devDependencies ?? {}),
+]
+  .filter((name) => !BUILD_ONLY.has(name))
+  .filter((name, index, names) => names.indexOf(name) === index)
+  .sort();
 const firstParty = allDeps.filter((name) => name.startsWith(FIRST_PARTY_SCOPE)).map(readDependency);
 const thirdParty = allDeps.filter((name) => !name.startsWith(FIRST_PARTY_SCOPE)).map(readDependency);
-
-// Electron is a devDependency but ships in the desktop build — attribute it too.
-if (pkg.devDependencies?.electron) {
-  thirdParty.push(readDependency('electron'));
-  thirdParty.sort((a, b) => a.name.localeCompare(b.name));
-}
 
 let licenseText = '';
 try {

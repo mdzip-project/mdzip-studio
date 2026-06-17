@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.11] - 2026-06-17
+
+### Fixed
+
+- The packaged Windows app failed to launch with "Cannot find module
+  'electron-updater'" — no runtime dependencies were being bundled into the
+  app. The build now ships `electron-updater` (the only runtime dependency) in
+  the package; the renderer libraries remain bundled by the Angular build.
+
 ## [1.3.10] - 2026-06-17
 
 ### Added
@@ -49,7 +58,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.10...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.11...HEAD
+[1.3.11]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.10...v1.3.11
 [1.3.10]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.0...v1.3.10
 [1.3.0]: https://github.com/mdzip-project/mdzip-studio/compare/v0.1.14...v1.3.0
 [0.1.14]: https://github.com/mdzip-project/mdzip-studio/releases/tag/v0.1.14
