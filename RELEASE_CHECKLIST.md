@@ -61,16 +61,16 @@ electron-builder generates the artifacts locally and you upload them yourself.
 - **Gather all three artifacts** from `dist/` — do not skip the `.blockmap`,
   which the 0.1.14 release accidentally omitted (it enables differential
   auto-updates):
-  - `MDZip Studio Setup <version>.exe`     (the installer)
-  - `MDZip Studio Setup <version>.exe.blockmap`
+  - `MDZip-Studio-Setup-<version>.exe`     (the installer)
+  - `MDZip-Studio-Setup-<version>.exe.blockmap`
   - `latest.yml`                           (auto-update metadata)
 - **Create the release.** `gh release create` creates and pushes the `v$VERSION`
   tag for you, so no separate `git tag` step is needed. The release must be
   **published, not a draft** — `electron-updater` only sees published releases:
   ```powershell
   gh release create "v$VERSION" `
-    "dist/MDZip Studio Setup $VERSION.exe" `
-    "dist/MDZip Studio Setup $VERSION.exe.blockmap" `
+    "dist/MDZip-Studio-Setup-$VERSION.exe" `
+    "dist/MDZip-Studio-Setup-$VERSION.exe.blockmap" `
     "dist/latest.yml" `
     --repo mdzip-project/mdzip-studio `
     --title "MDZip Studio $VERSION" `
@@ -78,8 +78,11 @@ electron-builder generates the artifacts locally and you upload them yourself.
   ```
   Use the matching `CHANGELOG.md` section as the source for `--notes` (paste the
   entries, or `--notes-file` a trimmed copy) so the release and changelog match.
-  (GitHub renames spaces to dots in uploaded asset names, e.g.
-  `MDZip.Studio.Setup.<version>.exe` — this is expected.)
+- **Verify the asset names match `latest.yml`.** The `artifactName` build
+  setting produces space-free names (`MDZip-Studio-Setup-<version>.exe`) so the
+  uploaded asset matches the `url` in `latest.yml` exactly. If you ever see a
+  404 on auto-update download, this is the first thing to check — GitHub
+  rewrites spaces in asset names, which silently breaks the feed.
 - **Record the released version** for your own tracking.
 
 ## 6. Auto-updates
