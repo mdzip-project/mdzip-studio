@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.13] - 2026-06-17
+
+### Fixed
+
+- The Save button stayed disabled for a document that only lives in memory and
+  has never been written to disk — a new document, a packed folder, or a `.md`
+  just converted to `.mdz` — even though the status bar said to save it. Save is
+  now enabled (and dotted) whenever there are unsaved edits *or* the document
+  isn't on disk yet. (Ctrl+S and File → Save were never affected.)
+
 ## [1.3.12] - 2026-06-17
 
 ### Changed
@@ -67,7 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.12...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.13...HEAD
+[1.3.13]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.12...v1.3.13
 [1.3.12]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.11...v1.3.12
 [1.3.11]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.10...v1.3.11
 [1.3.10]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.0...v1.3.10

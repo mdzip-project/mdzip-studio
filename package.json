@@ -1,6 +1,6 @@
 {
   "name": "mdzip-studio",
-  "version": "1.3.12",
+  "version": "1.3.13",
   "description": "Reference desktop application for the MDZip ecosystem with CommonMark/GFM Markdown support",
   "author": "MDZip Project",
   "license": "Apache-2.0",

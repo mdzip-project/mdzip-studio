@@ -290,9 +290,9 @@ interface ArchiveTreeData {
           <button class="tb-btn" type="button" title="New (Ctrl+N)" (click)="newArchive()"><ng-icon name="lucidePlus" size="15" /></button>
           <button class="tb-btn" type="button" title="Open (Ctrl+O)" (click)="openFilePicker()"><ng-icon name="lucideFolderOpen" size="15" /></button>
           @if (isDesktopShell()) {
-            <button class="tb-btn" type="button" [title]="readOnly() ? readOnlyHint : (isDirty() ? 'Save — you have unsaved changes (Ctrl+S)' : 'Saved (Ctrl+S)')" [disabled]="!currentArchive() || readOnly() || !isDirty()" (click)="saveArchive()"><ng-icon name="lucideSave" size="15" />@if (isDirty()) {<span class="tb-dot"></span>}</button>
+            <button class="tb-btn" type="button" [title]="readOnly() ? readOnlyHint : (needsSave() ? 'Save — you have unsaved changes (Ctrl+S)' : 'Saved (Ctrl+S)')" [disabled]="!currentArchive() || readOnly() || !needsSave()" (click)="saveArchive()"><ng-icon name="lucideSave" size="15" />@if (needsSave()) {<span class="tb-dot"></span>}</button>
           } @else {
-            <button class="tb-btn" type="button" [title]="isDirty() ? 'Download — you have unsaved changes (Ctrl+S)' : 'Saved (Ctrl+S)'" [disabled]="!currentArchive() || !isDirty()" (click)="saveArchive()"><ng-icon name="lucideDownload" size="15" />@if (isDirty()) {<span class="tb-dot"></span>}</button>
+            <button class="tb-btn" type="button" [title]="needsSave() ? 'Download — you have unsaved changes (Ctrl+S)' : 'Saved (Ctrl+S)'" [disabled]="!currentArchive() || !needsSave()" (click)="saveArchive()"><ng-icon name="lucideDownload" size="15" />@if (needsSave()) {<span class="tb-dot"></span>}</button>
           }
         </div>
         <input #fileInput class="file-input" type="file" accept=".md,.mdz,.json,text/markdown,application/json" (change)="openArchive($event)" />
@@ -1117,6 +1117,16 @@ export class AppComponent implements OnDestroy {
 
   // Whether the open document exists on disk (so it can be revealed / saved in place).
   readonly hasFileOnDisk = computed(() => !!this.currentArchive()?.path);
+
+  // Whether Save has something to write: either unsaved edits, or (on desktop) a
+  // document that only lives in memory and has never been written to disk —
+  // e.g. a new document, a packed folder, or a .md just converted to .mdz. The
+  // editor's dirty flag covers edits but not these "never saved" cases, so the
+  // Save button keys off this instead of dirty alone. (In the browser shell
+  // there is no on-disk path, so we fall back to dirty.)
+  readonly needsSave = computed(() =>
+    this.isDirty() || (this.isDesktopShell() && !!this.currentArchive() && !this.hasFileOnDisk())
+  );
 
   async showInFileManager(): Promise<void> {
     this.closeMenu();
