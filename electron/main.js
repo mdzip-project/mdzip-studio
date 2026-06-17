@@ -1,4 +1,5 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, shell } = require('electron');
+const { app, BrowserWindow, Menu, Notification, dialog, ipcMain, nativeTheme, shell } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const fs = require('fs/promises');
 const { constants: fsConstants } = require('fs');
 const { execFile } = require('child_process');
@@ -26,6 +27,74 @@ const isDev = !app.isPackaged;
 // it must be set before any setJumpList call for items to appear under our icon.
 if (process.platform === 'win32') {
   app.setAppUserModelId('org.mdzip.studio');
+}
+
+// --- Auto-update (electron-updater, GitHub Releases) -----------------------
+// The feed is the `publish` block in package.json, baked into app-update.yml at
+// build time. Updates only work in a packaged build; in dev the feed is absent
+// and checkForUpdates() rejects. We surface progress through native OS
+// notifications and download in the background, installing on next restart.
+let updaterWired = false;
+// True while a check was triggered from the menu, so we give explicit feedback
+// (e.g. "you're up to date") that we suppress for the silent startup check.
+let manualUpdateCheck = false;
+
+function showNotification(title, body, onClick) {
+  if (!Notification.isSupported()) return;
+  const notification = new Notification({ title, body, icon: windowIconForTheme() });
+  if (onClick) notification.on('click', onClick);
+  notification.show();
+}
+
+function wireAutoUpdater() {
+  if (updaterWired) return;
+  updaterWired = true;
+
+  autoUpdater.on('update-available', (info) => {
+    showNotification('Update available', `Downloading MDZip Studio ${info.version}…`);
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    if (manualUpdateCheck) {
+      showNotification('You’re up to date', `MDZip Studio ${app.getVersion()} is the latest version.`);
+    }
+    manualUpdateCheck = false;
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    showNotification(
+      'Update ready',
+      `MDZip Studio ${info.version} will install when you restart. Click here to restart now.`,
+      () => autoUpdater.quitAndInstall()
+    );
+    manualUpdateCheck = false;
+  });
+
+  autoUpdater.on('error', (error) => {
+    if (manualUpdateCheck) {
+      showNotification('Update check failed', error?.message ?? 'Could not reach the update server.');
+    }
+    manualUpdateCheck = false;
+  });
+}
+
+function checkForUpdates(manual = false) {
+  if (!app.isPackaged) {
+    if (manual) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'Check for Updates',
+        message: 'Updates are only available in an installed build.',
+        detail: 'Run an installed copy of MDZip Studio to check for and download updates.',
+      });
+    }
+    return;
+  }
+  wireAutoUpdater();
+  manualUpdateCheck = manual;
+  // The 'error' event handles user-facing messaging; swallow the rejection so
+  // an unreachable feed never produces an unhandled promise rejection.
+  autoUpdater.checkForUpdates().catch(() => {});
 }
 
 function documentPathFromArgs(args) {
@@ -505,6 +574,58 @@ ipcMain.handle('mdzip:prompt-md-default', async () => {
   return { supported: true, isDefault: progId === MD_PROGID };
 });
 
+// MIME types for relative images referenced by an opened Markdown document.
+const MARKDOWN_ASSET_MIME = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.avif': 'image/avif',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+};
+
+// Read a relative image referenced by the current Markdown document and return
+// it as a data URI. Plain .md files keep their images as loose sibling files;
+// the renderer (served from app:// or the dev server) can't resolve those
+// relative paths itself, so the preview inlines them through here.
+ipcMain.handle('mdzip:read-markdown-asset', async (_event, payload) => {
+  const documentPath = path.resolve(String(payload?.documentPath ?? ''));
+  const relativePath = String(payload?.relativePath ?? '');
+  // Only serve assets for the document Studio currently has open.
+  if (!currentDocumentPath || documentPath !== currentDocumentPath) {
+    return { error: 'stale-document' };
+  }
+  // Reject absolute paths and URLs; only document-relative references resolve here.
+  if (!relativePath || path.isAbsolute(relativePath) || /^[a-z][a-z0-9+.-]*:/i.test(relativePath)) {
+    return { error: 'unsupported-path' };
+  }
+  const resolved = path.resolve(path.dirname(documentPath), relativePath);
+  const mime = MARKDOWN_ASSET_MIME[path.extname(resolved).toLowerCase()];
+  if (!mime) return { error: 'unsupported-type' };
+  try {
+    const bytes = await fs.readFile(resolved);
+    return { dataUri: `data:${mime};base64,${bytes.toString('base64')}` };
+  } catch {
+    return { error: 'not-found' };
+  }
+});
+
+// Reveal a saved document in the OS file manager (Explorer/Finder/Files).
+ipcMain.handle('mdzip:show-in-folder', async (_event, payload) => {
+  const filePath = String(payload?.filePath ?? '');
+  if (!filePath) return { error: 'no-path' };
+  try {
+    await fs.access(filePath);
+  } catch {
+    return { error: 'not-found' };
+  }
+  shell.showItemInFolder(path.resolve(filePath));
+  return { ok: true };
+});
+
 ipcMain.handle('mdzip:write-markdown-image', async (_event, payload) => {
   const documentPath = path.resolve(String(payload.documentPath ?? ''));
   const documentDirectory = path.dirname(documentPath);
@@ -570,6 +691,8 @@ const createMenu = () => {
         { label: 'Save', accelerator: 'CmdOrCtrl+S', click: () => dispatchAppEvent('mdzip-studio:save-archive') },
         { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', click: () => dispatchAppEvent('mdzip-studio:save-archive-as') },
         { type: 'separator' },
+        { label: 'Show in File Manager', click: () => dispatchAppEvent('mdzip-studio:show-in-folder') },
+        { type: 'separator' },
         { label: 'Close Document', accelerator: 'CmdOrCtrl+W', click: () => dispatchAppEvent('mdzip-studio:close-archive') },
         { type: 'separator' },
         { label: 'Exit', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
@@ -606,6 +729,8 @@ const createMenu = () => {
               { type: 'separator' },
             ]
           : []),
+        { label: 'Check for Updates...', click: () => checkForUpdates(true) },
+        { type: 'separator' },
         { label: 'About MDZip Studio', click: () => dispatchAppEvent('mdzip-studio:show-about') },
       ],
     },
@@ -628,6 +753,11 @@ const createMenu = () => {
 };
 
 app.on('ready', createMenu);
+
+// Silent check shortly after launch so it never competes with window startup.
+app.on('ready', () => {
+  setTimeout(() => checkForUpdates(false), 3000);
+});
 
 // Swap the window/taskbar icon when the OS theme changes (the BrowserWindow is
 // created with the correct one for the current theme).

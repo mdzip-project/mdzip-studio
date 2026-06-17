@@ -33,3 +33,6 @@ Thumbs.db
 # Local tooling / machine-specific (not for distribution)
 .mcp.json
 .playwright-mcp/
+
+# Local AI scratchpad notes (not for distribution)
+notes.mdz

@@ -14,6 +14,7 @@ import {
   MdzipConversionContext,
   MdzipDocumentChangeEvent,
   MdzipEntryRenderContext,
+  MdzipMarkdownRenderContext,
   MdzipMarkdownRenderExtension,
   MdzipWorkspaceChange,
   MdzipWorkspaceSave,
@@ -157,6 +158,11 @@ interface ElectronBridge {
     fileName: string;
     bytes: number[];
   }) => Promise<ElectronMarkdownImageResult>;
+  readMarkdownAsset?: (payload: {
+    documentPath: string;
+    relativePath: string;
+  }) => Promise<{ dataUri?: string; error?: string }>;
+  showInFolder?: (filePath: string) => Promise<{ ok?: boolean; error?: string }>;
   getMarkdownDefaultStatus?: () => Promise<MarkdownDefaultStatus>;
   promptMarkdownDefault?: () => Promise<MarkdownDefaultStatus>;
 }
@@ -250,6 +256,10 @@ interface ArchiveTreeData {
                     <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="saveArchive(true); closeMenu()"><ng-icon name="lucideSaveAll" size="13" /><span>Save As...</span><kbd>Ctrl+Shift+S</kbd></button></li>
                   } @else {
                     <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="saveArchive(); closeMenu()"><ng-icon name="lucideDownload" size="13" /><span>Download</span><kbd>Ctrl+S</kbd></button></li>
+                  }
+                  @if (isDesktopShell()) {
+                    <li class="menu-sep" role="separator"></li>
+                    <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!hasFileOnDisk()" (click)="showInFileManager()"><ng-icon name="lucideFolderOpen" size="13" /><span>Show in File Manager</span></button></li>
                   }
                   <li class="menu-sep" role="separator"></li>
                   <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="closeDocument(); closeMenu()"><ng-icon name="lucideX" size="13" /><span>Close Document</span><kbd>Ctrl+W</kbd></button></li>
@@ -449,6 +459,16 @@ interface ArchiveTreeData {
         <p-button label="Pack" (onClick)="confirmPackFolder()">
           <ng-template #icon><ng-icon name="lucideFolder" size="14" /></ng-template>
         </p-button>
+      </ng-template>
+    </p-dialog>
+
+    <p-dialog header="Convert to MDZip" [visible]="convertDialogOpen()" (visibleChange)="onConvertDialogVisibleChange($event)" [modal]="true" [style]="{ width: 'min(92vw, 460px)' }">
+      <div class="dialog-form">
+        <p>Convert this Markdown document into an MDZip archive? Its relative images are embedded so the archive is self-contained.</p>
+      </div>
+      <ng-template pTemplate="footer">
+        <p-button label="Cancel" severity="secondary" [text]="true" (onClick)="cancelConvertToMdz()" />
+        <p-button label="Convert" (onClick)="confirmConvertToMdz()" />
       </ng-template>
     </p-dialog>
 
@@ -702,7 +722,18 @@ export class AppComponent implements OnDestroy {
   // Mermaid render extension (lazy-loads the mermaid library only when a
   // document actually contains a ```mermaid block). theme: 'auto' follows the
   // editor's color scheme. Stable reference: the workspace diffs extensions by name.
-  readonly markdownExtensions: readonly MdzipMarkdownRenderExtension[] = [mdzipMermaidExtension()];
+  // Disk path of the currently open plain-Markdown file, and a per-document
+  // cache of inlined sibling images. Used to render relative `![](./img.png)`
+  // references that the renderer can't resolve against its own origin.
+  private currentMarkdownPath: string | null = null;
+  private readonly mdAssetCache = new Map<string, string>();
+  readonly markdownExtensions: readonly MdzipMarkdownRenderExtension[] = [
+    mdzipMermaidExtension(),
+    {
+      name: 'studio-relative-images',
+      transformHtml: (html, context) => this.inlineRelativeMarkdownImages(html, context),
+    },
+  ];
 
   readonly appVersion = APP_VERSION;
   readonly newDialogOpen = signal(false);
@@ -756,6 +787,9 @@ export class AppComponent implements OnDestroy {
   readonly mdDefaultBusy = signal(false);
   private static readonly MD_DEFAULT_PROMPT_KEY = 'mdDefaultPromptSeen';
   readonly imageDestinationDialogOpen = signal(false);
+  // Confirmation before converting a Markdown doc to .mdz (nav-button path).
+  // A deliberate seam for a future options dialog (title, subfolder, mode…).
+  readonly convertDialogOpen = signal(false);
   readonly imageSubfolder = signal('images');
   readonly canWriteLinkedMarkdownImage = computed(() =>
     Boolean(this.currentArchive()?.path && window.mdzipStudio?.writeMarkdownImage)
@@ -799,6 +833,8 @@ export class AppComponent implements OnDestroy {
   private workspaceLoadTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private pendingConversionAction: MdzipConversionAction | null = null;
   private pendingConversionContext: MdzipConversionContext | null = null;
+  // One-shot status held across the conversion's own re-render (see onWorkspaceChanged).
+  private postConvertStatus: string | null = null;
   private pendingMarkdownImageDestination: 'same' | 'subfolder' | 'mdz' | null = null;
   private removeOpenDocumentRequestedListener: (() => void) | null = null;
   private pendingElectronOpen: Promise<boolean> | null = null;
@@ -808,11 +844,16 @@ export class AppComponent implements OnDestroy {
     action: MdzipConversionAction,
     context: MdzipConversionContext
   ): boolean => {
+    this.pendingConversionContext = context;
     if (action.kind === 'navigation') {
-      return false;
+      // The nav button needs an archive. Show our own convert prompt (the future
+      // home for title/subfolder/mode options) instead of the editor's built-in
+      // dialog, which can't reach the document's loose image files.
+      this.pendingConversionAction = null;
+      this.convertDialogOpen.set(true);
+      return true;
     }
     this.pendingConversionAction = action;
-    this.pendingConversionContext = context;
     this.pendingMarkdownImageDestination = null;
     this.imageSubfolder.set('images');
     this.imageDestinationDialogOpen.set(true);
@@ -850,6 +891,7 @@ export class AppComponent implements OnDestroy {
   private readonly handleShowAboutCommand = () => this.showAbout();
   private readonly handleSetMdDefaultCommand = () => void this.promptMarkdownDefaultManually();
   private readonly handlePackFolderCommand = () => void this.packFolder();
+  private readonly handleShowInFolderCommand = () => void this.showInFileManager();
 
   private readonly handleKeyDown = (e: KeyboardEvent): void => {
     const ctrl = e.ctrlKey || e.metaKey;
@@ -893,6 +935,7 @@ export class AppComponent implements OnDestroy {
     window.addEventListener('mdzip-studio:show-about', this.handleShowAboutCommand);
     window.addEventListener('mdzip-studio:set-md-default', this.handleSetMdDefaultCommand);
     window.addEventListener('mdzip-studio:pack-folder', this.handlePackFolderCommand);
+    window.addEventListener('mdzip-studio:show-in-folder', this.handleShowInFolderCommand);
     document.addEventListener('keydown', this.handleKeyDown);
     document.addEventListener('click', this.closeMenuOnDocumentClick);
     document.addEventListener('mouseover', this.handleLinkMouseOver);
@@ -933,6 +976,7 @@ export class AppComponent implements OnDestroy {
     window.removeEventListener('mdzip-studio:show-about', this.handleShowAboutCommand);
     window.removeEventListener('mdzip-studio:set-md-default', this.handleSetMdDefaultCommand);
     window.removeEventListener('mdzip-studio:pack-folder', this.handlePackFolderCommand);
+    window.removeEventListener('mdzip-studio:show-in-folder', this.handleShowInFolderCommand);
     document.removeEventListener('keydown', this.handleKeyDown);
     document.removeEventListener('click', this.closeMenuOnDocumentClick);
     document.removeEventListener('mouseover', this.handleLinkMouseOver);
@@ -1049,6 +1093,25 @@ export class AppComponent implements OnDestroy {
     return 'Untitled';
   }
 
+  // Whether the open document exists on disk (so it can be revealed / saved in place).
+  readonly hasFileOnDisk = computed(() => !!this.currentArchive()?.path);
+
+  async showInFileManager(): Promise<void> {
+    this.closeMenu();
+    const filePath = this.currentArchive()?.path;
+    const reveal = window.mdzipStudio?.showInFolder;
+    if (!filePath || !reveal) {
+      this.statusMessage.set('Save the document first to show it in your file manager');
+      return;
+    }
+    const result = await reveal(filePath);
+    if (result?.error) {
+      this.statusMessage.set(result.error === 'not-found'
+        ? 'File not found on disk — save it again'
+        : 'Could not open the file manager');
+    }
+  }
+
   closeDocument(): void {
     if (!this.currentArchive()) return;
     this.archiveService.closeArchive();
@@ -1059,6 +1122,8 @@ export class AppComponent implements OnDestroy {
     this.latestWorkspaceSnapshot.set(null);
     this.sourceFormat.set('markdown');
     this.workspaceBytes.set(new TextEncoder().encode(''));
+    this.currentMarkdownPath = null;
+    this.mdAssetCache.clear();
     this.readOnly.set(false);
     this.statusMessage.set('Closed document');
   }
@@ -1110,6 +1175,19 @@ export class AppComponent implements OnDestroy {
     this.recentFiles.set(files);
     this.recentTitles.set(this.storageService.getRecentTitles());
     window.mdzipStudio?.setRecentFiles?.(files);
+  }
+
+  // Add a just-saved file to the recents list (and cache an .mdz manifest title
+  // that differs from the file name). `title` is the pre-save archive name, read
+  // before updateArchivePath rewrites it to the saved file name.
+  private recordSavedRecent(filePath: string | undefined, isMdz: boolean, title: string): void {
+    if (!filePath) return;
+    this.storageService.addRecentFile(filePath);
+    if (isMdz) {
+      const fallback = this.recentFileName(filePath).replace(/\.mdz$/i, '');
+      if (title && title !== fallback) this.storageService.setRecentTitle(filePath, title);
+    }
+    this.syncRecentFiles();
   }
 
   openFilePicker(): void {
@@ -1453,6 +1531,8 @@ export class AppComponent implements OnDestroy {
     this.sourceFormat.set(format);
     this.workspaceBytes.set(bytes);
     this.navigationActive.set(false);
+    this.currentMarkdownPath = null;
+    this.mdAssetCache.clear();
     this.readOnly.set(false);
     this.statusMessage.set(`Created ${name}`);
     this.newDialogOpen.set(false);
@@ -1479,6 +1559,41 @@ export class AppComponent implements OnDestroy {
     return new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
   }
 
+  // Inline relative image references (e.g. `./img.png`) for a plain Markdown file
+  // opened from disk. The preview renderer can't resolve such paths against its
+  // own origin, so each sibling file is read via Electron and swapped for a data
+  // URI. .mdz images already arrive as data URIs and are skipped; no-op in the
+  // browser shell (no disk path / IPC). Runs as a preview `transformHtml` stage,
+  // so the editor's Markdown source is left untouched.
+  private async inlineRelativeMarkdownImages(html: string, context: MdzipMarkdownRenderContext): Promise<string> {
+    if (context.sourceFormat !== 'markdown') return html;
+    const documentPath = this.currentMarkdownPath;
+    const read = window.mdzipStudio?.readMarkdownAsset;
+    if (!documentPath || !read) return html;
+
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    let changed = false;
+    await Promise.all(Array.from(doc.querySelectorAll('img')).map(async (img) => {
+      // Resolve relative sources only; absolute/scheme/escaping paths return null.
+      const archivePath = this.toArchiveAssetPath(img.getAttribute('src') ?? '');
+      if (!archivePath) return;
+      let dataUri = this.mdAssetCache.get(archivePath);
+      if (!dataUri) {
+        try {
+          const result = await read({ documentPath, relativePath: archivePath });
+          if (!result?.dataUri) return;
+          dataUri = result.dataUri;
+          this.mdAssetCache.set(archivePath, dataUri);
+        } catch {
+          return;
+        }
+      }
+      img.setAttribute('src', dataUri);
+      changed = true;
+    }));
+    return changed ? doc.body.innerHTML : html;
+  }
+
   private async openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly = false, recordRecent = true, showNavigation = false): Promise<void> {
     this.readOnly.set(readOnly);
     // Decide nav-pane visibility before the workspace (re)mounts, so the freshly
@@ -1489,6 +1604,9 @@ export class AppComponent implements OnDestroy {
     this.latestWorkspaceSnapshot.set(null);
     this.validationIssues.set([]);
     this.saveValidationState.set('unchecked');
+    // Reset relative-image resolution; set below only for a plain .md from disk.
+    this.currentMarkdownPath = null;
+    this.mdAssetCache.clear();
 
     try {
       // Title pulled from an .mdz manifest, cached so the recents list can show
@@ -1507,10 +1625,15 @@ export class AppComponent implements OnDestroy {
       } else if (lowerName.endsWith('.md')) {
         const content = new TextDecoder().decode(bytes);
         const archiveName = name.replace(/\.md$/i, '');
+        // Remember the disk path so the preview can resolve relative images.
+        this.currentMarkdownPath = filePath ?? null;
         this.archiveService.createNewArchive(archiveName, 'document');
+        // Name the entry `index.md` to match the manifest's default entry point
+        // (and how new docs are named), so a later .mdz pack doesn't fail with
+        // ENTRYPOINT_MISSING. Relative image links stay relative to this root.
         this.archiveService.addDocument({
           id: crypto.randomUUID(),
-          name,
+          name: 'index.md',
           content,
           modified: new Date(),
         });
@@ -1565,6 +1688,11 @@ export class AppComponent implements OnDestroy {
     if (!filePath && !fileName) {
       return;
     }
+    // Keep relative-image resolution pointed at the saved location (e.g. Save As).
+    if (filePath && this.sourceFormat() === 'markdown') {
+      this.currentMarkdownPath = filePath;
+      this.mdAssetCache.clear();
+    }
     this.archiveService.currentArchive.update((archive) =>
       archive
         ? {
@@ -1588,6 +1716,16 @@ export class AppComponent implements OnDestroy {
       return;
     }
 
+    // Surface any failure: callers invoke this as `void saveArchive(...)`, which
+    // would otherwise swallow a thrown error and look like nothing happened.
+    try {
+      await this.performSave(archive, saveAs);
+    } catch (error) {
+      this.statusMessage.set(`Save failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
+  }
+
+  private async performSave(archive: MDZipArchive, saveAs: boolean): Promise<void> {
     // Pull the editor's latest text into fresh bytes before saving. The embedded
     // editor only emits `changed` (with rebuilt bytes) on structural edits, so
     // plain text edits live only inside the editor until flushed — without this
@@ -1608,7 +1746,10 @@ export class AppComponent implements OnDestroy {
             index === 0 ? { ...document, content: markdownContent } : document
           ),
         };
-        const mdzBytes = await this.buildFreshArchiveBytes(convertedArchive);
+        // If saved as .mdz, embed the document's relative images so the archive
+        // is self-contained. (Unused when the user keeps the .md format.)
+        const embeddedImages = await this.collectMarkdownImages(markdownContent);
+        const mdzBytes = await this.buildFreshArchiveBytes(convertedArchive, embeddedImages);
         let result: ElectronDocumentSaveResult;
         try {
           result = await window.mdzipStudio.saveDocument({
@@ -1624,6 +1765,7 @@ export class AppComponent implements OnDestroy {
         }
         if (result.canceled) { this.statusMessage.set('Save canceled'); return; }
 
+        this.recordSavedRecent(result.filePath, result.format === 'mdz', archive.name);
         this.updateArchivePath(result.filePath, result.name);
         this.workspaceEditor?.markPersisted();
         this.readOnly.set(false);
@@ -1637,7 +1779,7 @@ export class AppComponent implements OnDestroy {
           this.latestWorkspaceBytes.set(null);
           this.latestWorkspaceSnapshot.set(null);
         }
-        this.statusMessage.set(`Saved ${result.name ?? archive.name}`);
+        this.statusMessage.set(`Saved ${result.filePath ?? result.name ?? archive.name}`);
         return;
       }
 
@@ -1667,10 +1809,12 @@ export class AppComponent implements OnDestroy {
         this.statusMessage.set('Save canceled');
         return;
       }
+      this.recordSavedRecent(result.filePath, true, archive.name);
       this.updateArchivePath(result.filePath, result.name);
       this.workspaceEditor?.markPersisted();
       this.readOnly.set(false);
-      this.statusMessage.set(validation.valid ? `Saved ${result.name ?? archive.name}` : `Saved ${result.name ?? archive.name} with technical issues`);
+      const savedTarget = result.filePath ?? result.name ?? archive.name;
+      this.statusMessage.set(validation.valid ? `Saved ${savedTarget}` : `Saved ${savedTarget} with technical issues`);
       return;
     }
 
@@ -1708,29 +1852,131 @@ export class AppComponent implements OnDestroy {
     return new Uint8Array(await result.blob.arrayBuffer());
   }
 
-  private async buildFreshArchiveBytes(archive: MDZipArchive): Promise<Uint8Array> {
+  private async buildFreshArchiveBytes(
+    archive: MDZipArchive,
+    extraFiles: readonly { path: string; bytes: Uint8Array }[] = []
+  ): Promise<Uint8Array> {
+    // The packer rejects a manifest entry point that isn't one of the packed
+    // files (ERR_PACK_ENTRYPOINT_MISSING). Fall back to the first document when
+    // the manifest's entry point doesn't match any document name.
+    const documentNames = archive.documents.map((document) => document.name);
+    const entryPoint = documentNames.includes(archive.manifest.entryPoint)
+      ? archive.manifest.entryPoint
+      : documentNames[0] ?? archive.manifest.entryPoint;
+    const manifest = this.toMdzManifest(archive);
+    manifest.entryPoint = entryPoint;
     const result = await MdzPackagerCore.buildArchive(
       [
         ...archive.documents.map((document) => ({
           path: document.name,
           text: document.content,
         })),
+        // Binary assets (e.g. images pulled in when converting a .md). DEFAULT_FILTERS
+        // already includes common image extensions, so these survive packing.
+        ...extraFiles.map((file) => ({ path: file.path, data: file.bytes })),
         {
           path: 'manifest.json',
-          text: JSON.stringify(this.toMdzManifest(archive), null, 2),
+          text: JSON.stringify(manifest, null, 2),
         },
       ],
       archive.name,
       {
         createIndex: archive.documents.length === 0,
         mapFiles: true,
-        filters: MdzPackagerCore.DEFAULT_FILTERS,
+        // Keep the defaults, plus the exact paths of any explicitly-provided
+        // assets so they survive even if their extension isn't a default filter.
+        filters: extraFiles.length
+          ? [...MdzPackagerCore.DEFAULT_FILTERS, ...extraFiles.map((file) => file.path)]
+          : MdzPackagerCore.DEFAULT_FILTERS,
         title: archive.name,
         mode: archive.mode,
-        entryPoint: archive.manifest.entryPoint,
+        entryPoint,
       }
     );
     return new Uint8Array(await result.blob.arrayBuffer());
+  }
+
+  // ── Embedding loose images when converting Markdown → MDZip ────────────────
+  // A plain .md keeps images as sibling files on disk. When converting to a
+  // self-contained .mdz we read those siblings and pack them at archive paths
+  // that match the existing relative links (so no link rewriting is needed).
+
+  // Extract image references (Markdown `![](path)` and HTML `<img src>`) from text.
+  private extractMarkdownImageRefs(markdown: string): string[] {
+    const refs: string[] = [];
+    const inline = /!\[[^\]]*\]\(\s*(<[^>]+>|[^)\s]+)/g;
+    const html = /<img\b[^>]*?\ssrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+    let match: RegExpExecArray | null;
+    while ((match = inline.exec(markdown))) {
+      let ref = match[1];
+      if (ref.startsWith('<') && ref.endsWith('>')) ref = ref.slice(1, -1);
+      refs.push(ref);
+    }
+    while ((match = html.exec(markdown))) {
+      refs.push(match[1] ?? match[2] ?? match[3] ?? '');
+    }
+    return refs;
+  }
+
+  // Normalize a relative reference to an archive-relative path, or null if it is
+  // absolute, a URL/scheme, or escapes the archive root (`..`).
+  private toArchiveAssetPath(ref: string): string | null {
+    let path = ref.trim().split(/[?#]/)[0];
+    if (!path) return null;
+    if (path.startsWith('/') || path.startsWith('\\') || /^[a-z][a-z0-9+.-]*:/i.test(path)) return null;
+    try { path = decodeURI(path); } catch { /* use as-is */ }
+    path = path.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+    if (!path || path.split('/').some((segment) => segment === '..')) return null;
+    return path;
+  }
+
+  private dataUriToBytes(dataUri: string): Uint8Array | null {
+    const comma = dataUri.indexOf(',');
+    if (comma < 0) return null;
+    try {
+      const binary = atob(dataUri.slice(comma + 1));
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes;
+    } catch {
+      return null;
+    }
+  }
+
+  // Read a document-relative image's bytes via Electron, reusing the preview's
+  // data-URI cache. Returns null outside the desktop shell or if unreadable.
+  private async readRelativeImageBytes(documentPath: string, archivePath: string): Promise<Uint8Array | null> {
+    const cached = this.mdAssetCache.get(archivePath);
+    if (cached) return this.dataUriToBytes(cached);
+    const read = window.mdzipStudio?.readMarkdownAsset;
+    if (!read) return null;
+    try {
+      const result = await read({ documentPath, relativePath: archivePath });
+      if (!result?.dataUri) return null;
+      this.mdAssetCache.set(archivePath, result.dataUri);
+      return this.dataUriToBytes(result.dataUri);
+    } catch {
+      return null;
+    }
+  }
+
+  // Gather embeddable sibling images referenced by a Markdown document so a
+  // conversion can pack them. Desktop-only; best-effort (skips anything it can't
+  // read, leaving its link untouched). Keyed by archive path so duplicates and
+  // already-embedded references collapse.
+  private async collectMarkdownImages(markdown: string): Promise<{ path: string; bytes: Uint8Array }[]> {
+    const documentPath = this.currentMarkdownPath;
+    if (!documentPath || !window.mdzipStudio?.readMarkdownAsset) return [];
+    const seen = new Set<string>();
+    const collected: { path: string; bytes: Uint8Array }[] = [];
+    for (const ref of this.extractMarkdownImageRefs(markdown)) {
+      const archivePath = this.toArchiveAssetPath(ref);
+      if (!archivePath || seen.has(archivePath)) continue;
+      seen.add(archivePath);
+      const bytes = await this.readRelativeImageBytes(documentPath, archivePath);
+      if (bytes) collected.push({ path: archivePath, bytes });
+    }
+    return collected;
   }
 
   private async rebuildWorkspaceBytes(): Promise<void> {
@@ -1878,6 +2124,24 @@ export class AppComponent implements OnDestroy {
     this.imageDestinationDialogOpen.set(false);
   }
 
+  confirmConvertToMdz(): void {
+    // Start the conversion first — it captures the pending context synchronously,
+    // before closing the dialog (whose visibleChange would otherwise clear it).
+    void this.convertPendingMarkdownToMdz(true);
+    this.convertDialogOpen.set(false);
+  }
+
+  cancelConvertToMdz(): void {
+    this.convertDialogOpen.set(false);
+    this.clearPendingMarkdownImage();
+  }
+
+  onConvertDialogVisibleChange(visible: boolean): void {
+    this.convertDialogOpen.set(visible);
+    // Dismissed (X / Esc) without confirming — drop the pending conversion.
+    if (!visible) this.clearPendingMarkdownImage();
+  }
+
   chooseMarkdownImageDestination(destination: 'same' | 'subfolder'): void {
     if (!this.canWriteLinkedMarkdownImage()) {
       this.statusMessage.set('Save the Markdown file before adding a linked image');
@@ -1959,12 +2223,30 @@ export class AppComponent implements OnDestroy {
     return await this.pendingConversionContext?.insertMarkdown(text) ?? false;
   }
 
-  private async convertPendingMarkdownToMdz(): Promise<void> {
+  private async convertPendingMarkdownToMdz(revealNav = false): Promise<void> {
     const context = this.pendingConversionContext;
     const editor = this.workspaceEditor;
     try {
+      // Capture the current Markdown first so we can embed its loose relative
+      // images as archive assets once it becomes an .mdz.
+      const preSnapshot = await editor?.flush();
+      const markdown = preSnapshot ? new TextDecoder().decode(await preSnapshot.bytes.arrayBuffer()) : '';
+      const embeddedImages = markdown ? await this.collectMarkdownImages(markdown) : [];
+
       if (!context || !editor || !await context.convertToMdz()) {
         throw new Error('Could not convert this document to MDZip.');
+      }
+
+      // Pack the document's pre-existing relative images so their links resolve
+      // inside the archive. Best-effort: a failed asset just keeps its old link.
+      let embeddedCount = 0;
+      for (const image of embeddedImages) {
+        try {
+          await editor.addAsset(image.path, image.bytes);
+          embeddedCount++;
+        } catch {
+          /* leave this image's link as-is */
+        }
       }
 
       const snapshot = await editor.flush();
@@ -1977,8 +2259,19 @@ export class AppComponent implements OnDestroy {
         this.workspaceBytes.set(bytes);
         this.latestWorkspaceBytes.set(bytes);
         this.latestWorkspaceSnapshot.set(null);
+        // Reveal the file tree when the conversion was triggered by the nav button.
+        if (revealNav) this.navigationActive.set(true);
       }
-      this.statusMessage.set('Converted to MDZip and added image');
+      const imagesNote = embeddedCount > 0
+        ? ` — embedded ${embeddedCount} image${embeddedCount === 1 ? '' : 's'}`
+        : '';
+      // A converted archive lives in memory only until the user saves it.
+      const convertedMessage = `Converted to MDZip${imagesNote} · not saved yet — use Save to write it to disk`;
+      this.statusMessage.set(convertedMessage);
+      // The post-conversion re-render fires a `changed` event that would
+      // immediately overwrite this with "Viewing/Editing …". Hold the message
+      // through that one programmatic change so the user actually sees it.
+      this.postConvertStatus = convertedMessage;
     } catch (error) {
       this.statusMessage.set(error instanceof Error ? error.message : 'Could not add image');
     } finally {
@@ -2139,6 +2432,13 @@ export class AppComponent implements OnDestroy {
     this.latestWorkspaceBytes.set(event.bytes);
     this.latestWorkspaceSnapshot.set(event.snapshot);
     this.saveValidationState.set('unchecked');
+    // Preserve a just-set conversion message through the conversion's own
+    // re-render (one-shot); normal "Viewing/Editing" resumes afterward.
+    if (this.postConvertStatus !== null) {
+      this.statusMessage.set(this.postConvertStatus);
+      this.postConvertStatus = null;
+      return;
+    }
     const displayName = this.sourceFormat() === 'markdown'
       ? (this.currentArchive()?.name ?? 'Untitled')
       : event.snapshot.currentPath;

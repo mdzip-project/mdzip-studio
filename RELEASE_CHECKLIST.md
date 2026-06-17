@@ -35,39 +35,45 @@ Use this before shipping a new Windows build.
 There is no `publish` provider configured, so this is a **manual** flow:
 electron-builder generates the artifacts locally and you upload them yourself.
 
-- **Confirm the version.** `scripts/bump-version.js` auto-increments the patch
+- **Capture the version.** `scripts/bump-version.js` auto-increments the patch
   on the `prebuild` hook, so the version in `package.json` *after* the build is
-  the one you are releasing. Capture it as `<version>`:
-  ```
-  node -e "console.log(require('./package.json').version)"
+  the one you are releasing. Read it into `$VERSION` and reuse it everywhere:
+  ```powershell
+  $VERSION = node -p "require('./package.json').version"
   ```
 - **Commit and push** any release changes to the default branch.
-- **Tag the release** (or let `gh release create` create the tag):
-  ```
-  git tag v<version>
-  git push origin v<version>
-  ```
 - **Gather all three artifacts** from `dist/` — do not skip the `.blockmap`,
   which the 0.1.14 release accidentally omitted (it enables differential
   auto-updates):
   - `MDZip Studio Setup <version>.exe`     (the installer)
   - `MDZip Studio Setup <version>.exe.blockmap`
   - `latest.yml`                           (auto-update metadata)
-- **Create the release.** Either drag the three files into a new release on tag
-  `v<version>` in the GitHub web UI, or:
-  ```
-  gh release create v<version> \
-    "dist/MDZip Studio Setup <version>.exe" \
-    "dist/MDZip Studio Setup <version>.exe.blockmap" \
-    "dist/latest.yml" \
-    --repo mdzip-project/mdzip-studio \
-    --title "MDZip Studio <version>" \
-    --notes "Release notes here"
+- **Create the release.** `gh release create` creates and pushes the `v$VERSION`
+  tag for you, so no separate `git tag` step is needed. The release must be
+  **published, not a draft** — `electron-updater` only sees published releases:
+  ```powershell
+  gh release create "v$VERSION" `
+    "dist/MDZip Studio Setup $VERSION.exe" `
+    "dist/MDZip Studio Setup $VERSION.exe.blockmap" `
+    "dist/latest.yml" `
+    --repo mdzip-project/mdzip-studio `
+    --title "MDZip Studio $VERSION" `
+    --notes "Release notes go here"
   ```
   (GitHub renames spaces to dots in uploaded asset names, e.g.
   `MDZip.Studio.Setup.<version>.exe` — this is expected.)
 - **Record the released version** for your own tracking.
 
-> Note: `latest.yml` is only *consumed* once `electron-updater` is wired into
-> the app's main process. Until then it is informational — the app does not yet
-> check for or install updates on its own.
+## 6. Auto-updates
+
+`electron-updater` is wired into the app's main process (Help → "Check for
+Updates...", plus a silent check on startup). It reads the `publish` config in
+`package.json` and polls this repo's published GitHub releases, so:
+
+- The three artifacts above are **required** every release — `latest.yml` and the
+  `.blockmap` are what the installed app reads to detect and differentially
+  download an update.
+- Tag must be `v$VERSION` and the release must be **published** (not a draft).
+- An update only reaches users running a build that already contains the updater
+  code, so the first auto-update lands for whoever installed *this* release or
+  later — not for older installs.

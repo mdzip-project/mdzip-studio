@@ -116,6 +116,12 @@ export const OPEN_SOURCE_LIBRARIES: LibraryInfo[] = [
     "homepage": "https://www.npmjs.com/package/electron"
   },
   {
+    "name": "electron-updater",
+    "version": "6.8.9",
+    "license": "MIT",
+    "homepage": "https://github.com/electron-userland/electron-builder"
+  },
+  {
     "name": "mermaid",
     "version": "11.15.0",
     "license": "MIT",

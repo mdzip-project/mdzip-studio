@@ -30,4 +30,6 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
   getMarkdownDefaultStatus: () => ipcRenderer.invoke('mdzip:get-md-default-status'),
   promptMarkdownDefault: () => ipcRenderer.invoke('mdzip:prompt-md-default'),
   writeMarkdownImage: (payload) => ipcRenderer.invoke('mdzip:write-markdown-image', payload),
+  readMarkdownAsset: (payload) => ipcRenderer.invoke('mdzip:read-markdown-asset', payload),
+  showInFolder: (filePath) => ipcRenderer.invoke('mdzip:show-in-folder', { filePath }),
 });
