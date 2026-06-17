@@ -19,13 +19,26 @@ Use this before shipping a new Windows build.
 - Run `npm run build:electron`
 - Confirm the installer is created under `dist/`
 
-## 3. Smoke test
+## 3. Smoke test (MANDATORY — do not skip)
+
+> The 1.3.10 release shipped broken because this step was skipped: the packaged
+> app crashed on launch with "A JavaScript error occurred in the main process —
+> Cannot find module 'electron-updater'" because a runtime dependency wasn't
+> bundled. **Launching the packaged build catches this class of bug; the dev
+> server (`npm start`) does not, because it runs from the full `node_modules`.**
 
 - Confirm `dist/mdzip-studio/index.html` contains `<base href="./">`
-- Launch `dist/win-unpacked/mdzip-studio.exe`
-- Confirm the app UI renders instead of showing a blank window
+- **Launch the packaged app and confirm it actually starts:**
+  `dist/win-unpacked/MDZip Studio.exe`
+  - It must open the window and render the UI — **not** a blank window and
+    **not** an Electron error dialog. A "Cannot find module …" dialog means a
+    `require`d runtime dependency is missing from the package (check the `files`
+    globs and that the module is a production `dependency` in `package.json`).
 - Confirm DevTools does not report `ERR_FILE_NOT_FOUND` for the generated JS or CSS bundles
-- Open and save a sample archive if you want a slightly deeper sanity check
+- Open and save a sample archive (deeper sanity check)
+- If you changed anything touching `electron/main.js` requires or the build
+  `files`/dependencies, also install the actual `dist/MDZip Studio Setup
+  <version>.exe` and launch *that* before publishing.
 
 ## 4. Review warnings
 
