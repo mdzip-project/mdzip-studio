@@ -212,6 +212,7 @@ p {
 }
 
 .tb-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -242,6 +243,21 @@ p {
     color: #b8bfca;
     cursor: default;
   }
+}
+
+/* Unsaved-edits marker. The Save button is disabled (greyed) when there's
+   nothing to save and enabled with this dark pip when there are unsaved edits —
+   greyscale, and no clash with red (which means "validation failed"). */
+.tb-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2f3742;
+  /* Ring in the toolbar colour so the pip reads as separate from the icon. */
+  box-shadow: 0 0 0 1.5px #ffffff;
 }
 
 .tb-sep {
@@ -514,6 +530,12 @@ button.destination-option:hover:not(:disabled),
 .destination-note {
   color: #9a6700 !important;
   font-size: 12px;
+}
+
+.unsaved-message {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .form-grid label,
@@ -1272,6 +1294,8 @@ p-button {
   .tb-btn:hover:not(:disabled) { background: #3a3a3a; border-color: #454545; }
   .tb-btn:active:not(:disabled) { background: #434343; border-color: #555a62; }
   .tb-btn:disabled { color: #6b7178; }
+  /* Light pip with a dark ring so it stands out on the dark toolbar. */
+  .tb-dot { background: #e6e6e6; box-shadow: 0 0 0 1.5px #252526; }
   .tb-sep { background: #3c3c3c; }
 
   /* Status bar + loading overlay */

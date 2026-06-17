@@ -290,9 +290,9 @@ interface ArchiveTreeData {
           <button class="tb-btn" type="button" title="New (Ctrl+N)" (click)="newArchive()"><ng-icon name="lucidePlus" size="15" /></button>
           <button class="tb-btn" type="button" title="Open (Ctrl+O)" (click)="openFilePicker()"><ng-icon name="lucideFolderOpen" size="15" /></button>
           @if (isDesktopShell()) {
-            <button class="tb-btn" type="button" [title]="readOnly() ? readOnlyHint : 'Save (Ctrl+S)'" [disabled]="!currentArchive() || readOnly()" (click)="saveArchive()"><ng-icon name="lucideSave" size="15" /></button>
+            <button class="tb-btn" type="button" [title]="readOnly() ? readOnlyHint : (isDirty() ? 'Save — you have unsaved changes (Ctrl+S)' : 'Saved (Ctrl+S)')" [disabled]="!currentArchive() || readOnly() || !isDirty()" (click)="saveArchive()"><ng-icon name="lucideSave" size="15" />@if (isDirty()) {<span class="tb-dot"></span>}</button>
           } @else {
-            <button class="tb-btn" type="button" title="Download (Ctrl+S)" [disabled]="!currentArchive()" (click)="saveArchive()"><ng-icon name="lucideDownload" size="15" /></button>
+            <button class="tb-btn" type="button" [title]="isDirty() ? 'Download — you have unsaved changes (Ctrl+S)' : 'Saved (Ctrl+S)'" [disabled]="!currentArchive() || !isDirty()" (click)="saveArchive()"><ng-icon name="lucideDownload" size="15" />@if (isDirty()) {<span class="tb-dot"></span>}</button>
           }
         </div>
         <input #fileInput class="file-input" type="file" accept=".md,.mdz,.json,text/markdown,application/json" (change)="openArchive($event)" />
@@ -360,6 +360,7 @@ interface ArchiveTreeData {
                 [navigationButtonActive]="navigationActive()"
                 (changed)="onWorkspaceChanged($event)"
                 (manifestChanged)="onWorkspaceManifestChanged($event)"
+                (dirtyChanged)="onWorkspaceDirtyChanged($event)"
                 (saved)="onWorkspaceSaved($event)"
                 (failed)="onWorkspaceFailed($event)"
               >
@@ -412,6 +413,17 @@ interface ArchiveTreeData {
         <p-button label="Cancel" severity="secondary" [text]="true" (onClick)="newDialogOpen.set(false)" />
         <p-button label="Create" (onClick)="createArchiveFromDialog()">
           <ng-template #icon><ng-icon name="lucidePlus" size="14" /></ng-template>
+        </p-button>
+      </ng-template>
+    </p-dialog>
+
+    <p-dialog header="Unsaved changes" [visible]="unsavedDialogOpen()" (visibleChange)="onUnsavedDialogVisibleChange($event)" [modal]="true" [style]="{ width: 'min(92vw, 440px)' }">
+      <p class="unsaved-message">You have unsaved changes to <strong>{{ currentArchive()?.name || 'this document' }}</strong>. Do you want to save them before continuing?</p>
+      <ng-template pTemplate="footer">
+        <p-button label="Cancel" severity="secondary" [text]="true" (onClick)="cancelUnsavedDialog()" />
+        <p-button label="Don't Save" severity="secondary" (onClick)="discardUnsavedThenContinue()" />
+        <p-button [label]="readOnly() ? 'Save As...' : 'Save'" (onClick)="saveUnsavedThenContinue()">
+          <ng-template #icon><ng-icon name="lucideSave" size="14" /></ng-template>
         </p-button>
       </ng-template>
     </p-dialog>
@@ -737,6 +749,14 @@ export class AppComponent implements OnDestroy {
 
   readonly appVersion = APP_VERSION;
   readonly newDialogOpen = signal(false);
+  // True while the editor holds unsaved edits, driven by the workspace's
+  // (dirtyChanged) event. Powers the Save button's emphasis and the
+  // unsaved-changes guard on close/new/open.
+  readonly isDirty = signal(false);
+  // Unsaved-changes confirmation. `pendingDiscardAction` is the close/new/open
+  // the user was attempting; it runs only after they Save or choose Don't Save.
+  readonly unsavedDialogOpen = signal(false);
+  private pendingDiscardAction: (() => void) | null = null;
   // Folder→.mdz packing state (issue #2). Modeled on mdzip.org/packager.html:
   // a path-only scan shows the options instantly; only files matching the
   // include-filters are read at build time.
@@ -1080,9 +1100,11 @@ export class AppComponent implements OnDestroy {
   }
 
   newArchive(format: 'markdown' | 'mdz' = 'markdown'): void {
-    this.newArchiveFormat.set(format);
-    this.newArchiveName = this.defaultArchiveName(format);
-    this.newDialogOpen.set(true);
+    this.confirmDiscardIfDirty(() => {
+      this.newArchiveFormat.set(format);
+      this.newArchiveName = this.defaultArchiveName(format);
+      this.newDialogOpen.set(true);
+    });
   }
 
   // Default name for the New dialog, by output format (and .mdz mode). A plain
@@ -1114,12 +1136,19 @@ export class AppComponent implements OnDestroy {
 
   closeDocument(): void {
     if (!this.currentArchive()) return;
+    this.confirmDiscardIfDirty(() => this.discardAndCloseDocument());
+  }
+
+  private discardAndCloseDocument(): void {
     this.archiveService.closeArchive();
     this.selectedDocumentId.set(null);
     this.validationIssues.set([]);
     this.saveValidationState.set('unchecked');
     this.latestWorkspaceBytes.set(null);
     this.latestWorkspaceSnapshot.set(null);
+    // The editor is torn down with the document, so it won't emit dirtyChanged;
+    // clear the flag here.
+    this.isDirty.set(false);
     this.sourceFormat.set('markdown');
     this.workspaceBytes.set(new TextEncoder().encode(''));
     this.currentMarkdownPath = null;
@@ -1128,14 +1157,65 @@ export class AppComponent implements OnDestroy {
     this.statusMessage.set('Closed document');
   }
 
-  openRecent(path: string): void {
-    // In the desktop shell a recent entry is a real filesystem path we can open
-    // directly. In the web shell it's only a file name, so fall back to the picker.
-    if (window.mdzipStudio?.openDocumentByPath) {
-      void this.openRecentElectron(path);
+  // Unsaved-changes guard. Runs `proceed` immediately when there are no unsaved
+  // edits; otherwise stashes it and opens the confirmation dialog, which runs it
+  // after the user saves or explicitly discards.
+  private confirmDiscardIfDirty(proceed: () => void): void {
+    if (!this.isDirty()) {
+      proceed();
       return;
     }
-    this.openFilePicker();
+    this.pendingDiscardAction = proceed;
+    this.unsavedDialogOpen.set(true);
+  }
+
+  private runPendingDiscard(): void {
+    const action = this.pendingDiscardAction;
+    this.pendingDiscardAction = null;
+    action?.();
+  }
+
+  async saveUnsavedThenContinue(): Promise<void> {
+    this.unsavedDialogOpen.set(false);
+    // Read-only files can't save in place, so Save here means Save As.
+    await this.saveArchive(this.readOnly());
+    // A successful save clears isDirty (markPersisted → dirtyChanged). If it's
+    // still dirty the save was canceled or blocked, so stay put and drop the
+    // pending action rather than discarding the user's edits.
+    if (!this.isDirty()) {
+      this.runPendingDiscard();
+    } else {
+      this.pendingDiscardAction = null;
+    }
+  }
+
+  discardUnsavedThenContinue(): void {
+    this.unsavedDialogOpen.set(false);
+    this.runPendingDiscard();
+  }
+
+  cancelUnsavedDialog(): void {
+    this.unsavedDialogOpen.set(false);
+    this.pendingDiscardAction = null;
+  }
+
+  // Dismissing via the X or Esc is a cancel — never an implicit discard.
+  onUnsavedDialogVisibleChange(visible: boolean): void {
+    if (!visible) {
+      this.cancelUnsavedDialog();
+    }
+  }
+
+  openRecent(path: string): void {
+    this.confirmDiscardIfDirty(() => {
+      // In the desktop shell a recent entry is a real filesystem path we can open
+      // directly. In the web shell it's only a file name, so fall back to the picker.
+      if (window.mdzipStudio?.openDocumentByPath) {
+        void this.openRecentElectron(path);
+        return;
+      }
+      this.launchFilePicker();
+    });
   }
 
   private async openRecentElectron(path: string): Promise<void> {
@@ -1191,6 +1271,13 @@ export class AppComponent implements OnDestroy {
   }
 
   openFilePicker(): void {
+    this.confirmDiscardIfDirty(() => this.launchFilePicker());
+  }
+
+  // Un-guarded picker launch. Callers that have already cleared the
+  // unsaved-changes guard (e.g. openRecent) call this directly to avoid a
+  // second prompt.
+  private launchFilePicker(): void {
     if (window.mdzipStudio?.openDocument) {
       void this.openFilePickerElectron();
       return;
@@ -1716,6 +1803,13 @@ export class AppComponent implements OnDestroy {
       return;
     }
 
+    // Saving rebuilds the archive bytes (and, for .mdz, re-embeds images), which
+    // can take a noticeable moment on larger documents. Show progress right away
+    // and yield so the message paints before the work starts. performSave
+    // overwrites it with the final "Saved …" / "Save canceled" / failure result.
+    this.statusMessage.set(`Saving ${archive.name || 'document'}…`);
+    await this.yieldForPaint();
+
     // Surface any failure: callers invoke this as `void saveArchive(...)`, which
     // would otherwise swallow a thrown error and look like nothing happened.
     try {
@@ -1768,6 +1862,7 @@ export class AppComponent implements OnDestroy {
         this.recordSavedRecent(result.filePath, result.format === 'mdz', archive.name);
         this.updateArchivePath(result.filePath, result.name);
         this.workspaceEditor?.markPersisted();
+        this.isDirty.set(false);
         this.readOnly.set(false);
         if (result.format === 'mdz') {
           const firstDocument = archive.documents[0];
@@ -1784,6 +1879,8 @@ export class AppComponent implements OnDestroy {
       }
 
       this.downloadBlob(this.bytesToBlob(bytes, 'text/markdown'), defaultName, 'text/markdown');
+      this.workspaceEditor?.markPersisted();
+      this.isDirty.set(false);
       this.statusMessage.set(`Saved ${archive.name}.md`);
       return;
     }
@@ -1812,6 +1909,7 @@ export class AppComponent implements OnDestroy {
       this.recordSavedRecent(result.filePath, true, archive.name);
       this.updateArchivePath(result.filePath, result.name);
       this.workspaceEditor?.markPersisted();
+      this.isDirty.set(false);
       this.readOnly.set(false);
       const savedTarget = result.filePath ?? result.name ?? archive.name;
       this.statusMessage.set(validation.valid ? `Saved ${savedTarget}` : `Saved ${savedTarget} with technical issues`);
@@ -1819,6 +1917,8 @@ export class AppComponent implements OnDestroy {
     }
 
     this.downloadBlob(this.bytesToBlob(bytes, 'application/vnd.mdzip'), defaultName, 'application/vnd.mdzip');
+    this.workspaceEditor?.markPersisted();
+    this.isDirty.set(false);
     this.statusMessage.set(validation.valid ? `Saved ${archive.name}.mdz` : `Saved ${archive.name}.mdz with technical issues`);
   }
 
@@ -2443,6 +2543,13 @@ export class AppComponent implements OnDestroy {
       ? (this.currentArchive()?.name ?? 'Untitled')
       : event.snapshot.currentPath;
     this.statusMessage.set(event.snapshot.dirty ? `Editing ${displayName}` : `Viewing ${displayName}`);
+  }
+
+  // The editor's (changed) only fires on structural edits, so plain-text typing
+  // is tracked via the dedicated (dirtyChanged) signal instead. This is the
+  // single source of truth for the Save button emphasis and the discard guard.
+  onWorkspaceDirtyChanged(snapshot: MdzipWorkspaceSnapshot): void {
+    this.isDirty.set(snapshot.dirty);
   }
 
   // The Angular workspace wrapper doesn't expose setColorScheme, but the

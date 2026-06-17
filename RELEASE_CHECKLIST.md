@@ -9,6 +9,9 @@ Use this before shipping a new Windows build.
   - `version`
   - `description`
   - `author`
+- Update `CHANGELOG.md`: rename the `[Unreleased]` heading to the version being
+  shipped with today's date (e.g. `## [1.3.9] - 2026-06-17`), add a fresh empty
+  `[Unreleased]` section above it, and update the compare links at the bottom.
 
 ## 2. Build
 
@@ -39,7 +42,7 @@ electron-builder generates the artifacts locally and you upload them yourself.
   on the `prebuild` hook, so the version in `package.json` *after* the build is
   the one you are releasing. Read it into `$VERSION` and reuse it everywhere:
   ```powershell
-  $VERSION = node -p "require('./package.json').version"
+  $VERSION = node -p "require('./package.json').version"; echo $VERSION
   ```
 - **Commit and push** any release changes to the default branch.
 - **Gather all three artifacts** from `dist/` — do not skip the `.blockmap`,
@@ -60,6 +63,8 @@ electron-builder generates the artifacts locally and you upload them yourself.
     --title "MDZip Studio $VERSION" `
     --notes "Release notes go here"
   ```
+  Use the matching `CHANGELOG.md` section as the source for `--notes` (paste the
+  entries, or `--notes-file` a trimmed copy) so the release and changelog match.
   (GitHub renames spaces to dots in uploaded asset names, e.g.
   `MDZip.Studio.Setup.<version>.exe` — this is expected.)
 - **Record the released version** for your own tracking.

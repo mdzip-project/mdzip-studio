@@ -39,3 +39,26 @@ button {
 ::-webkit-scrollbar-thumb:hover {
   background: #999;
 }
+
+/* -------------------------------------------------------------------------
+   TEMP: disable the @mdzip/editor preview image-hydration animation.
+
+   The live preview re-hydrates on every keystroke, so the slot's 0fr->1fr
+   slide and the loading pulse replay continuously while editing — images
+   blink out/in and the text below jumps around. This forces images to snap
+   open with no animation (the same end state the library uses under
+   prefers-reduced-motion), which is fine for live editing but also removes
+   the intended effect on first load.
+
+   Tracked upstream: https://github.com/mdzip-project/mdzip-editor/issues/19
+   REVERT THIS BLOCK the next time @mdzip/editor is updated (was 1.3.11) once
+   the upstream fix lands, so first-load gets its animation back.
+   ------------------------------------------------------------------------- */
+.mdzip-root .preview-content .mdzip-image-slot.mdzip-image-slot {
+  grid-template-rows: 1fr;
+  transition: none;
+}
+
+.mdzip-root .preview-content img.mdzip-image-loading.mdzip-image-loading {
+  animation: none;
+}
