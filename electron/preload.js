@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
   openDocument: () => ipcRenderer.invoke('mdzip:open-document'),
   openDocumentByPath: (filePath) => ipcRenderer.invoke('mdzip:open-document-path', { filePath }),
   setRecentFiles: (paths) => ipcRenderer.send('mdzip:set-recent-files', { paths }),
+  // Tell the main process whether a document is open so it can enable/disable
+  // document-only menu items (Save, Save As, Close, Show in File Manager).
+  setDocumentOpen: (open) => ipcRenderer.send('mdzip:set-document-open', open),
   pickFolder: () => ipcRenderer.invoke('mdzip:pick-folder'),
   readFolder: (payload) => ipcRenderer.invoke('mdzip:read-folder', payload),
   onPackFolderProgress: (callback) => {

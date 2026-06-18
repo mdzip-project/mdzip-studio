@@ -20,6 +20,9 @@ const windowIconForTheme = () =>
 let mainWindow;
 let currentDocumentPath = null;
 let pendingOpenDocumentPath = null;
+// Whether a document is open in the renderer. Gates the document-only File menu
+// items (Save, Save As, Close, Show in File Manager); updated over IPC.
+let documentOpen = false;
 const isDev = !app.isPackaged;
 
 // Match the AppUserModelID the NSIS installer assigns the shortcut (electron-builder
@@ -467,6 +470,14 @@ ipcMain.on('mdzip:set-recent-files', (_event, payload) => {
   updateJumpList(payload?.paths);
 });
 
+ipcMain.on('mdzip:set-document-open', (_event, open) => {
+  const next = Boolean(open);
+  if (next === documentOpen) return;
+  documentOpen = next;
+  // Rebuild the menu so the document-only items reflect the new state.
+  createMenu();
+});
+
 ipcMain.handle('mdzip:take-pending-open-document', async () => {
   const filePath = pendingOpenDocumentPath;
   pendingOpenDocumentPath = null;
@@ -728,12 +739,12 @@ const createMenu = () => {
         { label: 'Open Document...', accelerator: 'CmdOrCtrl+O', click: () => dispatchAppEvent('mdzip-studio:open-archive') },
         { label: 'Pack Folder to .mdz...', click: () => dispatchAppEvent('mdzip-studio:pack-folder') },
         { type: 'separator' },
-        { label: 'Save', accelerator: 'CmdOrCtrl+S', click: () => dispatchAppEvent('mdzip-studio:save-archive') },
-        { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', click: () => dispatchAppEvent('mdzip-studio:save-archive-as') },
+        { label: 'Save', accelerator: 'CmdOrCtrl+S', enabled: documentOpen, click: () => dispatchAppEvent('mdzip-studio:save-archive') },
+        { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', enabled: documentOpen, click: () => dispatchAppEvent('mdzip-studio:save-archive-as') },
         { type: 'separator' },
-        { label: 'Show in File Manager', click: () => dispatchAppEvent('mdzip-studio:show-in-folder') },
+        { label: 'Show in File Manager', enabled: documentOpen, click: () => dispatchAppEvent('mdzip-studio:show-in-folder') },
         { type: 'separator' },
-        { label: 'Close Document', accelerator: 'CmdOrCtrl+W', click: () => dispatchAppEvent('mdzip-studio:close-archive') },
+        { label: 'Close Document', accelerator: 'CmdOrCtrl+W', enabled: documentOpen, click: () => dispatchAppEvent('mdzip-studio:close-archive') },
         { type: 'separator' },
         { label: 'Exit', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
       ],

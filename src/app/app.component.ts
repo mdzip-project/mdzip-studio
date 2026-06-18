@@ -140,6 +140,7 @@ interface ElectronBridge {
   openDocument?: () => Promise<ElectronDocumentOpenResult>;
   openDocumentByPath?: (filePath: string) => Promise<ElectronDocumentOpenResult>;
   setRecentFiles?: (paths: string[]) => void;
+  setDocumentOpen?: (open: boolean) => void;
   pickFolder?: () => Promise<ElectronPickFolderResult>;
   readFolder?: (payload: { paths: string[] }) => Promise<ElectronReadFolderResult>;
   onPackFolderProgress?: (callback: (data: PackFolderProgress) => void) => () => void;
@@ -946,6 +947,12 @@ export class AppComponent implements OnDestroy {
       document.title = this.documentTitleDisplay() || 'MDZip Studio';
     });
 
+    // Keep the native menu's document-only items (Save, Save As, Close, Show in
+    // File Manager) enabled only while a document is open.
+    effect(() => {
+      window.mdzipStudio?.setDocumentOpen?.(!!this.currentArchive());
+    });
+
     window.addEventListener('mdzip-studio:new-archive', this.handleNewArchiveCommand);
     window.addEventListener('mdzip-studio:open-archive', this.handleOpenArchiveCommand);
     window.addEventListener('mdzip-studio:save-archive', this.handleSaveArchiveCommand);
@@ -1100,7 +1107,7 @@ export class AppComponent implements OnDestroy {
   }
 
   newArchive(format: 'markdown' | 'mdz' = 'markdown'): void {
-    this.confirmDiscardIfDirty(() => {
+    this.confirmDiscardIfUnsaved(() => {
       this.newArchiveFormat.set(format);
       this.newArchiveName = this.defaultArchiveName(format);
       this.newDialogOpen.set(true);
@@ -1146,7 +1153,7 @@ export class AppComponent implements OnDestroy {
 
   closeDocument(): void {
     if (!this.currentArchive()) return;
-    this.confirmDiscardIfDirty(() => this.discardAndCloseDocument());
+    this.confirmDiscardIfUnsaved(() => this.discardAndCloseDocument());
   }
 
   private discardAndCloseDocument(): void {
@@ -1170,8 +1177,11 @@ export class AppComponent implements OnDestroy {
   // Unsaved-changes guard. Runs `proceed` immediately when there are no unsaved
   // edits; otherwise stashes it and opens the confirmation dialog, which runs it
   // after the user saves or explicitly discards.
-  private confirmDiscardIfDirty(proceed: () => void): void {
-    if (!this.isDirty()) {
+  private confirmDiscardIfUnsaved(proceed: () => void): void {
+    // needsSave (not just isDirty) so a converted/packed/new document that has
+    // never been written to disk also prompts — those aren't "dirty" but would
+    // be lost on close/new/open.
+    if (!this.needsSave()) {
       proceed();
       return;
     }
@@ -1189,10 +1199,10 @@ export class AppComponent implements OnDestroy {
     this.unsavedDialogOpen.set(false);
     // Read-only files can't save in place, so Save here means Save As.
     await this.saveArchive(this.readOnly());
-    // A successful save clears isDirty (markPersisted → dirtyChanged). If it's
-    // still dirty the save was canceled or blocked, so stay put and drop the
-    // pending action rather than discarding the user's edits.
-    if (!this.isDirty()) {
+    // A successful save clears needsSave (path recorded + dirty cleared). If it
+    // still needs saving, the save was canceled or blocked, so stay put and drop
+    // the pending action rather than discarding the user's work.
+    if (!this.needsSave()) {
       this.runPendingDiscard();
     } else {
       this.pendingDiscardAction = null;
@@ -1217,7 +1227,7 @@ export class AppComponent implements OnDestroy {
   }
 
   openRecent(path: string): void {
-    this.confirmDiscardIfDirty(() => {
+    this.confirmDiscardIfUnsaved(() => {
       // In the desktop shell a recent entry is a real filesystem path we can open
       // directly. In the web shell it's only a file name, so fall back to the picker.
       if (window.mdzipStudio?.openDocumentByPath) {
@@ -1281,7 +1291,7 @@ export class AppComponent implements OnDestroy {
   }
 
   openFilePicker(): void {
-    this.confirmDiscardIfDirty(() => this.launchFilePicker());
+    this.confirmDiscardIfUnsaved(() => this.launchFilePicker());
   }
 
   // Un-guarded picker launch. Callers that have already cleared the

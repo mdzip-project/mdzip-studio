@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.18] - 2026-06-17
+
+### Fixed
+
+- The "unsaved changes" prompt on Close / New / Open now also fires for a
+  document that was converted, packed, or created but never written to disk —
+  previously it only triggered after edits, so closing a just-converted `.mdz`
+  discarded it without warning.
+- The native **File** menu's document-only items (Save, Save As, Close
+  Document, Show in File Manager) are now disabled on the welcome screen when no
+  document is open.
+
 ## [1.3.17] - 2026-06-17
 
 ### Fixed
@@ -116,7 +128,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.17...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.18...HEAD
+[1.3.18]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.17...v1.3.18
 [1.3.17]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.16...v1.3.17
 [1.3.16]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.15...v1.3.16
 [1.3.15]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.14...v1.3.15
