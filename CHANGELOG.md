@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Typing in a Markdown (`.md`) document that references images was laggy: the
+  preview inlined each image as a multi-megabyte `data:` URI and re-emitted them
+  on every keystroke, so the browser rebuilt a huge preview and re-decoded every
+  image each time. The preview now references stable `blob:` object URLs
+  (decoded once and reused); the data-URI cache is kept only for embedding
+  images on conversion/save.
+
 ## [1.3.18] - 2026-06-17
 
 ### Fixed

@@ -739,7 +739,14 @@ export class AppComponent implements OnDestroy {
   // cache of inlined sibling images. Used to render relative `![](./img.png)`
   // references that the renderer can't resolve against its own origin.
   private currentMarkdownPath: string | null = null;
+  // Data-URI cache for a .md's relative images, keyed by archive path. Used to
+  // recover bytes when embedding images on conversion/save.
   private readonly mdAssetCache = new Map<string, string>();
+  // Preview cache of blob: object URLs for the same images. The preview re-runs
+  // on every keystroke, so it must reference short, stable URLs the browser can
+  // decode once and reuse — inlining multi-MB data URIs re-decoded every image
+  // on each render and made typing laggy. Revoked when the cache is cleared.
+  private readonly mdPreviewUrlCache = new Map<string, string>();
   readonly markdownExtensions: readonly MdzipMarkdownRenderExtension[] = [
     mdzipMermaidExtension(),
     {
@@ -1169,7 +1176,7 @@ export class AppComponent implements OnDestroy {
     this.sourceFormat.set('markdown');
     this.workspaceBytes.set(new TextEncoder().encode(''));
     this.currentMarkdownPath = null;
-    this.mdAssetCache.clear();
+    this.clearMdAssetCaches();
     this.readOnly.set(false);
     this.statusMessage.set('Closed document');
   }
@@ -1639,7 +1646,7 @@ export class AppComponent implements OnDestroy {
     this.workspaceBytes.set(bytes);
     this.navigationActive.set(false);
     this.currentMarkdownPath = null;
-    this.mdAssetCache.clear();
+    this.clearMdAssetCaches();
     this.readOnly.set(false);
     this.statusMessage.set(`Created ${name}`);
     this.newDialogOpen.set(false);
@@ -1684,18 +1691,19 @@ export class AppComponent implements OnDestroy {
       // Resolve relative sources only; absolute/scheme/escaping paths return null.
       const archivePath = this.toArchiveAssetPath(img.getAttribute('src') ?? '');
       if (!archivePath) return;
-      let dataUri = this.mdAssetCache.get(archivePath);
-      if (!dataUri) {
-        try {
-          const result = await read({ documentPath, relativePath: archivePath });
-          if (!result?.dataUri) return;
-          dataUri = result.dataUri;
-          this.mdAssetCache.set(archivePath, dataUri);
-        } catch {
-          return;
-        }
+      // Reference a blob: object URL, not the data URI: it's short (cheap to
+      // serialize every render) and the browser decodes it once and reuses it,
+      // instead of re-decoding a multi-MB data URI on each keystroke.
+      let previewUrl = this.mdPreviewUrlCache.get(archivePath);
+      if (!previewUrl) {
+        // readRelativeImageBytes also populates mdAssetCache (the data URI used
+        // for embedding on conversion/save), so both caches stay warm.
+        const bytes = await this.readRelativeImageBytes(documentPath, archivePath);
+        if (!bytes) return;
+        previewUrl = URL.createObjectURL(new Blob([bytes as BlobPart], { type: this.imageMimeType(archivePath) }));
+        this.mdPreviewUrlCache.set(archivePath, previewUrl);
       }
-      img.setAttribute('src', dataUri);
+      img.setAttribute('src', previewUrl);
       changed = true;
     }));
     return changed ? doc.body.innerHTML : html;
@@ -1716,7 +1724,7 @@ export class AppComponent implements OnDestroy {
     this.saveValidationState.set('unchecked');
     // Reset relative-image resolution; set below only for a plain .md from disk.
     this.currentMarkdownPath = null;
-    this.mdAssetCache.clear();
+    this.clearMdAssetCaches();
 
     try {
       // Title pulled from an .mdz manifest, cached so the recents list can show
@@ -1810,7 +1818,7 @@ export class AppComponent implements OnDestroy {
     // Keep relative-image resolution pointed at the saved location (e.g. Save As).
     if (filePath && this.sourceFormat() === 'markdown') {
       this.currentMarkdownPath = filePath;
-      this.mdAssetCache.clear();
+      this.clearMdAssetCaches();
     }
     this.archiveService.currentArchive.update((archive) =>
       archive
@@ -2081,6 +2089,16 @@ export class AppComponent implements OnDestroy {
     } catch {
       return null;
     }
+  }
+
+  // Drop both relative-image caches, revoking the preview's blob: object URLs so
+  // they don't leak. Call whenever the document (or its on-disk path) changes.
+  private clearMdAssetCaches(): void {
+    for (const url of this.mdPreviewUrlCache.values()) {
+      URL.revokeObjectURL(url);
+    }
+    this.mdPreviewUrlCache.clear();
+    this.mdAssetCache.clear();
   }
 
   // Read a document-relative image's bytes via Electron, reusing the preview's
