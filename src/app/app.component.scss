@@ -911,6 +911,22 @@ button.destination-option:hover:not(:disabled),
   font-size: 13px;
 }
 
+/* Group the format icon with the status text on the left; version stays right. */
+.statusbar-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Format indicator: .md (file-text) vs .mdz (file-archive). Inherits the
+   greyscale statusbar colour. */
+.statusbar-format {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: inherit;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;

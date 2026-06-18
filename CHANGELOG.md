@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The status bar shows a small icon for the open document's format — a document
+  icon for Markdown (`.md`) and an archive icon for MDZip (`.mdz`) — with a
+  tooltip, so you can tell the two apart at a glance.
+
 ### Changed
 
 - The native **File** menu now hides its document-only items (Save, Save As,

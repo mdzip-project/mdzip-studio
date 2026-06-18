@@ -31,7 +31,9 @@ import {
   lucideClock,
   lucideCopy,
   lucideFile,
+  lucideFileArchive,
   lucideFilePen,
+  lucideFileText,
   lucideFolder,
   lucideFolderOpen,
   lucideImage,
@@ -204,7 +206,9 @@ interface ArchiveTreeData {
       lucideCopy,
       lucideDownload,
       lucideFile,
+      lucideFileArchive,
       lucideFilePen,
+      lucideFileText,
       lucideFolder,
       lucideFolderOpen,
       lucideImage,
@@ -397,7 +401,17 @@ interface ArchiveTreeData {
       </section>
 
       <footer class="statusbar">
-        <span [class.statusbar-url]="isHoveringLink()">{{ displayStatus() }}</span>
+        <span class="statusbar-left">
+          @if (currentArchive()) {
+            <ng-icon
+              class="statusbar-format"
+              [name]="sourceFormat() === 'mdz' ? 'lucideFileArchive' : 'lucideFileText'"
+              size="13"
+              [attr.title]="sourceFormat() === 'mdz' ? 'MDZip archive (.mdz)' : 'Markdown (.md)'"
+            />
+          }
+          <span [class.statusbar-url]="isHoveringLink()">{{ displayStatus() }}</span>
+        </span>
         <span class="statusbar-version">v{{ appVersion }}</span>
       </footer>
     </main>
