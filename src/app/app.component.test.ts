@@ -37,7 +37,12 @@ describe('AppComponent', () => {
     expect(component).toBeTruthy();
   });
 
-  it('should initialize with an untitled archive', () => {
+  it('starts on the welcome screen with no document open', () => {
+    expect(component.currentArchive()).toBeNull();
+  });
+
+  it('creates an untitled document from the dialog', () => {
+    component.createArchiveFromDialog();
     expect(component.currentArchive()?.name).toBe('Untitled');
     expect(component.documents().length).toBe(1);
   });
@@ -69,6 +74,7 @@ describe('AppComponent', () => {
   });
 
   it('routes manifest editor changes into Studio archive state', () => {
+    component.createArchiveFromDialog();
     component.onManifestEditorChange({ field: 'title', value: 'Updated title' });
     component.onManifestEditorChange({ field: 'mode', value: 'project' });
     component.onManifestEditorChange({ field: 'author', value: 'Ada Lovelace' });
@@ -80,6 +86,7 @@ describe('AppComponent', () => {
   });
 
   it('uses the archive name as the centered document title', () => {
+    component.createArchiveFromDialog();
     expect(component.documentTitle()).toBe('Untitled');
 
     component.onManifestEditorChange({ field: 'title', value: 'Manifest title' });
@@ -146,5 +153,155 @@ describe('AppComponent', () => {
     );
 
     component.cancelImageDestination();
+  });
+
+  // ── Unsaved-state tracking (isDirty / needsSave) ──────────────────────────
+
+  const setArchivePath = (path: string | undefined) =>
+    TestBed.inject(ArchiveService).currentArchive.update((archive) =>
+      archive ? { ...archive, path } : archive
+    );
+
+  // Seed an open document (the app starts on the welcome screen with none), then
+  // optionally record an on-disk path to simulate a saved file.
+  const openTestArchive = (path?: string) => {
+    component.createArchiveFromDialog();
+    if (path !== undefined) setArchivePath(path);
+  };
+
+  it('tracks dirty state from the workspace dirtyChanged event', () => {
+    component.onWorkspaceDirtyChanged({ dirty: true } as never);
+    expect(component.isDirty()).toBe(true);
+
+    component.onWorkspaceDirtyChanged({ dirty: false } as never);
+    expect(component.isDirty()).toBe(false);
+  });
+
+  it('clears a stale dirty flag when a document loads (onWorkspaceChanged)', () => {
+    // Simulate dirty state left over from a previously open document.
+    component.isDirty.set(true);
+
+    component.onWorkspaceChanged({
+      bytes: new Uint8Array(),
+      snapshot: { dirty: false, currentPath: 'index.md' },
+    } as never);
+
+    expect(component.isDirty()).toBe(false);
+  });
+
+  it('needsSave is false for a saved on-disk document with no edits', () => {
+    component.isDesktopShell.set(true);
+    openTestArchive('C:/docs/sample.mdz');
+    component.isDirty.set(false);
+
+    expect(component.hasFileOnDisk()).toBe(true);
+    expect(component.needsSave()).toBe(false);
+  });
+
+  it('needsSave is true for an in-memory document not yet on disk (desktop)', () => {
+    component.isDesktopShell.set(true);
+    openTestArchive(); // new/converted/packed: in memory, no path
+    component.isDirty.set(false);
+
+    expect(component.hasFileOnDisk()).toBe(false);
+    expect(component.needsSave()).toBe(true);
+  });
+
+  it('needsSave is true when there are unsaved edits even if on disk', () => {
+    component.isDesktopShell.set(true);
+    openTestArchive('C:/docs/sample.mdz');
+    component.isDirty.set(true);
+
+    expect(component.needsSave()).toBe(true);
+  });
+
+  // ── Unsaved-changes guard on close/new ────────────────────────────────────
+
+  it('closes immediately when there is nothing to save', () => {
+    component.isDesktopShell.set(true);
+    openTestArchive('C:/docs/sample.mdz');
+    component.isDirty.set(false);
+    expect(component.needsSave()).toBe(false);
+
+    component.closeDocument();
+
+    expect(component.unsavedDialogOpen()).toBe(false);
+    expect(component.currentArchive()).toBeNull();
+  });
+
+  it('prompts before closing a document that needs saving', () => {
+    component.isDesktopShell.set(true);
+    openTestArchive(); // in memory, no path → needsSave
+    expect(component.needsSave()).toBe(true);
+
+    component.closeDocument();
+
+    expect(component.unsavedDialogOpen()).toBe(true);
+    expect(component.currentArchive()).not.toBeNull();
+  });
+
+  it('prompts before starting a new document when there is unsaved work', () => {
+    component.isDesktopShell.set(true);
+    openTestArchive();
+
+    component.newArchive('markdown');
+
+    expect(component.unsavedDialogOpen()).toBe(true);
+    expect(component.newDialogOpen()).toBe(false);
+  });
+
+  it('discards and proceeds when the user chooses Don\'t Save', () => {
+    component.isDesktopShell.set(true);
+    openTestArchive();
+    component.closeDocument();
+    expect(component.unsavedDialogOpen()).toBe(true);
+
+    component.discardUnsavedThenContinue();
+
+    expect(component.unsavedDialogOpen()).toBe(false);
+    expect(component.currentArchive()).toBeNull();
+  });
+
+  it('keeps the document when the unsaved-changes prompt is canceled', () => {
+    component.isDesktopShell.set(true);
+    openTestArchive();
+    component.closeDocument();
+    expect(component.unsavedDialogOpen()).toBe(true);
+
+    component.cancelUnsavedDialog();
+
+    expect(component.unsavedDialogOpen()).toBe(false);
+    expect(component.currentArchive()).not.toBeNull();
+  });
+
+  it('proceeds after a successful save from the unsaved-changes prompt', async () => {
+    component.isDesktopShell.set(true);
+    openTestArchive();
+    component.closeDocument();
+
+    // Simulate a successful save: a path is recorded and dirty clears.
+    vi.spyOn(component, 'saveArchive').mockImplementation(async () => {
+      setArchivePath('C:/docs/saved.mdz');
+      component.isDirty.set(false);
+    });
+
+    await component.saveUnsavedThenContinue();
+
+    expect(component.needsSave()).toBe(false);
+    expect(component.currentArchive()).toBeNull(); // close proceeded
+  });
+
+  it('stays put when the save is canceled from the unsaved-changes prompt', async () => {
+    component.isDesktopShell.set(true);
+    openTestArchive();
+    component.closeDocument();
+
+    // Save that does nothing (e.g. user canceled the save dialog) leaves needsSave true.
+    vi.spyOn(component, 'saveArchive').mockResolvedValue(undefined);
+
+    await component.saveUnsavedThenContinue();
+
+    expect(component.needsSave()).toBe(true);
+    expect(component.currentArchive()).not.toBeNull(); // close did not proceed
   });
 });
