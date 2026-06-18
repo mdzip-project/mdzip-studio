@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- The status bar shows a small icon for the open document's format — a document
-  icon for Markdown (`.md`) and an archive icon for MDZip (`.mdz`) — with a
-  tooltip, so you can tell the two apart at a glance.
+- The status bar now makes the open document's format clear: a format icon
+  (document for Markdown `.md`, archive for MDZip `.mdz`) plus a clearer label —
+  `Viewing/Editing <file>.md` for Markdown, and `Viewing/Editing <entry> in
+  <file>.mdz` for an MDZip archive (so it's obvious you're viewing one entry of
+  a bundle).
 
 ### Changed
 

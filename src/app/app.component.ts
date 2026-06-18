@@ -2616,10 +2616,23 @@ export class AppComponent implements OnDestroy {
       this.postConvertStatus = null;
       return;
     }
-    const displayName = this.sourceFormat() === 'markdown'
-      ? (this.currentArchive()?.name ?? 'Untitled')
-      : event.snapshot.currentPath;
+    const displayName = this.documentStatusLabel(event.snapshot.currentPath);
     this.statusMessage.set(event.snapshot.dirty ? `Editing ${displayName}` : `Viewing ${displayName}`);
+  }
+
+  // Status-bar label for the open document. For Markdown it's "<file>.md"; for
+  // an MDZip archive it's "<entry> in <file>.mdz" — you're viewing one entry of
+  // a bundle. Uses the on-disk file name when saved, falling back to the archive
+  // name (+ extension) for a document that only lives in memory.
+  private documentStatusLabel(currentPath: string): string {
+    const archive = this.currentArchive();
+    const stem = archive?.name?.trim() || 'Untitled';
+    if (this.sourceFormat() === 'markdown') {
+      return archive?.path ? this.recentFileName(archive.path) : `${stem}.md`;
+    }
+    const file = archive?.path ? this.recentFileName(archive.path) : `${stem}.mdz`;
+    const entry = currentPath || archive?.manifest.entryPoint || 'index.md';
+    return `${entry} in ${file}`;
   }
 
   // The editor's (changed) only fires on structural edits, so plain-text typing
