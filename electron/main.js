@@ -705,23 +705,35 @@ ipcMain.handle('mdzip:write-markdown-image', async (_event, payload) => {
 
 // Create menu
 const createMenu = () => {
+  // Electron's native Windows menu doesn't expose a styleable disabled state, so
+  // the document-only items would look enabled until hovered. Instead of greying
+  // them out, omit them entirely when no document is open — unambiguous, and they
+  // reappear when one is. (The menu is rebuilt on the document-open IPC.)
+  const fileSubmenu = [
+    { label: 'New Document', accelerator: 'CmdOrCtrl+N', click: () => dispatchAppEvent('mdzip-studio:new-archive') },
+    { label: 'Open Document...', accelerator: 'CmdOrCtrl+O', click: () => dispatchAppEvent('mdzip-studio:open-archive') },
+    { label: 'Pack Folder to .mdz...', click: () => dispatchAppEvent('mdzip-studio:pack-folder') },
+  ];
+  if (documentOpen) {
+    fileSubmenu.push(
+      { type: 'separator' },
+      { label: 'Save', accelerator: 'CmdOrCtrl+S', click: () => dispatchAppEvent('mdzip-studio:save-archive') },
+      { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', click: () => dispatchAppEvent('mdzip-studio:save-archive-as') },
+      { type: 'separator' },
+      { label: 'Show in File Manager', click: () => dispatchAppEvent('mdzip-studio:show-in-folder') },
+      { type: 'separator' },
+      { label: 'Close Document', accelerator: 'CmdOrCtrl+W', click: () => dispatchAppEvent('mdzip-studio:close-archive') },
+    );
+  }
+  fileSubmenu.push(
+    { type: 'separator' },
+    { label: 'Exit', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
+  );
+
   const template = [
     {
       label: 'File',
-      submenu: [
-        { label: 'New Document', accelerator: 'CmdOrCtrl+N', click: () => dispatchAppEvent('mdzip-studio:new-archive') },
-        { label: 'Open Document...', accelerator: 'CmdOrCtrl+O', click: () => dispatchAppEvent('mdzip-studio:open-archive') },
-        { label: 'Pack Folder to .mdz...', click: () => dispatchAppEvent('mdzip-studio:pack-folder') },
-        { type: 'separator' },
-        { label: 'Save', accelerator: 'CmdOrCtrl+S', enabled: documentOpen, click: () => dispatchAppEvent('mdzip-studio:save-archive') },
-        { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', enabled: documentOpen, click: () => dispatchAppEvent('mdzip-studio:save-archive-as') },
-        { type: 'separator' },
-        { label: 'Show in File Manager', enabled: documentOpen, click: () => dispatchAppEvent('mdzip-studio:show-in-folder') },
-        { type: 'separator' },
-        { label: 'Close Document', accelerator: 'CmdOrCtrl+W', enabled: documentOpen, click: () => dispatchAppEvent('mdzip-studio:close-archive') },
-        { type: 'separator' },
-        { label: 'Exit', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
-      ],
+      submenu: fileSubmenu,
     },
     {
       label: 'Edit',

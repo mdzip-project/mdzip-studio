@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The native **File** menu now hides its document-only items (Save, Save As,
+  Show in File Manager, Close Document) when no document is open, instead of
+  showing them greyed — Electron's native menu has no clear disabled styling, so
+  they looked enabled until hovered.
 - Updates are no longer automatic. The app no longer checks for or downloads
   updates on startup, and nothing installs on its own. Use **Help → Check for
   Updates…** to check; if one is found you confirm the download, then choose
