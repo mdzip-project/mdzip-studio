@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.17] - 2026-06-17
+
+### Fixed
+
+- Saving a plain Markdown (`.md`) file was slow: every save rebuilt a full
+  `.mdz` archive — reading and compressing all referenced images — only to
+  discard it when keeping the `.md` format. The archive is now built only when
+  you Save As to `.mdz`; an in-place `.md` save just writes the text.
+
 ## [1.3.16] - 2026-06-17
 
 ### Fixed
@@ -107,7 +116,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.16...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.17...HEAD
+[1.3.17]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.16...v1.3.17
 [1.3.16]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.15...v1.3.16
 [1.3.15]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.14...v1.3.15
 [1.3.14]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.13...v1.3.14

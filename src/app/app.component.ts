@@ -1856,23 +1856,30 @@ export class AppComponent implements OnDestroy {
 
       if (window.mdzipStudio?.saveDocument) {
         const markdownContent = new TextDecoder().decode(bytes);
-        const convertedArchive: MDZipArchive = {
-          ...archive,
-          documents: archive.documents.map((document, index) =>
-            index === 0 ? { ...document, content: markdownContent } : document
-          ),
-        };
-        // If saved as .mdz, embed the document's relative images so the archive
-        // is self-contained. (Unused when the user keeps the .md format.)
-        const embeddedImages = await this.collectMarkdownImages(markdownContent);
-        const mdzBytes = await this.buildFreshArchiveBytes(convertedArchive, embeddedImages);
+        // The .mdz form is only needed when a Save As dialog could turn this
+        // document into an archive (the user picking the .mdz filter). An
+        // in-place .md save just writes the markdown text, so skip the image
+        // collection + archive build — those are slow for docs with images and
+        // were previously run on every save only to be discarded.
+        let mdzBytes: Uint8Array | undefined;
+        if (saveAs) {
+          const convertedArchive: MDZipArchive = {
+            ...archive,
+            documents: archive.documents.map((document, index) =>
+              index === 0 ? { ...document, content: markdownContent } : document
+            ),
+          };
+          // Embed the document's relative images so a saved .mdz is self-contained.
+          const embeddedImages = await this.collectMarkdownImages(markdownContent);
+          mdzBytes = await this.buildFreshArchiveBytes(convertedArchive, embeddedImages);
+        }
         let result: ElectronDocumentSaveResult;
         try {
           result = await window.mdzipStudio.saveDocument({
             filePath: archive.path,
             defaultName,
             bytes: Array.from(bytes),
-            mdzBytes: Array.from(mdzBytes),
+            mdzBytes: mdzBytes ? Array.from(mdzBytes) : undefined,
             saveAs,
           });
         } catch (error) {
@@ -1886,7 +1893,8 @@ export class AppComponent implements OnDestroy {
         this.workspaceEditor?.markPersisted();
         this.isDirty.set(false);
         this.readOnly.set(false);
-        if (result.format === 'mdz') {
+        // A markdown source only becomes .mdz via Save As, so mdzBytes was built above.
+        if (result.format === 'mdz' && mdzBytes) {
           const firstDocument = archive.documents[0];
           if (firstDocument) {
             this.archiveService.updateDocument(firstDocument.id, markdownContent);
