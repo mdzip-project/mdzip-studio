@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Updates are no longer automatic. The app no longer checks for or downloads
+  updates on startup, and nothing installs on its own. Use **Help → Check for
+  Updates…** to check; if one is found you confirm the download, then choose
+  when to restart and install. This keeps a release from reaching users before
+  it's been vetted.
+
 ### Fixed
 
 - Typing in a Markdown (`.md`) document that references images was laggy: the

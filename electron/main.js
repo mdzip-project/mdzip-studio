@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Notification, dialog, ipcMain, nativeTheme, shell } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs/promises');
 const { constants: fsConstants } = require('fs');
@@ -32,109 +32,83 @@ if (process.platform === 'win32') {
   app.setAppUserModelId('org.mdzip.studio');
 }
 
-// --- Auto-update (electron-updater, GitHub Releases) -----------------------
-// The feed is the `publish` block in package.json, baked into app-update.yml at
-// build time. Updates only work in a packaged build; in dev the feed is absent
-// and checkForUpdates() rejects. Background (startup) checks stay quiet and use
-// native notifications when something happens; a manual "Check for Updates"
-// always reports its result in a modal dialog, since the user is waiting on it
-// and OS notifications are easy to miss (or suppressed).
+// --- Manual update (electron-updater, GitHub Releases) ---------------------
+// Releases are vetted by hand, so the app never updates on its own: there is no
+// startup check and nothing downloads or installs automatically. The user opts
+// in through Help → Check for Updates, then confirms the download and (on the
+// next restart) the install. The feed is the `publish` block in package.json,
+// baked into app-update.yml at build time. Updates only work in a packaged
+// build; in dev the feed is absent and checkForUpdates() rejects.
 let updaterWired = false;
-// True while a check triggered from the menu is in flight, so manual checks get
-// the dialog feedback that the silent startup check suppresses.
-let manualUpdateCheck = false;
-
-function showNotification(title, body, onClick) {
-  if (!Notification.isSupported()) return;
-  const notification = new Notification({ title, body, icon: windowIconForTheme() });
-  if (onClick) notification.on('click', onClick);
-  notification.show();
-}
 
 function wireAutoUpdater() {
   if (updaterWired) return;
   updaterWired = true;
+  // Never fetch or apply an update without explicit user action.
+  autoUpdater.autoDownload = false;
 
   autoUpdater.on('update-available', (info) => {
-    // Keep manualUpdateCheck set so the later 'update-downloaded' knows this
-    // flow began as a manual check and prompts to restart in a dialog.
-    if (manualUpdateCheck) {
-      dialog.showMessageBox(mainWindow, {
+    dialog
+      .showMessageBox(mainWindow, {
         type: 'info',
-        title: 'Check for Updates',
-        message: `An update is available: MDZip Studio ${info.version}.`,
-        detail: 'It’s downloading now. You can keep working — you’ll be prompted to restart when it’s ready.',
+        buttons: ['Download', 'Not now'],
+        defaultId: 0,
+        cancelId: 1,
+        title: 'Update available',
+        message: `MDZip Studio ${info.version} is available (you have ${app.getVersion()}).`,
+        detail: 'Download it now? You choose when to install once the download finishes.',
+      })
+      .then(({ response }) => {
+        if (response === 0) autoUpdater.downloadUpdate().catch(() => {});
       });
-    } else {
-      showNotification('Update available', `Downloading MDZip Studio ${info.version}…`);
-    }
   });
 
   autoUpdater.on('update-not-available', () => {
-    if (manualUpdateCheck) {
-      dialog.showMessageBox(mainWindow, {
-        type: 'info',
-        title: 'Check for Updates',
-        message: 'You’re up to date.',
-        detail: `MDZip Studio ${app.getVersion()} is the latest version.`,
-      });
-    }
-    manualUpdateCheck = false;
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'Check for Updates',
+      message: 'You’re up to date.',
+      detail: `MDZip Studio ${app.getVersion()} is the latest version.`,
+    });
   });
 
   autoUpdater.on('update-downloaded', (info) => {
-    const wasManual = manualUpdateCheck;
-    manualUpdateCheck = false;
-    if (wasManual) {
-      dialog
-        .showMessageBox(mainWindow, {
-          type: 'question',
-          buttons: ['Restart now', 'Later'],
-          defaultId: 0,
-          cancelId: 1,
-          title: 'Update ready',
-          message: `MDZip Studio ${info.version} has been downloaded.`,
-          detail: 'Restart now to install it, or it will install the next time you quit.',
-        })
-        .then(({ response }) => {
-          if (response === 0) autoUpdater.quitAndInstall();
-        });
-    } else {
-      showNotification(
-        'Update ready',
-        `MDZip Studio ${info.version} will install when you restart. Click here to restart now.`,
-        () => autoUpdater.quitAndInstall()
-      );
-    }
+    dialog
+      .showMessageBox(mainWindow, {
+        type: 'question',
+        buttons: ['Restart and install', 'Later'],
+        defaultId: 0,
+        cancelId: 1,
+        title: 'Update ready',
+        message: `MDZip Studio ${info.version} has been downloaded.`,
+        detail: 'Restart now to install it, or it will install the next time you quit.',
+      })
+      .then(({ response }) => {
+        if (response === 0) autoUpdater.quitAndInstall();
+      });
   });
 
   autoUpdater.on('error', (error) => {
-    if (manualUpdateCheck) {
-      dialog.showMessageBox(mainWindow, {
-        type: 'error',
-        title: 'Check for Updates',
-        message: 'Could not check for updates.',
-        detail: error?.message ?? 'Could not reach the update server. Check your connection and try again.',
-      });
-    }
-    manualUpdateCheck = false;
+    dialog.showMessageBox(mainWindow, {
+      type: 'error',
+      title: 'Check for Updates',
+      message: 'Could not check for updates.',
+      detail: error?.message ?? 'Could not reach the update server. Check your connection and try again.',
+    });
   });
 }
 
-function checkForUpdates(manual = false) {
+function checkForUpdates() {
   if (!app.isPackaged) {
-    if (manual) {
-      dialog.showMessageBox(mainWindow, {
-        type: 'info',
-        title: 'Check for Updates',
-        message: 'Updates are only available in an installed build.',
-        detail: 'Run an installed copy of MDZip Studio to check for and download updates.',
-      });
-    }
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'Check for Updates',
+      message: 'Updates are only available in an installed build.',
+      detail: 'Run an installed copy of MDZip Studio to check for and download updates.',
+    });
     return;
   }
   wireAutoUpdater();
-  manualUpdateCheck = manual;
   // The 'error' event handles user-facing messaging; swallow the rejection so
   // an unreachable feed never produces an unhandled promise rejection.
   autoUpdater.checkForUpdates().catch(() => {});
@@ -780,7 +754,7 @@ const createMenu = () => {
               { type: 'separator' },
             ]
           : []),
-        { label: 'Check for Updates...', click: () => checkForUpdates(true) },
+        { label: 'Check for Updates...', click: () => checkForUpdates() },
         { type: 'separator' },
         { label: 'About MDZip Studio', click: () => dispatchAppEvent('mdzip-studio:show-about') },
       ],
@@ -804,11 +778,6 @@ const createMenu = () => {
 };
 
 app.on('ready', createMenu);
-
-// Silent check shortly after launch so it never competes with window startup.
-app.on('ready', () => {
-  setTimeout(() => checkForUpdates(false), 3000);
-});
 
 // Swap the window/taskbar icon when the OS theme changes (the BrowserWindow is
 // created with the correct one for the current theme).
