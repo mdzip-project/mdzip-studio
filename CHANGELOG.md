@@ -7,13 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.19] - 2026-06-18
+
 ### Added
 
 - The status bar now makes the open document's format clear: a format icon
   (document for Markdown `.md`, archive for MDZip `.mdz`) plus a clearer label —
-  `Viewing/Editing <file>.md` for Markdown, and `Viewing/Editing <entry> in
-  <file>.mdz` for an MDZip archive (so it's obvious you're viewing one entry of
-  a bundle).
+  `Viewing/Editing <file>.md` for Markdown, and
+  `Viewing/Editing <entry> (<file>.mdz)` for an MDZip archive (so it's obvious
+  you're viewing one entry of a bundle).
+- Recent files now show Markdown/MDZip file-type icons for faster scanning.
 
 ### Changed
 
@@ -35,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   image each time. The preview now references stable `blob:` object URLs
   (decoded once and reused); the data-URI cache is kept only for embedding
   images on conversion/save.
+- Relative images in Markdown (`.md`) previews now keep working with that fast
+  blob-backed preview path, including when the editor's progressive image
+  placeholder removes the original relative `src` before extension mounting.
 
 ## [1.3.18] - 2026-06-17
 
@@ -157,7 +163,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.18...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.19...HEAD
+[1.3.19]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.18...v1.3.19
 [1.3.18]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.17...v1.3.18
 [1.3.17]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.16...v1.3.17
 [1.3.16]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.15...v1.3.16
