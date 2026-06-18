@@ -1,6 +1,7 @@
 import { Injector, NgZone, runInInjectionContext } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { MdzPackagerCore } from '@mdzip/core-js';
+import { MdzipRenderingService } from '@mdzip/editor';
 import type { MdzipConversionContext, MdzipEntryRenderContext } from '@mdzip/editor';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppComponent } from './app.component';
@@ -127,6 +128,106 @@ describe('AppComponent', () => {
     expect(component.imageDestinationDialogOpen()).toBe(true);
 
     component.cancelImageDestination();
+  });
+
+  it('renders relative images for a Markdown file opened from disk', async () => {
+    // Regression guard for two bugs that fought each other:
+    //
+    // - Rendering the preview with data: image srcs makes relative .md images
+    //   appear, but reserializing/redecoding large data URIs on every keystroke
+    //   makes typing slow.
+    // - Moving image resolution to mount keeps typing fast with cached blob:
+    //   URLs, but the editor's progressive image path may remove the relative
+    //   src before mount runs. The mdzip-studio-src marker must survive
+    //   sanitization so mount can still resolve the loose sibling file.
+    const originalBridge = window.mdzipStudio;
+    const originalCreateObjectUrl = URL.createObjectURL;
+    const originalRevokeObjectUrl = URL.revokeObjectURL;
+    const createObjectUrl = vi.fn().mockReturnValue('blob:studio/patio');
+    const readMarkdownAsset = vi.fn().mockResolvedValue({
+      dataUri: 'data:image/png;base64,aW1hZ2U=',
+    });
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: createObjectUrl,
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    });
+    window.mdzipStudio = {
+      ...originalBridge,
+      readMarkdownAsset,
+    };
+
+    const app = component as unknown as {
+      openDocumentBytes(
+        bytes: Uint8Array,
+        name: string,
+        filePath?: string,
+        readOnly?: boolean,
+        recordRecent?: boolean
+      ): Promise<void>;
+    };
+
+    try {
+      await app.openDocumentBytes(
+        new TextEncoder().encode('![patio](./images/patio.png)'),
+        'patio.md',
+        'C:/docs/patio.md',
+        false,
+        false
+      );
+
+      const relativeImages = component.markdownExtensions.find((extension) =>
+        extension.name === 'studio-relative-images-mounted'
+      );
+      expect(relativeImages).toBeTruthy();
+
+      const renderer = new MdzipRenderingService(undefined, relativeImages ? [relativeImages] : []);
+      const html = await renderer.renderMarkdown('![patio](./images/patio.png)', {
+        currentPath: 'index.md',
+        sourceFormat: 'markdown',
+        colorScheme: 'light',
+        mode: 'editable',
+        manifest: null,
+        signal: new AbortController().signal,
+      });
+      const container = document.createElement('div');
+      container.innerHTML = html;
+      // Simulate MdzipWorkspaceView.mountProgressivePreview(), which removes
+      // relative src before extension mounts. Without the marker attribute, this
+      // is the live-app path that leaves images broken.
+      container.querySelector('img')?.removeAttribute('src');
+      await relativeImages?.mount?.(container, {
+        currentPath: 'index.md',
+        sourceFormat: 'markdown',
+        colorScheme: 'light',
+        mode: 'editable',
+        manifest: null,
+        signal: new AbortController().signal,
+      });
+
+      expect(readMarkdownAsset).toHaveBeenCalledWith({
+        documentPath: 'C:/docs/patio.md',
+        relativePath: 'images/patio.png',
+      });
+      expect(createObjectUrl).toHaveBeenCalledOnce();
+      expect(html).toContain('src="./images/patio.png"');
+      expect(html).toContain('mdzip-studio-src="./images/patio.png"');
+      expect(html).toContain('alt="patio"');
+      expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:studio/patio');
+    } finally {
+      window.mdzipStudio = originalBridge;
+      Object.defineProperty(URL, 'createObjectURL', {
+        configurable: true,
+        value: originalCreateObjectUrl,
+      });
+      Object.defineProperty(URL, 'revokeObjectURL', {
+        configurable: true,
+        value: originalRevokeObjectUrl,
+      });
+    }
   });
 
   it('inserts a relative image reference through the library conversion context', async () => {

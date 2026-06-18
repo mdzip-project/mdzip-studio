@@ -815,6 +815,42 @@ button.destination-option:hover:not(:disabled),
   color: #4c5663;
 }
 
+.statusbar-message,
+.statusbar-document {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusbar-document {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.statusbar-action {
+  flex-shrink: 0;
+  color: #7a8490;
+}
+
+.statusbar-target,
+.statusbar-context {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.statusbar-target {
+  color: #20242a;
+  font-weight: 600;
+}
+
+.statusbar-context {
+  color: #7a8490;
+  font-weight: 400;
+}
+
 .loading-overlay {
   position: fixed;
   inset: 0;
@@ -916,6 +952,7 @@ button.destination-option:hover:not(:disabled),
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: 1;
   min-width: 0;
 }
 
@@ -1042,6 +1079,26 @@ ng-icon {
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.recent-file-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+
+  picture,
+  img {
+    display: block;
+    width: 24px;
+    height: 24px;
+  }
+
+  img {
+    object-fit: contain;
+  }
 }
 
 .recent-remove {
@@ -1317,6 +1374,9 @@ p-button {
   /* Status bar + loading overlay */
   .statusbar { border-top-color: #3c3c3c; color: #8c8c8c; }
   .statusbar-url { color: #9aa0a6; }
+  .statusbar-action { color: #8c8c8c; }
+  .statusbar-target { color: #e6e8ec; }
+  .statusbar-context { color: #8c8c8c; }
   .loading-overlay { background: rgba(30, 30, 30, 0.85); color: #9aa0a6; }
   .loading-spinner { border-color: #3c3c3c; border-top-color: #8c8c8c; }
   .progress-track { background: #3c3c3c; }

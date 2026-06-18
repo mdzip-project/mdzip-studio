@@ -28,7 +28,6 @@ import {
   lucideCircleCheck,
   lucideCircleMinus,
   lucideCircleX,
-  lucideClock,
   lucideCopy,
   lucideFile,
   lucideFileArchive,
@@ -58,6 +57,15 @@ import {
 type AssetViewMode = 'tiles' | 'list';
 type ArchiveTreeKind = 'folder' | 'document' | 'asset';
 type SaveValidationState = 'unchecked' | 'valid' | 'invalid';
+const MARKDOWN_IMAGE_SOURCE_ATTR = 'mdzip-studio-src';
+
+interface StatusbarDisplay {
+  kind: 'document' | 'message' | 'url';
+  text: string;
+  action?: string;
+  target?: string;
+  context?: string;
+}
 
 interface ElectronDocumentOpenResult {
   canceled: boolean;
@@ -202,7 +210,6 @@ interface ArchiveTreeData {
       lucideCircleCheck,
       lucideCircleMinus,
       lucideCircleX,
-      lucideClock,
       lucideCopy,
       lucideDownload,
       lucideFile,
@@ -333,7 +340,19 @@ interface ArchiveTreeData {
                     @for (path of recentFiles(); track path) {
                       <div class="recent-item">
                         <button class="recent-open" type="button" (click)="openRecent(path)" [title]="path">
-                          <ng-icon name="lucideClock" size="14" />
+                          <span class="recent-file-icon" aria-hidden="true">
+                            @if (recentFileType(path) === 'mdz') {
+                              <picture>
+                                <source srcset="assets/mdzip-mark/mdzip-mark-square-dark.svg" media="(prefers-color-scheme: dark)" />
+                                <img src="assets/mdzip-mark/mdzip-mark-square.svg" alt="" />
+                              </picture>
+                            } @else {
+                              <picture>
+                                <source srcset="assets/mdzip-mark/markdown-mark-dark.svg" media="(prefers-color-scheme: dark)" />
+                                <img src="assets/mdzip-mark/markdown-mark.svg" alt="" />
+                              </picture>
+                            }
+                          </span>
                           <div class="recent-meta">
                             <span class="recent-name">{{ recentDisplayName(path) }}</span>
                             <span class="recent-path">{{ recentFilePath(path) }}</span>
@@ -410,7 +429,17 @@ interface ArchiveTreeData {
               [attr.title]="sourceFormat() === 'mdz' ? 'MDZip archive (.mdz)' : 'Markdown (.md)'"
             />
           }
-          <span [class.statusbar-url]="isHoveringLink()">{{ displayStatus() }}</span>
+          @if (displayStatus().kind === 'document') {
+            <span class="statusbar-document">
+              <span class="statusbar-action">{{ displayStatus().action }}</span>
+              <span class="statusbar-target">{{ displayStatus().target }}</span>
+              @if (displayStatus().context) {
+                <span class="statusbar-context">({{ displayStatus().context }})</span>
+              }
+            </span>
+          } @else {
+            <span class="statusbar-message" [class.statusbar-url]="displayStatus().kind === 'url'">{{ displayStatus().text }}</span>
+          }
         </span>
         <span class="statusbar-version">v{{ appVersion }}</span>
       </footer>
@@ -676,7 +705,25 @@ export class AppComponent implements OnDestroy {
   readonly assetViewMode = signal<AssetViewMode>('tiles');
   readonly statusMessage = signal('Ready');
   private readonly hoverUrl = signal<string | null>(null);
-  readonly displayStatus = computed(() => this.hoverUrl() ?? this.statusMessage());
+  readonly displayStatus = computed<StatusbarDisplay>(() => {
+    const url = this.hoverUrl();
+    if (url) return { kind: 'url', text: url };
+
+    const text = this.statusMessage();
+    const documentStatus = /^(Viewing|Editing)\s+(.+)$/.exec(text);
+    if (documentStatus) {
+      const target = /^(.*?)\s+\((.+)\)$/.exec(documentStatus[2]);
+      return {
+        kind: 'document',
+        text,
+        action: documentStatus[1],
+        target: target ? target[1] : documentStatus[2],
+        context: target?.[2],
+      };
+    }
+
+    return { kind: 'message', text };
+  });
   readonly isHoveringLink = computed(() => this.hoverUrl() !== null);
   readonly validationIssues = signal<ValidationError[]>([]);
   readonly saveValidationState = signal<SaveValidationState>('unchecked');
@@ -758,14 +805,29 @@ export class AppComponent implements OnDestroy {
   private readonly mdAssetCache = new Map<string, string>();
   // Preview cache of blob: object URLs for the same images. The preview re-runs
   // on every keystroke, so it must reference short, stable URLs the browser can
-  // decode once and reuse — inlining multi-MB data URIs re-decoded every image
-  // on each render and made typing laggy. Revoked when the cache is cleared.
+  // decode once and reuse instead of re-decoding multi-MB data URIs.
   private readonly mdPreviewUrlCache = new Map<string, string>();
+  // Relative .md images are deliberately split across transformHtml + mount:
+  //
+  // 1. transformHtml may only add tiny metadata. Do NOT inline image data here.
+  //    The editor sanitizes transformHtml output and then serializes it into the
+  //    preview on every keystroke; large data: URLs here make typing laggy.
+  // 2. mount runs after sanitization and DOM insertion. That is where loose
+  //    sibling images are read and swapped to cached blob: URLs for fast typing.
+  // 3. The editor's progressive image path may remove the original relative
+  //    src before mount runs, so transformHtml preserves it in
+  //    MARKDOWN_IMAGE_SOURCE_ATTR. Without that marker, images break again.
+  //
+  // The extension name is intentionally versioned by behavior. editor-ng keys
+  // extension updates by name, so changing hook behavior under the same name can
+  // leave a live dev window with a stale extension until the view is recreated.
   readonly markdownExtensions: readonly MdzipMarkdownRenderExtension[] = [
     mdzipMermaidExtension(),
     {
-      name: 'studio-relative-images',
-      transformHtml: (html, context) => this.inlineRelativeMarkdownImages(html, context),
+      name: 'studio-relative-images-mounted',
+      sanitize: { addAttr: [MARKDOWN_IMAGE_SOURCE_ATTR] },
+      transformHtml: (html, context) => this.markRelativeMarkdownImages(html, context),
+      mount: (container, context) => this.mountRelativeMarkdownImages(container, context),
     },
   ];
 
@@ -1687,27 +1749,42 @@ export class AppComponent implements OnDestroy {
     return new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
   }
 
-  // Inline relative image references (e.g. `./img.png`) for a plain Markdown file
-  // opened from disk. The preview renderer can't resolve such paths against its
-  // own origin, so each sibling file is read via Electron and swapped for a data
-  // URI. .mdz images already arrive as data URIs and are skipped; no-op in the
-  // browser shell (no disk path / IPC). Runs as a preview `transformHtml` stage,
-  // so the editor's Markdown source is left untouched.
-  private async inlineRelativeMarkdownImages(html: string, context: MdzipMarkdownRenderContext): Promise<string> {
+  // Mark relative image sources before the editor's sanitizer/progressive image
+  // handling. This must stay cheap: it stores only the original path, not bytes.
+  // The mount phase below does the expensive read once and caches a blob URL.
+  private markRelativeMarkdownImages(html: string, context: MdzipMarkdownRenderContext): string {
     if (context.sourceFormat !== 'markdown') return html;
-    const documentPath = this.currentMarkdownPath;
-    const read = window.mdzipStudio?.readMarkdownAsset;
-    if (!documentPath || !read) return html;
-
     const doc = new DOMParser().parseFromString(html, 'text/html');
     let changed = false;
-    await Promise.all(Array.from(doc.querySelectorAll('img')).map(async (img) => {
+    for (const img of Array.from(doc.querySelectorAll('img'))) {
+      const source = img.getAttribute('src') ?? '';
+      const archivePath = this.toArchiveAssetPath(source);
+      if (!archivePath) continue;
+      img.setAttribute(MARKDOWN_IMAGE_SOURCE_ATTR, source);
+      changed = true;
+    }
+    return changed ? doc.body.innerHTML : html;
+  }
+
+  // Inline relative image references (e.g. `./img.png`) for a plain Markdown file
+  // opened from disk. Runs in `mount()` after the editor sanitizer, so cached
+  // blob: URLs survive while the Markdown source stays untouched.
+  //
+  // Keep this path blob-backed. Replacing preview src with data: URLs fixes
+  // broken images but reintroduces slow keystrokes for image-heavy Markdown.
+  private async mountRelativeMarkdownImages(container: HTMLElement, context: MdzipMarkdownRenderContext): Promise<void> {
+    if (context.sourceFormat !== 'markdown') return;
+    const documentPath = this.currentMarkdownPath;
+    const read = window.mdzipStudio?.readMarkdownAsset;
+    if (!documentPath || !read) return;
+
+    await Promise.all(Array.from(container.querySelectorAll('img')).map(async (img) => {
       // Resolve relative sources only; absolute/scheme/escaping paths return null.
-      const archivePath = this.toArchiveAssetPath(img.getAttribute('src') ?? '');
+      // Prefer the preserved marker because the editor may have removed src when
+      // preparing a progressive image placeholder.
+      const source = img.getAttribute(MARKDOWN_IMAGE_SOURCE_ATTR) ?? img.getAttribute('src') ?? '';
+      const archivePath = this.toArchiveAssetPath(source);
       if (!archivePath) return;
-      // Reference a blob: object URL, not the data URI: it's short (cheap to
-      // serialize every render) and the browser decodes it once and reuses it,
-      // instead of re-decoding a multi-MB data URI on each keystroke.
       let previewUrl = this.mdPreviewUrlCache.get(archivePath);
       if (!previewUrl) {
         // readRelativeImageBytes also populates mdAssetCache (the data URI used
@@ -1718,9 +1795,7 @@ export class AppComponent implements OnDestroy {
         this.mdPreviewUrlCache.set(archivePath, previewUrl);
       }
       img.setAttribute('src', previewUrl);
-      changed = true;
     }));
-    return changed ? doc.body.innerHTML : html;
   }
 
   private async openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly = false, recordRecent = true, showNavigation = false): Promise<void> {
@@ -2109,7 +2184,7 @@ export class AppComponent implements OnDestroy {
   // they don't leak. Call whenever the document (or its on-disk path) changes.
   private clearMdAssetCaches(): void {
     for (const url of this.mdPreviewUrlCache.values()) {
-      URL.revokeObjectURL(url);
+      if (url.startsWith('blob:')) URL.revokeObjectURL(url);
     }
     this.mdPreviewUrlCache.clear();
     this.mdAssetCache.clear();
@@ -2621,7 +2696,7 @@ export class AppComponent implements OnDestroy {
   }
 
   // Status-bar label for the open document. For Markdown it's "<file>.md"; for
-  // an MDZip archive it's "<entry> in <file>.mdz" — you're viewing one entry of
+  // an MDZip archive it's "<entry> (<file>.mdz)" — you're viewing one entry of
   // a bundle. Uses the on-disk file name when saved, falling back to the archive
   // name (+ extension) for a document that only lives in memory.
   private documentStatusLabel(currentPath: string): string {
@@ -2632,7 +2707,7 @@ export class AppComponent implements OnDestroy {
     }
     const file = archive?.path ? this.recentFileName(archive.path) : `${stem}.mdz`;
     const entry = currentPath || archive?.manifest.entryPoint || 'index.md';
-    return `${entry} in ${file}`;
+    return `${entry} (${file})`;
   }
 
   // The editor's (changed) only fires on structural edits, so plain-text typing
@@ -2739,6 +2814,10 @@ export class AppComponent implements OnDestroy {
 
   recentFileName(path: string): string {
     return path.replace(/\\/g, '/').split('/').pop() ?? path;
+  }
+
+  recentFileType(path: string): 'md' | 'mdz' {
+    return /\.mdz$/i.test(path) ? 'mdz' : 'md';
   }
 
   // Prefer a cached .mdz manifest title; fall back to the bare file name.
