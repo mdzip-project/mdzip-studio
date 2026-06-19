@@ -48,6 +48,18 @@ This will:
 
 `npm start` does **not** require the preview-handler prerequisites above.
 
+> **After updating a bundled `@mdzip/*` dependency (editor, editor-ng, core-js),
+> fully restart `npm start`.** The Angular dev server bundles these into the app
+> when it boots and does **not** pick up `node_modules` changes while running, so
+> the editor in the Electron window keeps showing the old version until the dev
+> server is restarted. If a restart doesn't seem to take effect, make sure there
+> isn't an **orphaned `ng serve` still holding port 4300** from a previous
+> session — a stale server makes Electron load the old bundle. Check with
+> `Get-NetTCPConnection -LocalPort 4300 -State Listen` and stop that process, or
+> clear `.angular/cache` and restart. (`npm start` now uses
+> `concurrently --kill-others`, so closing the Electron window also stops the dev
+> server — this should keep orphans from accumulating.)
+
 ### Building
 
 Build just the web bundle:
