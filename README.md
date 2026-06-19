@@ -14,9 +14,9 @@ and run it.
 > the file. To proceed: in the browser's download list choose **Keep**, then on
 > the SmartScreen prompt click **More info → Run anyway**.
 
-Once installed, MDZip Studio **updates itself**: it checks for new releases on
-startup (and via **Help → Check for Updates…**), then downloads and installs
-them on the next restart.
+Updates are **manual** — MDZip Studio never checks for or installs updates on
+its own. Use **Help → Check for Updates…**; if a newer release is found you
+confirm the download, then choose when to restart and install it.
 
 ## Getting Started
 
