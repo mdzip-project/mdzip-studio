@@ -1,4 +1,6 @@
 import { Component, computed, effect, ElementRef, NgZone, OnDestroy, signal, VERSION as NG_VERSION, ViewChild } from '@angular/core';
+import { StateEffect } from '@codemirror/state';
+import { Decoration, EditorView, MatchDecorator, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view';
 import { APP_VERSION } from './app-version';
 import { APP_LICENSE_NAME, APP_LICENSE_TEXT, FIRST_PARTY_LIBRARIES, LibraryInfo, OPEN_SOURCE_LIBRARIES } from './app-about-data';
 import { FormsModule } from '@angular/forms';
@@ -10,6 +12,7 @@ import { TreeNode } from 'primeng/api';
 import { MdzArchiveCore, MdzManifest, MdzPackagerCore } from '@mdzip/core-js';
 import {
   MdzipColorScheme,
+  MdzipControlPolicy,
   MdzipConversionAction,
   MdzipConversionContext,
   MdzipDocumentChangeEvent,
@@ -20,7 +23,7 @@ import {
   MdzipWorkspaceSave,
   MdzipWorkspaceSnapshot,
 } from '@mdzip/editor';
-import { mdzipMermaidExtension } from '@mdzip/editor/mermaid';
+import { mdzipMermaidExtension, type MdzipMermaidApi } from '@mdzip/editor/mermaid';
 import { MdzipEntryRendererDirective, MdzipWorkspaceComponent } from '@mdzip/editor-ng';
 import { NgIconComponent, provideIcons } from '@ng-icons/core';
 import {
@@ -56,8 +59,97 @@ import {
 
 type AssetViewMode = 'tiles' | 'list';
 type ArchiveTreeKind = 'folder' | 'document' | 'asset';
+type HelpDocumentKind = 'known-issues' | 'changelog';
 type SaveValidationState = 'unchecked' | 'valid' | 'invalid';
 const MARKDOWN_IMAGE_SOURCE_ATTR = 'mdzip-studio-src';
+const HELP_DOCUMENTS: Record<HelpDocumentKind, {
+  title: string;
+  fileName: string;
+  remoteUrl: string;
+  fallbackUrl: string;
+}> = {
+  'known-issues': {
+    title: 'Known Issues',
+    fileName: 'KNOWN_ISSUES.md',
+    remoteUrl: 'https://raw.githubusercontent.com/mdzip-project/mdzip-studio/main/src/assets/help/known-issues.md',
+    fallbackUrl: 'assets/help/known-issues.md',
+  },
+  changelog: {
+    title: 'Change Log',
+    fileName: 'CHANGELOG.md',
+    remoteUrl: 'https://raw.githubusercontent.com/mdzip-project/mdzip-studio/main/CHANGELOG.md',
+    fallbackUrl: 'assets/help/CHANGELOG.md',
+  },
+};
+const STUDIO_FORMATTING_CONTROLS: NonNullable<MdzipControlPolicy['formatting']> = {
+  bold: true,
+  italic: true,
+  strikethrough: true,
+  headings: true,
+  bulletList: true,
+  orderedList: true,
+  inlineCode: true,
+  codeBlock: true,
+  blockquote: true,
+  lineBreak: true,
+  link: true,
+  image: true,
+};
+
+let studioMermaidPromise: Promise<MdzipMermaidApi> | null = null;
+
+function removeStrayMermaidErrorRenderings(): void {
+  const doc = globalThis.document;
+  if (!doc) return;
+
+  for (const marker of Array.from(doc.querySelectorAll('svg[id^="mdzip-mermaid-"] .error-icon, svg[id^="mdzip-mermaid-"] .error-text'))) {
+    const svg = marker.closest('svg');
+    if (!svg) continue;
+    const host = svg.parentElement?.id === `d${svg.id}` ? svg.parentElement : svg;
+    host.remove();
+  }
+}
+
+const studioHtmlTagMarkerMatcher = new MatchDecorator({
+  regexp: /<\/?(?!br\b)[A-Za-z][A-Za-z0-9:-]*(?:\s+[^<>]*?)?\s*\/?>/gi,
+  decoration: Decoration.mark({ class: 'mdzip-hard-break-marker' }),
+});
+
+const studioHtmlTagMarkerHighlight = ViewPlugin.fromClass(class {
+  decorations: DecorationSet;
+
+  constructor(view: EditorView) {
+    this.decorations = studioHtmlTagMarkerMatcher.createDeco(view);
+  }
+
+  update(update: ViewUpdate): void {
+    if (update.docChanged || update.viewportChanged) {
+      this.decorations = studioHtmlTagMarkerMatcher.updateDeco(update, this.decorations);
+    }
+  }
+});
+
+function loadStudioMermaid(): Promise<MdzipMermaidApi> {
+  studioMermaidPromise ??= import('mermaid').then((module) => {
+    const mermaid = (module.default ?? module) as MdzipMermaidApi;
+    return {
+      ...mermaid,
+      initialize: (config: Record<string, unknown>) => mermaid.initialize({
+        ...config,
+        suppressErrorRendering: true,
+      }),
+      render: async (id: string, text: string) => {
+        removeStrayMermaidErrorRenderings();
+        try {
+          return await mermaid.render(id, text);
+        } finally {
+          removeStrayMermaidErrorRenderings();
+        }
+      },
+    };
+  });
+  return studioMermaidPromise;
+}
 
 interface StatusbarDisplay {
   kind: 'document' | 'message' | 'url';
@@ -81,6 +173,19 @@ interface ElectronDocumentSaveResult {
   filePath?: string;
   name?: string;
   format?: 'markdown' | 'mdz';
+}
+
+interface ElectronUnpackSourceResult {
+  canceled: boolean;
+  filePath?: string;
+  name?: string;
+  bytes?: number[];
+}
+
+interface ElectronUnpackWriteResult {
+  canceled: boolean;
+  folderPath?: string;
+  fileCount?: number;
 }
 
 interface ElectronMarkdownImageResult {
@@ -151,13 +256,20 @@ interface ElectronBridge {
   openDocumentByPath?: (filePath: string) => Promise<ElectronDocumentOpenResult>;
   setRecentFiles?: (paths: string[]) => void;
   setDocumentOpen?: (open: boolean) => void;
+  setCurrentDocumentPath?: (filePath?: string) => void;
   pickFolder?: () => Promise<ElectronPickFolderResult>;
   readFolder?: (payload: { paths: string[] }) => Promise<ElectronReadFolderResult>;
+  pickMdzForUnpack?: () => Promise<ElectronUnpackSourceResult>;
+  writeUnpackedFolder?: (payload: {
+    defaultFolderName: string;
+    entries: { path: string; bytes: number[] }[];
+  }) => Promise<ElectronUnpackWriteResult>;
   onPackFolderProgress?: (callback: (data: PackFolderProgress) => void) => () => void;
   takePendingOpenDocument?: () => Promise<ElectronDocumentOpenResult>;
   onOpenDocumentRequested?: (callback: () => void) => () => void;
   saveDocument?: (payload: {
     filePath?: string;
+    defaultDirectory?: string;
     defaultName: string;
     bytes: number[];
     mdzBytes?: number[];
@@ -280,10 +392,30 @@ interface ArchiveTreeData {
                 </ul>
               }
             </div>
+            <div class="menu-root" (click)="$event.stopPropagation(); toggleMenu('view')" (mouseenter)="hoverMenu('view')">
+              <button class="menu-root-btn" type="button" [class.active]="openMenu() === 'view'">View</button>
+              @if (openMenu() === 'view') {
+                <ul class="menu-popup" role="menu" (click)="$event.stopPropagation()">
+                  <li role="none">
+                    <button class="menu-item" type="button" role="menuitemcheckbox" [attr.aria-checked]="showLineNumbers()" (click)="toggleLineNumbers(); closeMenu()">
+                      @if (showLineNumbers()) {
+                        <ng-icon name="lucideCheck" size="13" />
+                      } @else {
+                        <span></span>
+                      }
+                      <span>Line Numbers</span>
+                    </button>
+                  </li>
+                </ul>
+              }
+            </div>
             <div class="menu-root" (click)="$event.stopPropagation(); toggleMenu('help')" (mouseenter)="hoverMenu('help')">
               <button class="menu-root-btn" type="button" [class.active]="openMenu() === 'help'">Help</button>
               @if (openMenu() === 'help') {
                 <ul class="menu-popup" role="menu" (click)="$event.stopPropagation()">
+                  <li role="none"><button class="menu-item" type="button" role="menuitem" (click)="openHelpDocument('known-issues'); closeMenu()"><ng-icon name="lucideFileText" size="13" /><span>Known Issues</span></button></li>
+                  <li role="none"><button class="menu-item" type="button" role="menuitem" (click)="openHelpDocument('changelog'); closeMenu()"><ng-icon name="lucideList" size="13" /><span>Change Log</span></button></li>
+                  <li class="menu-sep" role="separator"></li>
                   <li role="none"><button class="menu-item" type="button" role="menuitem" (click)="showAbout(); closeMenu()"><ng-icon name="lucideInfo" size="13" /><span>About MDZip Studio</span></button></li>
                 </ul>
               }
@@ -378,6 +510,8 @@ interface ArchiveTreeData {
                 mode="editable"
                 [sourceFormat]="sourceFormat()"
                 [controls]="workspaceControls()"
+                [imageHydrationAnimation]="'initial'"
+                [imageInsertMode]="'ask'"
                 [markdownExtensions]="markdownExtensions"
                 [onConversionRequested]="handleConversionRequested"
                 initialLayout="split"
@@ -386,6 +520,7 @@ interface ArchiveTreeData {
                 (manifestChanged)="onWorkspaceManifestChanged($event)"
                 (dirtyChanged)="onWorkspaceDirtyChanged($event)"
                 (saved)="onWorkspaceSaved($event)"
+                (previewRendered)="onWorkspacePreviewRendered($event)"
                 (failed)="onWorkspaceFailed($event)"
               >
                 <ng-template
@@ -677,6 +812,34 @@ interface ArchiveTreeData {
       </ng-template>
     </p-dialog>
 
+    <p-dialog [header]="helpDialogTitle()" [visible]="helpDialogOpen()" (visibleChange)="helpDialogOpen.set($event)" [modal]="true" [style]="{ width: 'min(94vw, 860px)' }" [contentStyle]="{ padding: '0' }">
+      <div class="help-doc-dialog">
+        <div class="help-doc-status" [class.error]="helpDialogError()">
+          @if (helpDialogLoading()) {
+            Loading {{ helpDialogTitle() }}...
+          } @else {
+            {{ helpDialogStatus() }}
+          }
+        </div>
+        <div class="help-doc-viewer">
+          @if (helpDialogBytes()) {
+            <mdzip-workspace
+              [bytes]="helpDialogBytes()"
+              [fileName]="helpDialogFileName()"
+              mode="read-only"
+              sourceFormat="markdown"
+              controls="preview"
+              initialLayout="preview"
+              [markdownExtensions]="markdownExtensions"
+            />
+          }
+        </div>
+      </div>
+      <ng-template pTemplate="footer">
+        <p-button label="Close" (onClick)="helpDialogOpen.set(false)" />
+      </ng-template>
+    </p-dialog>
+
     <p-dialog header="Default Markdown editor" [visible]="mdDefaultPromptOpen()" (visibleChange)="mdDefaultPromptOpen.set($event)" [modal]="true" [closable]="!mdDefaultBusy()" [style]="{ width: 'min(92vw, 460px)' }">
       <div class="dialog-form">
         <p>Make MDZip Studio the default app for opening <strong>.md</strong> files? Windows will ask you to confirm the choice.</p>
@@ -787,11 +950,16 @@ export class AppComponent implements OnDestroy {
 
   readonly openMenu = signal<string | null>(null);
   readonly sourceFormat = signal<'markdown' | 'mdz'>('markdown');
-  readonly workspaceControls = computed(() =>
-    this.isDesktopShell()
-      ? { preset: 'hosted-editor' as const, title: false }
-      : 'hosted-editor'
-  );
+  readonly showLineNumbers = signal(true);
+  readonly workspaceControls = computed(() => {
+    // Studio wants the full hosted-editor formatting toolbar, including the
+    // explicit hard line-break button (`insert-line-break`). Keep this override
+    // here instead of relying only on the package preset so future editor
+    // preset tweaks do not silently remove the button from Studio.
+    return this.isDesktopShell()
+      ? { preset: 'hosted-editor' as const, title: false, lineNumbers: this.showLineNumbers(), formatting: STUDIO_FORMATTING_CONTROLS }
+      : { preset: 'hosted-editor' as const, lineNumbers: this.showLineNumbers(), formatting: STUDIO_FORMATTING_CONTROLS };
+  });
 
   // Mermaid render extension (lazy-loads the mermaid library only when a
   // document actually contains a ```mermaid block). theme: 'auto' follows the
@@ -812,6 +980,10 @@ export class AppComponent implements OnDestroy {
   // 1. transformHtml may only add tiny metadata. Do NOT inline image data here.
   //    The editor sanitizes transformHtml output and then serializes it into the
   //    preview on every keystroke; large data: URLs here make typing laggy.
+  //    Once mount has warmed a blob: URL, transformHtml is allowed to substitute
+  //    that short stable URL on later renders. That lets the editor skip its
+  //    progressive image slot entirely while typing, so the first-load hydration
+  //    effect does not replay on every keystroke.
   // 2. mount runs after sanitization and DOM insertion. That is where loose
   //    sibling images are read and swapped to cached blob: URLs for fast typing.
   // 3. The editor's progressive image path may remove the original relative
@@ -822,7 +994,11 @@ export class AppComponent implements OnDestroy {
   // extension updates by name, so changing hook behavior under the same name can
   // leave a live dev window with a stale extension until the view is recreated.
   readonly markdownExtensions: readonly MdzipMarkdownRenderExtension[] = [
-    mdzipMermaidExtension(),
+    mdzipMermaidExtension({ loadMermaid: loadStudioMermaid }),
+    {
+      name: 'studio-html-image-layout',
+      mount: (container) => this.mountHtmlImageLayout(container),
+    },
     {
       name: 'studio-relative-images-mounted',
       sanitize: { addAttr: [MARKDOWN_IMAGE_SOURCE_ATTR] },
@@ -887,6 +1063,13 @@ export class AppComponent implements OnDestroy {
   readonly aboutOpen = signal(false);
   readonly aboutTab = signal<'about' | 'libraries' | 'license' | 'debug'>('about');
   readonly debugCopied = signal(false);
+  readonly helpDialogOpen = signal(false);
+  readonly helpDialogTitle = signal('Help');
+  readonly helpDialogFileName = signal('help.md');
+  readonly helpDialogBytes = signal<Uint8Array | null>(null);
+  readonly helpDialogStatus = signal('');
+  readonly helpDialogLoading = signal(false);
+  readonly helpDialogError = signal(false);
   readonly mdDefaultPromptOpen = signal(false);
   readonly mdDefaultBusy = signal(false);
   private static readonly MD_DEFAULT_PROMPT_KEY = 'mdDefaultPromptSeen';
@@ -939,6 +1122,7 @@ export class AppComponent implements OnDestroy {
   private pendingConversionContext: MdzipConversionContext | null = null;
   // One-shot status held across the conversion's own re-render (see onWorkspaceChanged).
   private postConvertStatus: string | null = null;
+  private readonly htmlTagHighlightAppliedEditors = new WeakSet<EditorView>();
   private pendingMarkdownImageDestination: 'same' | 'subfolder' | 'mdz' | null = null;
   private removeOpenDocumentRequestedListener: (() => void) | null = null;
   private pendingElectronOpen: Promise<boolean> | null = null;
@@ -993,9 +1177,14 @@ export class AppComponent implements OnDestroy {
   private readonly handleCloseArchiveCommand = () => this.closeDocument();
   private readonly handleExportDraftCommand = () => this.exportDraft();
   private readonly handleShowAboutCommand = () => this.showAbout();
+  private readonly handleShowKnownIssuesCommand = () => void this.openHelpDocument('known-issues');
+  private readonly handleShowChangelogCommand = () => void this.openHelpDocument('changelog');
   private readonly handleSetMdDefaultCommand = () => void this.promptMarkdownDefaultManually();
   private readonly handlePackFolderCommand = () => void this.packFolder();
+  private readonly handleUnpackMdzCommand = () => void this.unpackMdzToFolder();
   private readonly handleShowInFolderCommand = () => void this.showInFileManager();
+  private readonly handleReloadDocumentCommand = () => void this.reloadDocumentFromDisk();
+  private readonly handleToggleLineNumbersCommand = () => this.toggleLineNumbers();
 
   private readonly handleKeyDown = (e: KeyboardEvent): void => {
     const ctrl = e.ctrlKey || e.metaKey;
@@ -1043,9 +1232,14 @@ export class AppComponent implements OnDestroy {
     window.addEventListener('mdzip-studio:close-archive', this.handleCloseArchiveCommand);
     window.addEventListener('mdzip-studio:export-draft', this.handleExportDraftCommand);
     window.addEventListener('mdzip-studio:show-about', this.handleShowAboutCommand);
+    window.addEventListener('mdzip-studio:show-known-issues', this.handleShowKnownIssuesCommand);
+    window.addEventListener('mdzip-studio:show-changelog', this.handleShowChangelogCommand);
     window.addEventListener('mdzip-studio:set-md-default', this.handleSetMdDefaultCommand);
     window.addEventListener('mdzip-studio:pack-folder', this.handlePackFolderCommand);
+    window.addEventListener('mdzip-studio:unpack-mdz', this.handleUnpackMdzCommand);
     window.addEventListener('mdzip-studio:show-in-folder', this.handleShowInFolderCommand);
+    window.addEventListener('mdzip-studio:reload-document', this.handleReloadDocumentCommand);
+    window.addEventListener('mdzip-studio:toggle-line-numbers', this.handleToggleLineNumbersCommand);
     document.addEventListener('keydown', this.handleKeyDown);
     document.addEventListener('click', this.closeMenuOnDocumentClick);
     document.addEventListener('mouseover', this.handleLinkMouseOver);
@@ -1056,7 +1250,7 @@ export class AppComponent implements OnDestroy {
         if (this.pendingElectronOpen) {
           this.electronOpenRequestedWhilePending = true;
         } else {
-          void this.openPendingElectronDocument();
+          void this.requestPendingElectronDocumentOpen();
         }
       })
     ) ?? null;
@@ -1065,7 +1259,7 @@ export class AppComponent implements OnDestroy {
       // Open it if one is pending; otherwise leave the workspace empty so the
       // welcome screen shows (no archive open) instead of a blank new document.
       this.isLoading.set(true);
-      void this.openPendingElectronDocument().then((opened) => {
+      void this.requestPendingElectronDocumentOpen().then((opened) => {
         if (!opened) this.isLoading.set(false);
       });
     }
@@ -1084,9 +1278,14 @@ export class AppComponent implements OnDestroy {
     window.removeEventListener('mdzip-studio:close-archive', this.handleCloseArchiveCommand);
     window.removeEventListener('mdzip-studio:export-draft', this.handleExportDraftCommand);
     window.removeEventListener('mdzip-studio:show-about', this.handleShowAboutCommand);
+    window.removeEventListener('mdzip-studio:show-known-issues', this.handleShowKnownIssuesCommand);
+    window.removeEventListener('mdzip-studio:show-changelog', this.handleShowChangelogCommand);
     window.removeEventListener('mdzip-studio:set-md-default', this.handleSetMdDefaultCommand);
     window.removeEventListener('mdzip-studio:pack-folder', this.handlePackFolderCommand);
+    window.removeEventListener('mdzip-studio:unpack-mdz', this.handleUnpackMdzCommand);
     window.removeEventListener('mdzip-studio:show-in-folder', this.handleShowInFolderCommand);
+    window.removeEventListener('mdzip-studio:reload-document', this.handleReloadDocumentCommand);
+    window.removeEventListener('mdzip-studio:toggle-line-numbers', this.handleToggleLineNumbersCommand);
     document.removeEventListener('keydown', this.handleKeyDown);
     document.removeEventListener('click', this.closeMenuOnDocumentClick);
     document.removeEventListener('mouseover', this.handleLinkMouseOver);
@@ -1110,10 +1309,49 @@ export class AppComponent implements OnDestroy {
     this.openMenu.set(null);
   }
 
+  toggleLineNumbers(): void {
+    this.showLineNumbers.update((visible) => !visible);
+  }
+
   showAbout(): void {
     this.aboutTab.set('about');
     this.debugCopied.set(false);
     this.aboutOpen.set(true);
+  }
+
+  async openHelpDocument(kind: HelpDocumentKind): Promise<void> {
+    const doc = HELP_DOCUMENTS[kind];
+    this.helpDialogTitle.set(doc.title);
+    this.helpDialogFileName.set(doc.fileName);
+    this.helpDialogBytes.set(null);
+    this.helpDialogStatus.set('');
+    this.helpDialogError.set(false);
+    this.helpDialogLoading.set(true);
+    this.helpDialogOpen.set(true);
+
+    try {
+      const remote = await this.fetchHelpMarkdown(doc.remoteUrl);
+      this.helpDialogBytes.set(new TextEncoder().encode(remote));
+      this.helpDialogStatus.set('Updated from GitHub');
+    } catch {
+      try {
+        const fallback = await this.fetchHelpMarkdown(doc.fallbackUrl);
+        this.helpDialogBytes.set(new TextEncoder().encode(fallback));
+        this.helpDialogStatus.set('Showing bundled copy');
+      } catch {
+        this.helpDialogError.set(true);
+        this.helpDialogStatus.set(`Could not load ${doc.title}`);
+        this.helpDialogBytes.set(new TextEncoder().encode(`# ${doc.title}\n\nCould not load this help document.`));
+      }
+    } finally {
+      this.helpDialogLoading.set(false);
+    }
+  }
+
+  private async fetchHelpMarkdown(url: string): Promise<string> {
+    const response = await fetch(url, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`Could not load ${url}`);
+    return response.text();
   }
 
   // First run only: offer to become the default .md editor when we aren't
@@ -1418,13 +1656,13 @@ export class AppComponent implements OnDestroy {
     await this.openElectronDocumentResult(result);
   }
 
-  private openPendingElectronDocument(): Promise<boolean> {
+  private requestPendingElectronDocumentOpen(): Promise<boolean> {
     const takePending = window.mdzipStudio?.takePendingOpenDocument;
     if (!takePending) return Promise.resolve(false);
     if (this.pendingElectronOpen) return this.pendingElectronOpen;
 
     this.pendingElectronOpen = takePending()
-      .then((result) => this.openElectronDocumentResult(result))
+      .then((result) => this.openPendingElectronDocumentResult(result))
       .catch((error) => {
         this.isLoading.set(false);
         this.statusMessage.set(error instanceof Error ? error.message : 'Failed to open document');
@@ -1434,10 +1672,52 @@ export class AppComponent implements OnDestroy {
         this.pendingElectronOpen = null;
         if (this.electronOpenRequestedWhilePending) {
           this.electronOpenRequestedWhilePending = false;
-          void this.openPendingElectronDocument();
+          void this.requestPendingElectronDocumentOpen();
         }
       });
     return this.pendingElectronOpen;
+  }
+
+  reloadDocumentFromDisk(): void {
+    const filePath = this.currentArchive()?.path;
+    const openByPath = window.mdzipStudio?.openDocumentByPath;
+    if (!filePath || !openByPath) {
+      this.statusMessage.set('Save the document first to reload it from disk');
+      return;
+    }
+
+    this.confirmDiscardIfUnsaved(() => {
+      this.isLoading.set(true);
+      void openByPath(filePath)
+        .then((result) => this.openElectronDocumentResult(result))
+        .then((opened) => {
+          if (!opened) this.isLoading.set(false);
+        })
+        .catch((error) => {
+          this.isLoading.set(false);
+          this.statusMessage.set(error instanceof Error ? error.message : 'Failed to reload document');
+        });
+    });
+  }
+
+  private async openPendingElectronDocumentResult(result: ElectronDocumentOpenResult): Promise<boolean> {
+    if (result.canceled || !result.bytes || !result.name) return false;
+
+    // OS-level opens (double-click / "Open with" / Jump List) arrive through the
+    // single-instance pending-open queue, not the in-app Open command. They still
+    // must respect the same unsaved-changes guard before replacing the current
+    // workspace. The pending file has already been taken from Electron here, so
+    // canceling the prompt discards this one open request instead of leaving it
+    // queued to surprise-open later.
+    if (this.needsSave()) {
+      this.isLoading.set(false);
+      this.confirmDiscardIfUnsaved(() => {
+        void this.openElectronDocumentResult(result);
+      });
+      return false;
+    }
+
+    return this.openElectronDocumentResult(result);
   }
 
   private async openElectronDocumentResult(result: ElectronDocumentOpenResult): Promise<boolean> {
@@ -1693,6 +1973,61 @@ export class AppComponent implements OnDestroy {
     return new Uint8Array(await result.blob.arrayBuffer());
   }
 
+  async unpackMdzToFolder(): Promise<void> {
+    this.closeMenu();
+    const bridge = window.mdzipStudio;
+    if (!bridge?.pickMdzForUnpack || !bridge.writeUnpackedFolder) {
+      this.statusMessage.set('Unpack is available in the desktop app');
+      return;
+    }
+
+    try {
+      const source = await bridge.pickMdzForUnpack();
+      if (source.canceled || !source.bytes?.length || !source.name) return;
+
+      this.statusMessage.set(`Reading ${source.name}...`);
+      await this.yieldForPaint();
+
+      const mdz = await MdzArchiveCore.open(new Uint8Array(source.bytes));
+      const entries = await this.collectUnpackEntries(mdz);
+      if (!entries.length) {
+        this.statusMessage.set('That MDZip archive has no files to unpack');
+        return;
+      }
+
+      const result = await bridge.writeUnpackedFolder({
+        defaultFolderName: source.name.replace(/\.mdz$/i, ''),
+        entries,
+      });
+      if (result.canceled) {
+        this.statusMessage.set('Unpack canceled');
+        return;
+      }
+
+      this.statusMessage.set(`Unpacked ${result.fileCount ?? entries.length} files to ${result.folderPath ?? 'folder'}`);
+      if (result.folderPath) void bridge.showInFolder?.(result.folderPath);
+    } catch (error) {
+      this.statusMessage.set(error instanceof Error ? error.message : 'Could not unpack MDZip archive');
+    }
+  }
+
+  private async collectUnpackEntries(mdz: MdzArchiveCore): Promise<{ path: string; bytes: number[] }[]> {
+    const entries = mdz.listEntries({ includeDirectories: false, normalize: true, sort: true })
+      .filter((entry) => !entry.isDirectory);
+    const files: { path: string; bytes: number[] }[] = [];
+    for (const entry of entries) {
+      const reason = MdzArchiveCore.validateArchivePath(entry.path);
+      if (reason) {
+        throw new Error(`Cannot unpack invalid archive path "${entry.path}": ${reason}`);
+      }
+      files.push({
+        path: entry.path,
+        bytes: Array.from(await mdz.readBytes(entry.path)),
+      });
+    }
+    return files;
+  }
+
   async createArchiveFromDialog(): Promise<void> {
     const name = this.newArchiveName.trim() || 'Untitled';
     const format = this.newArchiveFormat();
@@ -1761,9 +2096,46 @@ export class AppComponent implements OnDestroy {
       const archivePath = this.toArchiveAssetPath(source);
       if (!archivePath) continue;
       img.setAttribute(MARKDOWN_IMAGE_SOURCE_ATTR, source);
+      const previewUrl = this.mdPreviewUrlCache.get(archivePath);
+      if (previewUrl) {
+        // After the first mount resolves a sibling .md image, feed the editor a
+        // stable blob URL on subsequent renders. Blob URLs are absolute, so the
+        // editor leaves them alone instead of wrapping/removing/restoring the img
+        // through its progressive hydration slot on every keystroke.
+        img.setAttribute('src', previewUrl);
+      }
       changed = true;
     }
     return changed ? doc.body.innerHTML : html;
+  }
+
+  private mountHtmlImageLayout(container: HTMLElement): void {
+    for (const image of Array.from(container.querySelectorAll('img'))) {
+      const height = this.htmlImageLength(image.getAttribute('height'));
+      const width = this.htmlImageLength(image.getAttribute('width'));
+      if (height) image.style.height = height;
+      if (width) image.style.width = width;
+      if (height && !width) image.style.width = 'auto';
+      if (width && !height) image.style.height = 'auto';
+
+      const align = image.getAttribute('align')?.trim().toLowerCase();
+      if (align === 'left' || align === 'right') {
+        image.style.cssFloat = align;
+      }
+      if (align === 'center' || align === 'middle') {
+        image.style.display = 'block';
+        image.style.marginLeft = 'auto';
+        image.style.marginRight = 'auto';
+      }
+    }
+  }
+
+  private htmlImageLength(value: string | null): string | null {
+    if (!value) return null;
+    const trimmed = value.trim();
+    if (/^\d+(?:\.\d+)?$/.test(trimmed)) return `${trimmed}px`;
+    if (/^\d+(?:\.\d+)?(?:px|em|rem|vh|vw|vmin|vmax|%)$/i.test(trimmed)) return trimmed;
+    return null;
   }
 
   // Inline relative image references (e.g. `./img.png`) for a plain Markdown file
@@ -1863,6 +2235,7 @@ export class AppComponent implements OnDestroy {
       }
 
       // In-memory packs (no real path on disk) shouldn't pollute the recent list.
+      window.mdzipStudio?.setCurrentDocumentPath?.(filePath);
       if (recordRecent) {
         const recentKey = filePath ?? name;
         this.storageService.addRecentFile(recentKey);
@@ -1918,6 +2291,15 @@ export class AppComponent implements OnDestroy {
           }
         : archive
     );
+  }
+
+  private directoryName(filePath: string | null | undefined): string | undefined {
+    if (!filePath) return undefined;
+    const trimmed = filePath.replace(/[\\/]+$/, '');
+    const index = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+    if (index < 0) return undefined;
+    if (index === 0) return trimmed.slice(0, 1);
+    return trimmed.slice(0, index);
   }
 
   async saveArchive(saveAs = false): Promise<void> {
@@ -1984,6 +2366,7 @@ export class AppComponent implements OnDestroy {
         try {
           result = await window.mdzipStudio.saveDocument({
             filePath: archive.path,
+            defaultDirectory: this.directoryName(archive.path ?? this.currentMarkdownPath),
             defaultName,
             bytes: Array.from(bytes),
             mdzBytes: mdzBytes ? Array.from(mdzBytes) : undefined,
@@ -2031,6 +2414,7 @@ export class AppComponent implements OnDestroy {
       try {
         result = await window.mdzipStudio.saveDocument({
           filePath: archive.path,
+          defaultDirectory: this.directoryName(archive.path ?? this.currentMarkdownPath),
           defaultName,
           bytes: Array.from(bytes),
           saveAs,
@@ -2165,6 +2549,93 @@ export class AppComponent implements OnDestroy {
     path = path.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
     if (!path || path.split('/').some((segment) => segment === '..')) return null;
     return path;
+  }
+
+  private resolveArchiveAssetRef(ref: string, baseDir: string): string | null {
+    let path = ref.trim().split(/[?#]/)[0];
+    if (!path) return null;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(path)) return null;
+    try { path = decodeURIComponent(path); } catch { /* use as-is */ }
+    path = path.replace(/\\/g, '/');
+
+    const source = path.startsWith('/') ? path.slice(1) : `${baseDir}${path}`;
+    const out: string[] = [];
+    for (const segment of source.split('/')) {
+      if (!segment || segment === '.') continue;
+      if (segment === '..') {
+        if (out.length === 0) return null;
+        out.pop();
+      } else {
+        out.push(segment);
+      }
+    }
+    return out.length > 0 ? out.join('/') : null;
+  }
+
+  private correctWorkspaceOrphansForHtmlImages(snapshot: MdzipWorkspaceSnapshot): void {
+    if (snapshot.sourceFormat !== 'mdz') return;
+
+    const editor = this.workspaceEditor as unknown as {
+      view?: {
+        workspace?: {
+          liveOrphanedPaths?: string[] | null;
+        };
+        render?: () => void;
+      };
+    } | undefined;
+    const workspace = editor?.view?.workspace;
+    if (!workspace) return;
+
+    const existingOrphans = workspace.liveOrphanedPaths ?? snapshot.content.orphanedAssetPaths;
+    if (workspace.liveOrphanedPaths === null && existingOrphans.length === 0) return;
+
+    const baseDir = snapshot.currentPath.includes('/')
+      ? snapshot.currentPath.slice(0, snapshot.currentPath.lastIndexOf('/') + 1)
+      : '';
+    const refs = new Set<string>();
+
+    for (const ref of this.extractMarkdownImageRefs(snapshot.currentText)) {
+      const resolved = this.resolveArchiveAssetRef(ref, baseDir);
+      if (resolved) refs.add(resolved.toLowerCase());
+    }
+
+    const cover = (snapshot.workspace.manifest as { cover?: unknown } | null | undefined)?.cover;
+    if (typeof cover === 'string') {
+      const resolved = this.resolveArchiveAssetRef(cover, '');
+      if (resolved) refs.add(resolved.toLowerCase());
+    }
+
+    const nextOrphans = snapshot.content.paths
+      .filter((entry) => entry.isImage && !refs.has(entry.path.toLowerCase()))
+      .map((entry) => entry.path);
+    const currentKey = existingOrphans.map((path) => path.toLowerCase()).sort().join('\n');
+    const nextKey = nextOrphans.map((path) => path.toLowerCase()).sort().join('\n');
+    if (currentKey === nextKey) return;
+
+    // Host-side bridge until @mdzip/core-js/@mdzip/editor include raw HTML
+    // <img src> references in their orphan analysis. Keep this limited to the
+    // editor's already-active orphan state so normal navigation behavior stays
+    // unchanged.
+    workspace.liveOrphanedPaths = nextOrphans;
+    editor?.view?.render?.();
+  }
+
+  private applyStudioHtmlTagHighlightToEditor(): void {
+    const editor = this.workspaceEditor as unknown as {
+      view?: { cmEditor?: EditorView };
+    } | undefined;
+    const cmEditor = editor?.view?.cmEditor;
+    if (!cmEditor || this.htmlTagHighlightAppliedEditors.has(cmEditor)) return;
+
+    cmEditor.dispatch({
+      effects: StateEffect.appendConfig.of(studioHtmlTagMarkerHighlight),
+    });
+    this.htmlTagHighlightAppliedEditors.add(cmEditor);
+  }
+
+  private scheduleStudioHtmlTagHighlight(): void {
+    this.applyStudioHtmlTagHighlightToEditor();
+    requestAnimationFrame(() => this.applyStudioHtmlTagHighlightToEditor());
   }
 
   private dataUriToBytes(dataUri: string): Uint8Array | null {
@@ -2676,8 +3147,10 @@ export class AppComponent implements OnDestroy {
 
   onWorkspaceChanged(event: MdzipWorkspaceChange): void {
     this.clearWorkspaceLoad();
+    this.scheduleStudioHtmlTagHighlight();
     this.latestWorkspaceBytes.set(event.bytes);
     this.latestWorkspaceSnapshot.set(event.snapshot);
+    this.correctWorkspaceOrphansForHtmlImages(event.snapshot);
     // (changed) fires on load and on structural edits with an authoritative
     // snapshot, so keep isDirty in sync here too. (dirtyChanged only fires on
     // transitions, so on a clean load it wouldn't clear a stale value left over
@@ -2693,6 +3166,10 @@ export class AppComponent implements OnDestroy {
     }
     const displayName = this.documentStatusLabel(event.snapshot.currentPath);
     this.statusMessage.set(event.snapshot.dirty ? `Editing ${displayName}` : `Viewing ${displayName}`);
+  }
+
+  onWorkspacePreviewRendered(snapshot: MdzipWorkspaceSnapshot): void {
+    this.correctWorkspaceOrphansForHtmlImages(snapshot);
   }
 
   // Status-bar label for the open document. For Markdown it's "<file>.md"; for
@@ -2714,6 +3191,7 @@ export class AppComponent implements OnDestroy {
   // is tracked via the dedicated (dirtyChanged) signal instead. This is the
   // single source of truth for the Save button emphasis and the discard guard.
   onWorkspaceDirtyChanged(snapshot: MdzipWorkspaceSnapshot): void {
+    this.scheduleStudioHtmlTagHighlight();
     this.isDirty.set(snapshot.dirty);
   }
 

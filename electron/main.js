@@ -132,10 +132,12 @@ async function isPathReadOnly(filePath) {
   }
 }
 
-async function readDocument(filePath) {
+async function readDocument(filePath, options = {}) {
   const resolvedPath = path.resolve(filePath);
   const bytes = await fs.readFile(resolvedPath);
-  currentDocumentPath = resolvedPath;
+  if (options.activate !== false) {
+    currentDocumentPath = resolvedPath;
+  }
   return {
     canceled: false,
     filePath: resolvedPath,
@@ -249,6 +251,44 @@ function resolveInsidePackFolder(rel) {
   const relCheck = path.relative(lastPackFolder, abs);
   if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
     throw new Error(`Refusing to read outside the selected folder: "${rel}".`);
+  }
+  return abs;
+}
+
+function safeUnpackFolderName(name) {
+  const stem = path.basename(String(name || 'unpacked-mdzip'), path.extname(String(name || '')));
+  const safe = stem
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/g, '');
+  return safe || 'unpacked-mdzip';
+}
+
+async function uniqueChildFolder(parentFolder, requestedName) {
+  const baseName = safeUnpackFolderName(requestedName);
+  let candidate = path.join(parentFolder, baseName);
+  let suffix = 2;
+  while (true) {
+    try {
+      await fs.access(candidate);
+      candidate = path.join(parentFolder, `${baseName}-${suffix}`);
+      suffix += 1;
+    } catch {
+      return candidate;
+    }
+  }
+}
+
+function resolveInsideUnpackFolder(root, rel) {
+  const normalized = String(rel ?? '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!normalized || normalized.split('/').some((part) => !part || part === '.' || part === '..')) {
+    throw new Error(`Refusing to write invalid archive path: "${rel}".`);
+  }
+  const abs = path.resolve(root, normalized);
+  const relCheck = path.relative(root, abs);
+  if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
+    throw new Error(`Refusing to write outside the destination folder: "${rel}".`);
   }
   return abs;
 }
@@ -446,10 +486,20 @@ ipcMain.on('mdzip:set-recent-files', (_event, payload) => {
 
 ipcMain.on('mdzip:set-document-open', (_event, open) => {
   const next = Boolean(open);
+  if (!next) {
+    currentDocumentPath = null;
+  }
   if (next === documentOpen) return;
   documentOpen = next;
   // Rebuild the menu so the document-only items reflect the new state.
   createMenu();
+});
+
+ipcMain.on('mdzip:set-current-document-path', (_event, payload) => {
+  const filePath = typeof payload?.filePath === 'string' && payload.filePath
+    ? payload.filePath
+    : null;
+  currentDocumentPath = filePath ? path.resolve(filePath) : null;
 });
 
 ipcMain.handle('mdzip:take-pending-open-document', async () => {
@@ -458,16 +508,26 @@ ipcMain.handle('mdzip:take-pending-open-document', async () => {
   if (!filePath) {
     return { canceled: true };
   }
-  return readDocument(filePath);
+  // Do not activate the pending path here. Studio may still have a dirty
+  // document open and can cancel the OS-level open request. Activating before
+  // the renderer accepts the replacement breaks document-relative image reads
+  // because mdzip:read-markdown-asset only serves assets for currentDocumentPath.
+  return readDocument(filePath, { activate: false });
 });
 
 ipcMain.handle('mdzip:save-document', async (_event, payload) => {
   let filePath = payload.filePath;
 
   if (payload.saveAs || !filePath) {
-    const defaultPath = payload.mdzBytes
+    const defaultName = payload.mdzBytes
       ? payload.defaultName.replace(/\.md$/i, '')
       : payload.defaultName;
+    const defaultDirectory = typeof payload.defaultDirectory === 'string' && payload.defaultDirectory
+      ? payload.defaultDirectory
+      : null;
+    const defaultPath = defaultDirectory
+      ? path.join(defaultDirectory, defaultName)
+      : defaultName;
     const result = await dialog.showSaveDialog(mainWindow, {
       title: 'Save Document',
       defaultPath,
@@ -560,6 +620,64 @@ ipcMain.handle('mdzip:read-folder', async (_event, payload) => {
     if (i % 8 === 0 || i === list.length - 1) emit(i + 1, bytesDone);
   }
   return { files };
+});
+
+ipcMain.handle('mdzip:pick-mdz-for-unpack', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Unpack MDZip Archive',
+    properties: ['openFile'],
+    filters: [
+      { name: 'MDZip Documents', extensions: ['mdz'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return { canceled: true };
+  }
+
+  const filePath = path.resolve(result.filePaths[0]);
+  const bytes = await fs.readFile(filePath);
+  return {
+    canceled: false,
+    filePath,
+    name: path.basename(filePath),
+    bytes: new Uint8Array(bytes),
+  };
+});
+
+ipcMain.handle('mdzip:write-unpacked-folder', async (_event, payload) => {
+  const entries = Array.isArray(payload?.entries) ? payload.entries : [];
+  if (!entries.length) {
+    throw new Error('The archive has no files to unpack.');
+  }
+
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose Destination Folder',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return { canceled: true };
+  }
+
+  const parentFolder = path.resolve(result.filePaths[0]);
+  const destinationFolder = await uniqueChildFolder(parentFolder, payload?.defaultFolderName ?? 'unpacked-mdzip');
+  await fs.mkdir(destinationFolder, { recursive: true });
+
+  let count = 0;
+  for (const entry of entries) {
+    const destinationPath = resolveInsideUnpackFolder(destinationFolder, entry?.path);
+    await fs.mkdir(path.dirname(destinationPath), { recursive: true });
+    await fs.writeFile(destinationPath, Buffer.from(entry?.bytes ?? []));
+    count += 1;
+  }
+
+  return {
+    canceled: false,
+    folderPath: destinationFolder,
+    fileCount: count,
+  };
 });
 
 ipcMain.handle('mdzip:get-md-default-status', async () => {
@@ -713,6 +831,7 @@ const createMenu = () => {
     { label: 'New Document', accelerator: 'CmdOrCtrl+N', click: () => dispatchAppEvent('mdzip-studio:new-archive') },
     { label: 'Open Document...', accelerator: 'CmdOrCtrl+O', click: () => dispatchAppEvent('mdzip-studio:open-archive') },
     { label: 'Pack Folder to .mdz...', click: () => dispatchAppEvent('mdzip-studio:pack-folder') },
+    { label: 'Unpack .mdz to Folder...', click: () => dispatchAppEvent('mdzip-studio:unpack-mdz') },
   ];
   if (documentOpen) {
     fileSubmenu.push(
@@ -749,7 +868,14 @@ const createMenu = () => {
     {
       label: 'View',
       submenu: [
-        { label: 'Reload', accelerator: 'CmdOrCtrl+R' },
+        { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => dispatchAppEvent('mdzip-studio:reload-document') },
+        {
+          label: 'Line Numbers',
+          type: 'checkbox',
+          checked: true,
+          click: () => dispatchAppEvent('mdzip-studio:toggle-line-numbers'),
+        },
+        { type: 'separator' },
         {
           label: 'Toggle DevTools',
           accelerator: 'CmdOrCtrl+Shift+I',
@@ -766,6 +892,9 @@ const createMenu = () => {
               { type: 'separator' },
             ]
           : []),
+        { label: 'Known Issues', click: () => dispatchAppEvent('mdzip-studio:show-known-issues') },
+        { label: 'Change Log', click: () => dispatchAppEvent('mdzip-studio:show-changelog') },
+        { type: 'separator' },
         { label: 'Check for Updates...', click: () => checkForUpdates() },
         { type: 'separator' },
         { label: 'About MDZip Studio', click: () => dispatchAppEvent('mdzip-studio:show-about') },

@@ -9,6 +9,14 @@ MDZip Studio is a reference desktop application for the MDZip ecosystem, built w
 - [MDZip Organization](https://github.com/mdzip-project)
 - [MDZip Website](https://mdzip.org)
 
+## Repository Boundaries
+
+Do not modify sibling repositories (for example `mdzip-editor`, `mdzip-core-js`,
+or `mdzip-mark`) unless the user explicitly asks for cross-repository edits.
+When a requested change belongs in another MDZip repo, the normal procedure is
+to file a GitHub issue or enhancement request in that repo and keep Studio
+changes limited to this repository.
+
 **Design documents** — read these before working on features or UI:
 - [design/MDZip Studio Plan.md](design/MDZip%20Studio%20Plan.md) — goals, scope, and phased roadmap
 - `design/UX.mdz` — UX designs and interaction specs (open in MDZip Studio to view)

@@ -16,8 +16,11 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
   // Tell the main process whether a document is open so it can enable/disable
   // document-only menu items (Save, Save As, Close, Show in File Manager).
   setDocumentOpen: (open) => ipcRenderer.send('mdzip:set-document-open', open),
+  setCurrentDocumentPath: (filePath) => ipcRenderer.send('mdzip:set-current-document-path', { filePath }),
   pickFolder: () => ipcRenderer.invoke('mdzip:pick-folder'),
   readFolder: (payload) => ipcRenderer.invoke('mdzip:read-folder', payload),
+  pickMdzForUnpack: () => ipcRenderer.invoke('mdzip:pick-mdz-for-unpack'),
+  writeUnpackedFolder: (payload) => ipcRenderer.invoke('mdzip:write-unpacked-folder', payload),
   onPackFolderProgress: (callback) => {
     const listener = (_event, data) => callback(data);
     ipcRenderer.on('mdzip:pack-folder-progress', listener);

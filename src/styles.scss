@@ -40,25 +40,137 @@ button {
   background: #999;
 }
 
-/* -------------------------------------------------------------------------
-   TEMP: disable the @mdzip/editor preview image-hydration animation.
-
-   The live preview re-hydrates on every keystroke, so the slot's 0fr->1fr
-   slide and the loading pulse replay continuously while editing — images
-   blink out/in and the text below jumps around. This forces images to snap
-   open with no animation (the same end state the library uses under
-   prefers-reduced-motion), which is fine for live editing but also removes
-   the intended effect on first load.
-
-   Tracked upstream: https://github.com/mdzip-project/mdzip-editor/issues/19
-   REVERT THIS BLOCK the next time @mdzip/editor is updated (was 1.3.11) once
-   the upstream fix lands, so first-load gets its animation back.
-   ------------------------------------------------------------------------- */
-.mdzip-root .preview-content .mdzip-image-slot.mdzip-image-slot {
-  grid-template-rows: 1fr;
-  transition: none;
+/* Tighten the @mdzip/editor reading/writing surface inside Studio.
+   The editor package injects its own runtime CSS, so these overrides need
+   !important to reliably beat the default content padding:
+   - CodeMirror editor default: 36px 48px
+   - Markdown preview default: 36px 32px 48px */
+.mdzip-root .cm-editor .cm-content {
+  padding: 16px 20px !important;
 }
 
-.mdzip-root .preview-content img.mdzip-image-loading.mdzip-image-loading {
-  animation: none;
+.mdzip-root .preview-content {
+  padding: 16px 20px 24px !important;
+}
+
+/* Studio table polish. The editor default uses max-content tables with a wide
+   last column, which can push ordinary Markdown tables into horizontal scroll.
+   Keep tables full-width and let the lead prose column wrap; column alignment
+   still comes from Markdown table syntax (`:---`, `---:`, `:---:`). */
+.mdzip-root .preview-content table {
+  width: 100% !important;
+  max-width: 100% !important;
+  table-layout: auto !important;
+}
+
+.mdzip-root .preview-content th,
+.mdzip-root .preview-content td {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.mdzip-root .preview-content th[align="left"],
+.mdzip-root .preview-content td[align="left"] {
+  text-align: left;
+}
+
+.mdzip-root .preview-content th[align="center"],
+.mdzip-root .preview-content td[align="center"] {
+  text-align: center;
+}
+
+.mdzip-root .preview-content th[align="right"],
+.mdzip-root .preview-content td[align="right"] {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.mdzip-root .preview-content th:first-child,
+.mdzip-root .preview-content td:first-child {
+  overflow-wrap: anywhere;
+}
+
+.mdzip-root .preview-content td:last-child {
+  min-width: 0 !important;
+  max-width: none !important;
+}
+
+/* Compact the editor chrome. @mdzip/editor uses two toolbar icon classes:
+   - .toggle-icon for the main view/save/zoom/theme controls
+   - .format-icon for markdown formatting controls
+   Keep both here so future package updates don't leave one toolbar unchanged. */
+.mdzip-root .icon-toggle {
+  width: 30px !important;
+  min-width: 30px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+}
+
+.mdzip-root .toggle-icon {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+.mdzip-root .toolbar-buttons {
+  gap: 2px !important;
+  padding: 2px !important;
+}
+
+.mdzip-root .view-mode-toggle,
+.mdzip-root .nav-toggle {
+  width: 26px !important;
+  min-width: 26px !important;
+  height: 26px !important;
+  min-height: 26px !important;
+}
+
+.mdzip-root .view-mode-toggle .toggle-icon {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+.mdzip-root .edit-toolbar {
+  gap: 5px !important;
+  min-height: 26px !important;
+}
+
+.mdzip-root .edit-toolbar-group {
+  gap: 1px !important;
+}
+
+.mdzip-root .edit-toolbar button {
+  width: 24px !important;
+  min-width: 24px !important;
+  height: 24px !important;
+  min-height: 24px !important;
+}
+
+.mdzip-root .edit-toolbar .format-menu-toggle {
+  width: 30px !important;
+  min-width: 30px !important;
+}
+
+/* @mdzip/editor 1.3.12 includes the Line break button in its toolbar template,
+   and Studio explicitly enables formatting.lineBreak in app.component.ts.
+   Keep this one-button display guard here because a live Studio window was
+   still rendering the button with the hidden attribute even though the same
+   policy shows it in an isolated editor runtime check. The click handler lives
+   on the editor toolbar via data-format="line-break"; this only prevents the
+   host UI from silently losing an enabled control. */
+.mdzip-root .edit-toolbar button[data-format-control="lineBreak"] {
+  display: inline-flex !important;
+}
+
+.mdzip-root .format-icon {
+  width: 14px !important;
+  height: 14px !important;
+}
+
+.mdzip-root .format-chevron {
+  width: 9px !important;
+  height: 9px !important;
+}
+
+.mdzip-root .edit-toolbar-divider {
+  height: 18px !important;
 }

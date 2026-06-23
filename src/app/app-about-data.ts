@@ -12,19 +12,19 @@ export const APP_LICENSE_NAME = "Apache-2.0";
 export const FIRST_PARTY_LIBRARIES: LibraryInfo[] = [
   {
     "name": "@mdzip/core-js",
-    "version": "1.3.1",
+    "version": "1.3.2",
     "license": "Apache-2.0",
     "homepage": "https://www.npmjs.com/package/@mdzip/core-js"
   },
   {
     "name": "@mdzip/editor",
-    "version": "1.3.11",
+    "version": "1.3.12",
     "license": "Apache-2.0",
     "homepage": "https://mdzip.org"
   },
   {
     "name": "@mdzip/editor-ng",
-    "version": "1.3.11",
+    "version": "1.3.12",
     "license": "Apache-2.0",
     "homepage": "https://mdzip.org"
   }
@@ -84,6 +84,18 @@ export const OPEN_SOURCE_LIBRARIES: LibraryInfo[] = [
     "version": "21.2.14",
     "license": "MIT",
     "homepage": "https://github.com/angular/angular/tree/main/packages/router"
+  },
+  {
+    "name": "@codemirror/state",
+    "version": "6.6.0",
+    "license": "MIT",
+    "homepage": "https://www.npmjs.com/package/@codemirror/state"
+  },
+  {
+    "name": "@codemirror/view",
+    "version": "6.43.0",
+    "license": "MIT",
+    "homepage": "https://www.npmjs.com/package/@codemirror/view"
   },
   {
     "name": "@ng-icons/core",

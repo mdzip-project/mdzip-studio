@@ -25,7 +25,15 @@
             "browser": "src/main.ts",
             "polyfills": ["zone.js"],
             "tsConfig": "tsconfig.app.json",
-            "assets": ["src/favicon.ico", "src/assets"],
+            "assets": [
+              "src/favicon.ico",
+              "src/assets",
+              {
+                "glob": "CHANGELOG.md",
+                "input": ".",
+                "output": "assets/help"
+              }
+            ],
             "styles": ["src/styles.scss"],
             "scripts": [],
             "allowedCommonJsDependencies": ["isomorphic-dompurify", "dayjs", "cytoscape-cose-bilkent", "cytoscape-fcose", "@braintree/sanitize-url"]

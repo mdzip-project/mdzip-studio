@@ -1316,6 +1316,39 @@ p-button {
   gap: 12px;
 }
 
+/* ─── Help document dialog ─── */
+
+.help-doc-dialog {
+  display: flex;
+  flex-direction: column;
+  min-height: min(70vh, 620px);
+  background: #ffffff;
+}
+
+.help-doc-status {
+  min-height: 28px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #e3e7ec;
+  font-size: 12px;
+  color: #68717d;
+}
+
+.help-doc-status.error {
+  color: #b42318;
+}
+
+.help-doc-viewer {
+  flex: 1;
+  min-height: 0;
+  height: min(68vh, 620px);
+  overflow: hidden;
+}
+
+.help-doc-viewer mdzip-workspace {
+  display: block;
+  height: 100%;
+}
+
 .license-text {
   font-family: 'Consolas', 'Menlo', monospace;
   font-size: 11px;
@@ -1461,5 +1494,8 @@ p-button {
   .library-table th { color: #8c8c8c; border-bottom-color: #3c3c3c; }
   .library-table td { color: #b8bcc2; border-bottom-color: #33363d; }
   .debug-table td:first-child { color: #d4d4d4; }
+  .help-doc-dialog { background: #1e1e1e; }
+  .help-doc-status { color: #8c8c8c; border-bottom-color: #3c3c3c; }
+  .help-doc-status.error { color: #f08a8a; }
   .license-text { background: #252526; border-color: #3c3c3c; color: #b8bcc2; }
 }

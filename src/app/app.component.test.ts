@@ -9,6 +9,16 @@ import { ArchiveService } from './core/services/archive.service';
 import { StorageService } from './core/services/storage.service';
 import { ValidationService } from './core/services/validation.service';
 
+const mockMermaidInitialize = vi.hoisted(() => vi.fn());
+const mockMermaidRender = vi.hoisted(() => vi.fn());
+
+vi.mock('mermaid', () => ({
+  default: {
+    initialize: mockMermaidInitialize,
+    render: mockMermaidRender,
+  },
+}));
+
 // AppComponent is tested by directly constructing the class inside an injection
 // context rather than via TestBed.createComponent, which requires the Angular
 // compiler to be present (only available with @analogjs/vitest-angular).
@@ -17,6 +27,8 @@ describe('AppComponent', () => {
   let component: AppComponent;
 
   beforeEach(() => {
+    mockMermaidInitialize.mockClear();
+    mockMermaidRender.mockReset();
     TestBed.configureTestingModule({});
     const injector = TestBed.inject(Injector);
 
@@ -32,6 +44,7 @@ describe('AppComponent', () => {
 
   afterEach(() => {
     component.ngOnDestroy();
+    vi.unstubAllGlobals();
   });
 
   it('should create', () => {
@@ -58,6 +71,31 @@ describe('AppComponent', () => {
     expect(component.documents().length).toBe(1);
   });
 
+  it('suppresses Mermaid library error DOM while preserving Studio preview errors', async () => {
+    mockMermaidRender.mockRejectedValueOnce(new Error('bad diagram'));
+    const staleError = document.createElement('div');
+    staleError.id = 'dmdzip-mermaid-stale';
+    staleError.innerHTML = '<svg id="mdzip-mermaid-stale"><path class="error-icon"></path></svg>';
+    document.body.append(staleError);
+
+    const renderer = new MdzipRenderingService(undefined, component.markdownExtensions);
+    const html = await renderer.renderMarkdown('```mermaid\nflowchart TD\n  A --\n```', {
+      currentPath: 'index.md',
+      sourceFormat: 'markdown',
+      colorScheme: 'light',
+      mode: 'editable',
+      manifest: null,
+      signal: new AbortController().signal,
+    });
+
+    expect(mockMermaidInitialize).toHaveBeenCalledWith(expect.objectContaining({
+      suppressErrorRendering: true,
+    }));
+    expect(html).toContain('mdzip-mermaid-error');
+    expect(html).toContain('Mermaid diagram error: bad diagram');
+    expect(document.getElementById('dmdzip-mermaid-stale')).toBeNull();
+  });
+
   it('should open About dialog when mdzip-studio:show-about is dispatched', () => {
     expect(component.aboutOpen()).toBe(false);
 
@@ -72,6 +110,25 @@ describe('AppComponent', () => {
 
     component.aboutOpen.set(false);
     expect(component.aboutOpen()).toBe(false);
+  });
+
+  it('opens help documents from the bundled copy when remote fetch fails', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValueOnce({ ok: true, text: async () => '# Known Issues\n\nBundled copy' });
+    vi.stubGlobal('fetch', fetch);
+
+    await component.openHelpDocument('known-issues');
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      'https://raw.githubusercontent.com/mdzip-project/mdzip-studio/main/src/assets/help/known-issues.md',
+      { cache: 'no-store' }
+    );
+    expect(fetch).toHaveBeenNthCalledWith(2, 'assets/help/known-issues.md', { cache: 'no-store' });
+    expect(component.helpDialogOpen()).toBe(true);
+    expect(component.helpDialogStatus()).toBe('Showing bundled copy');
+    expect(new TextDecoder().decode(component.helpDialogBytes() ?? new Uint8Array())).toContain('Bundled copy');
   });
 
   it('routes manifest editor changes into Studio archive state', () => {
@@ -217,6 +274,35 @@ describe('AppComponent', () => {
       expect(html).toContain('mdzip-studio-src="./images/patio.png"');
       expect(html).toContain('alt="patio"');
       expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:studio/patio');
+
+      const rerenderedHtml = await renderer.renderMarkdown('![patio](./images/patio.png)\n\nTyping...', {
+        currentPath: 'index.md',
+        sourceFormat: 'markdown',
+        colorScheme: 'light',
+        mode: 'editable',
+        manifest: null,
+        signal: new AbortController().signal,
+      });
+
+      expect(readMarkdownAsset).toHaveBeenCalledOnce();
+      expect(createObjectUrl).toHaveBeenCalledOnce();
+      expect(rerenderedHtml).toContain('mdzip-studio-src="./images/patio.png"');
+
+      const rerenderedContainer = document.createElement('div');
+      rerenderedContainer.innerHTML = rerenderedHtml;
+      expect(rerenderedContainer.querySelector('img')?.getAttribute('src')).toBeNull();
+      await relativeImages?.mount?.(rerenderedContainer, {
+        currentPath: 'index.md',
+        sourceFormat: 'markdown',
+        colorScheme: 'light',
+        mode: 'editable',
+        manifest: null,
+        signal: new AbortController().signal,
+      });
+
+      expect(readMarkdownAsset).toHaveBeenCalledOnce();
+      expect(createObjectUrl).toHaveBeenCalledOnce();
+      expect(rerenderedContainer.querySelector('img')?.getAttribute('src')).toBe('blob:studio/patio');
     } finally {
       window.mdzipStudio = originalBridge;
       Object.defineProperty(URL, 'createObjectURL', {
@@ -227,6 +313,84 @@ describe('AppComponent', () => {
         configurable: true,
         value: originalRevokeObjectUrl,
       });
+    }
+  });
+
+  it('honors raw HTML image height and alignment attributes in preview', async () => {
+    const imageLayout = component.markdownExtensions.find((extension) =>
+      extension.name === 'studio-html-image-layout'
+    );
+    expect(imageLayout).toBeTruthy();
+
+    const container = document.createElement('div');
+    container.innerHTML = '<img src="images/a.png" alt="A" height="300" align="right">';
+
+    await imageLayout?.mount?.(container, {
+      currentPath: 'index.md',
+      sourceFormat: 'mdz',
+      colorScheme: 'light',
+      mode: 'editable',
+      manifest: null,
+      signal: new AbortController().signal,
+    });
+
+    const img = container.querySelector('img');
+    expect(img?.style.height).toBe('300px');
+    expect(img?.style.width).toBe('auto');
+    expect(img?.style.cssFloat).toBe('right');
+  });
+
+  it('unpacks an MDZip archive into folder entries with relative paths intact', async () => {
+    const built = await MdzPackagerCore.buildArchive(
+      [
+        { path: 'index.md', text: '# Demo\n\n![Photo](images/photo.png)\n' },
+        { path: 'images/photo.png', data: new Uint8Array([1, 2, 3]) },
+      ],
+      'demo',
+      {
+        createIndex: false,
+        mapFiles: false,
+        filters: ['**/*'],
+        title: 'Demo',
+        mode: 'document',
+        entryPoint: 'index.md',
+      }
+    );
+    const archiveBytes = new Uint8Array(await built.blob.arrayBuffer());
+    let writePayload: {
+      defaultFolderName: string;
+      entries: { path: string; bytes: number[] }[];
+    } | null = null;
+    const originalBridge = (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio;
+    (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = {
+      pickMdzForUnpack: vi.fn().mockResolvedValue({
+        canceled: false,
+        name: 'demo.mdz',
+        bytes: Array.from(archiveBytes),
+      }),
+      writeUnpackedFolder: vi.fn().mockImplementation(async (payload) => {
+        writePayload = payload;
+        return { canceled: false, folderPath: 'C:/docs/demo', fileCount: payload.entries.length };
+      }),
+      showInFolder: vi.fn().mockResolvedValue({ ok: true }),
+    };
+
+    try {
+      await component.unpackMdzToFolder();
+
+      expect(writePayload?.defaultFolderName).toBe('demo');
+      expect(writePayload?.entries.map((entry) => entry.path).sort()).toEqual([
+        'images/photo.png',
+        'index.md',
+        'manifest.json',
+      ]);
+      const markdown = new TextDecoder().decode(new Uint8Array(
+        writePayload?.entries.find((entry) => entry.path === 'index.md')?.bytes ?? []
+      ));
+      expect(markdown).toContain('![Photo](images/photo.png)');
+      expect(component.statusMessage()).toContain('Unpacked 3 files');
+    } finally {
+      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
     }
   });
 
@@ -276,6 +440,73 @@ describe('AppComponent', () => {
 
     component.onWorkspaceDirtyChanged({ dirty: false } as never);
     expect(component.isDirty()).toBe(false);
+  });
+
+  it('toggles line numbers through workspace controls', () => {
+    component.isDesktopShell.set(true);
+
+    expect(component.showLineNumbers()).toBe(true);
+    expect(component.workspaceControls()).toMatchObject({
+      lineNumbers: true,
+      formatting: { lineBreak: true },
+    });
+
+    component.toggleLineNumbers();
+
+    expect(component.showLineNumbers()).toBe(false);
+    expect(component.workspaceControls()).toMatchObject({
+      lineNumbers: false,
+      formatting: { lineBreak: true },
+    });
+  });
+
+  it('does not treat raw HTML image references as orphaned nav assets', () => {
+    const render = vi.fn();
+    const workspace = {
+      liveOrphanedPaths: ['images/logo.svg', 'images/unused.png'],
+    };
+    Object.defineProperty(component, 'workspaceEditor', {
+      configurable: true,
+      value: { view: { workspace, render } },
+    });
+
+    (component as unknown as {
+      correctWorkspaceOrphansForHtmlImages(snapshot: unknown): void;
+    }).correctWorkspaceOrphansForHtmlImages({
+      sourceFormat: 'mdz',
+      currentPath: 'index.md',
+      currentText: '<img src="images/logo.svg" align="right" width="180" alt="Logo image">',
+      content: {
+        orphanedAssetPaths: ['images/logo.svg', 'images/unused.png'],
+        paths: [
+          { path: 'index.md', isImage: false },
+          { path: 'images/logo.svg', isImage: true },
+          { path: 'images/unused.png', isImage: true },
+        ],
+      },
+      workspace: { manifest: {} },
+    });
+
+    expect(workspace.liveOrphanedPaths).toEqual(['images/unused.png']);
+    expect(render).toHaveBeenCalledOnce();
+  });
+
+  it('adds Studio HTML tag highlighting to the mounted editor once', () => {
+    const cmEditor = { dispatch: vi.fn() };
+    Object.defineProperty(component, 'workspaceEditor', {
+      configurable: true,
+      value: { view: { cmEditor } },
+    });
+
+    (component as unknown as {
+      applyStudioHtmlTagHighlightToEditor(): void;
+    }).applyStudioHtmlTagHighlightToEditor();
+    (component as unknown as {
+      applyStudioHtmlTagHighlightToEditor(): void;
+    }).applyStudioHtmlTagHighlightToEditor();
+
+    expect(cmEditor.dispatch).toHaveBeenCalledOnce();
+    expect(cmEditor.dispatch.mock.calls[0]?.[0]).toHaveProperty('effects');
   });
 
   it('clears a stale dirty flag when a document loads (onWorkspaceChanged)', () => {
@@ -404,5 +635,126 @@ describe('AppComponent', () => {
 
     expect(component.needsSave()).toBe(true);
     expect(component.currentArchive()).not.toBeNull(); // close did not proceed
+  });
+
+  it('prompts before opening an OS-requested document over dirty work', async () => {
+    component.isDesktopShell.set(true);
+    openTestArchive('C:/docs/current.mdz');
+    component.isDirty.set(true);
+    expect(component.needsSave()).toBe(true);
+
+    const setCurrentDocumentPath = vi.fn();
+    const originalBridge = (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio;
+    (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = {
+      setCurrentDocumentPath,
+      takePendingOpenDocument: vi.fn().mockResolvedValue({
+        canceled: false,
+        bytes: Array.from(new TextEncoder().encode('# Next\n')),
+        name: 'Next.md',
+        filePath: 'C:/docs/Next.md',
+        readOnly: false,
+      }),
+    };
+
+    try {
+      const opened = await (component as unknown as {
+        requestPendingElectronDocumentOpen(): Promise<boolean>;
+      }).requestPendingElectronDocumentOpen();
+
+      expect(opened).toBe(false);
+      expect(component.unsavedDialogOpen()).toBe(true);
+      expect(component.currentArchive()?.name).toBe('Untitled');
+      expect(component.currentArchive()?.path).toBe('C:/docs/current.mdz');
+      expect(setCurrentDocumentPath).not.toHaveBeenCalled();
+
+      component.discardUnsavedThenContinue();
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      );
+
+      expect(component.unsavedDialogOpen()).toBe(false);
+      expect(component.currentArchive()?.name).toBe('Next');
+      expect(component.currentArchive()?.path).toBe('C:/docs/Next.md');
+      expect(setCurrentDocumentPath).toHaveBeenCalledWith('C:/docs/Next.md');
+    } finally {
+      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
+    }
+  });
+
+  it('reloads the current file through Studio instead of closing the workspace', async () => {
+    component.isDesktopShell.set(true);
+    openTestArchive('C:/docs/current.md');
+    component.isDirty.set(false);
+
+    const originalBridge = (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio;
+    const openDocumentByPath = vi.fn().mockResolvedValue({
+      canceled: false,
+      bytes: Array.from(new TextEncoder().encode('# Reloaded\n')),
+      name: 'current.md',
+      filePath: 'C:/docs/current.md',
+      readOnly: false,
+    });
+    const setCurrentDocumentPath = vi.fn();
+    (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = {
+      openDocumentByPath,
+      setCurrentDocumentPath,
+    };
+
+    try {
+      component.reloadDocumentFromDisk();
+
+      expect(openDocumentByPath).toHaveBeenCalledWith('C:/docs/current.md');
+      await vi.waitFor(() => {
+        expect(component.currentArchive()?.name).toBe('current');
+        expect(component.currentArchive()?.path).toBe('C:/docs/current.md');
+        expect(setCurrentDocumentPath).toHaveBeenCalledWith('C:/docs/current.md');
+      });
+    } finally {
+      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
+    }
+  });
+
+  it('suggests the original Markdown folder when saving a converted MDZip', async () => {
+    let payload: unknown;
+    const originalBridge = (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio;
+    (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = {
+      saveDocument: vi.fn().mockImplementation(async (nextPayload: unknown) => {
+        payload = nextPayload;
+        return { canceled: true };
+      }),
+    };
+
+    try {
+      await (component as unknown as {
+        openDocumentBytes(
+          bytes: Uint8Array,
+          name: string,
+          filePath?: string,
+          readOnly?: boolean,
+          recordRecent?: boolean,
+        ): Promise<void>;
+      }).openDocumentBytes(
+        new TextEncoder().encode('# Patio\n'),
+        'Patio.md',
+        'C:/jobs/patio/Patio.md',
+        false,
+        false,
+      );
+
+      TestBed.inject(ArchiveService).currentArchive.update((archive) =>
+        archive ? { ...archive, path: undefined } : archive
+      );
+      component.sourceFormat.set('mdz');
+
+      await component.saveArchive();
+
+      expect(payload).toMatchObject({
+        defaultDirectory: 'C:/jobs/patio',
+        defaultName: 'patio.mdz',
+        saveAs: false,
+      });
+    } finally {
+      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
+    }
   });
 });

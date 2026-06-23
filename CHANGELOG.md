@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.20] - 2026-06-22
+
+### Added
+
+- Added **File -> Unpack .mdz to Folder...** in the desktop app. It writes an
+  archive into a normal folder using the archive-relative paths, so regular
+  Markdown editors can open the unpacked `.md` files with local image links
+  intact.
+- Added **Help -> Known Issues** and **Help -> Change Log** views inside the
+  app. The help viewer loads the current GitHub copy when available and falls
+  back to bundled files when offline.
+- Added a **View -> Line Numbers** toggle for the hosted editor.
+- Added a design note for a possible future standalone Markdown Hints effort:
+  portable Markdown comments carrying optional presentation hints, with MDZip
+  Studio as a possible early testbed.
+
+### Changed
+
+- Updated the embedded MDZip editor libraries to `@mdzip/editor` /
+  `@mdzip/editor-ng` 1.3.12.
+- Tightened Studio's table preview behavior so ordinary Markdown tables use the
+  available width, honor Markdown alignment markers, and avoid wrapping short
+  right-aligned values such as prices.
+- Raw HTML image layout in Studio preview now honors native `width`, `height`,
+  and `align` attributes directly, instead of depending on Studio-specific
+  source markup.
+
+### Fixed
+
+- Mermaid syntax errors no longer leave Mermaid's own large error SVGs stuck in
+  the app layout after the source is edited or removed.
+- Raw HTML image references such as `<img src="images/logo.svg">` are now
+  accounted for when Studio corrects the navigation pane's orphaned-asset
+  indicators.
+- Raw HTML tags in the source editor now get the same muted styling treatment
+  as existing `<br>` markers.
+- Save As for a converted Markdown document now suggests the original Markdown
+  folder instead of starting from a less helpful default location.
+- OS-requested document opens, reloads, and dirty-state prompts now handle
+  unsaved work more consistently.
+
 ## [1.3.19] - 2026-06-18
 
 ### Added
@@ -163,7 +204,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.19...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.20...HEAD
+[1.3.20]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.19...v1.3.20
 [1.3.19]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.18...v1.3.19
 [1.3.18]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.17...v1.3.18
 [1.3.17]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.16...v1.3.17
