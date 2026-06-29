@@ -1,70 +1,106 @@
-# Winget — publishing MDZip Studio (interactive, no PAT)
+# Winget — publish MDZip.Studio (pre-authored, interactive, no PAT)
 
-Publish MDZip Studio to `microsoft/winget-pkgs` as:
+Author the WinGet manifests **in this repo** under `winget/MDZip.Studio/<version>/`
+and submit the folder — no interactive wizard, no PAT or repo secret (only a
+GitHub browser sign-in during `wingetcreate submit`).
 
-```text
-MDZip.Studio   (moniker: mdzip-studio)
-```
-
-We publish **interactively** via WingetCreate's GitHub sign-in — no personal
-access token or repo secret is needed. First run opens a browser sign-in and
-caches the credential; later runs reuse it.
-
-> Studio's winget work is the tail end of the .NET 10 / packaging effort.
-> Full plan and rationale: [design/NET10 Migration and WinGet Publishing.md](design/NET10%20Migration%20and%20WinGet%20Publishing.md) (Phase 6).
+- **PackageIdentifier:** `MDZip.Studio`  **Moniker:** `mdzip-studio`
+- Installer is the NSIS setup `MDZip-Studio-Setup-<ver>.exe` (`InstallerType: nullsoft`).
+- Full plan/rationale: [design/NET10 Migration and WinGet Publishing.md](design/NET10%20Migration%20and%20WinGet%20Publishing.md) (Phase 6).
 
 ## Prereqs (must be true before submitting)
-- Run on **Windows** with `wingetcreate` installed (`winget install Microsoft.WingetCreate`).
-- A **published GitHub release** whose asset is the NSIS installer
-  `MDZip-Studio-Setup-<ver>.exe` (winget needs a public URL + the file to hash).
-- .NET 10 migration complete and **clean-VM verification passed** (design Phase 5)
-  — including the silent install (`/S /allusers /mdzipExplorerIntegration`).
+- A **published GitHub release** with the `MDZip-Studio-Setup-<ver>.exe` asset
+  (winget needs a public URL + the file to hash).
+- .NET 10 migration done and **clean-VM verification passed** (design Phase 5),
+  including the silent install `/S /allusers /mdzipExplorerIntegration`.
+- `wingetcreate` installed (`winget install Microsoft.WingetCreate`).
 
-## First publish (one time)
+## Author the manifests
 
-Studio's manifest is more than a single installer line, so generate, then
-hand-edit before submitting:
+Create `winget/MDZip.Studio/<ver>/` with the three files below, replacing
+`<ver>` and `<SHA256>` (compute: `(Get-FileHash MDZip-Studio-Setup-<ver>.exe -Algorithm SHA256).Hash`).
 
-```powershell
-# 1. Generate a draft from the installer URL (auto-computes SHA256, detects NSIS):
-wingetcreate new "https://github.com/mdzip-project/mdzip-studio/releases/download/v<ver>/MDZip-Studio-Setup-<ver>.exe"
-```
-When prompted: **PackageIdentifier** `MDZip.Studio`, **Moniker** `mdzip-studio`,
-**License** `Apache-2.0`, plus publisher / name / description.
-
-```powershell
-# 2. Edit the generated manifest to add TWO installer nodes (same URL + hash):
-#    - user scope    : Scope: user,    Silent: /S /currentuser            (app only)
-#    - machine scope : Scope: machine, Silent: /S /allusers /mdzipExplorerIntegration
-#                      ElevationRequirement: elevatesSelf
-#                      PackageDependencies: Microsoft.DotNet.DesktopRuntime.10
-#
-# 3. Validate, then sign in to GitHub and submit the PR:
-wingetcreate submit --prtitle "New package: MDZip.Studio v<ver>" <path-to-manifest-folder>
-```
-Declaring `Microsoft.DotNet.DesktopRuntime.10` as a dependency makes winget
-install the runtime first, so the installer's bundled download is skipped and
-sandboxed validation doesn't hit the network (design Phase 6).
-
-Wait for Microsoft's bots/maintainers to validate and merge. Then:
-```powershell
-winget install MDZip.Studio                 # user scope: app only
-winget install MDZip.Studio --scope machine # machine scope: + Explorer previewer
+`MDZip.Studio.installer.yaml` — one URL+hash, **two installer scopes**:
+```yaml
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
+PackageIdentifier: MDZip.Studio
+PackageVersion: <ver>
+InstallerType: nullsoft
+InstallerUrl: https://github.com/mdzip-project/mdzip-studio/releases/download/v<ver>/MDZip-Studio-Setup-<ver>.exe
+InstallerSha256: <SHA256>
+Installers:
+- Architecture: x64
+  Scope: user                     # default: app only, no Explorer previewer
+  InstallerSwitches:
+    Silent: /S /currentuser
+- Architecture: x64
+  Scope: machine                  # adds the Explorer preview handler (HKLM)
+  InstallerSwitches:
+    Silent: /S /allusers /mdzipExplorerIntegration
+  ElevationRequirement: elevatesSelf
+  Dependencies:
+    PackageDependencies:
+    - PackageIdentifier: Microsoft.DotNet.DesktopRuntime.10
+ManifestType: installer
+ManifestVersion: 1.12.0
 ```
 
-## Every release after that
+`MDZip.Studio.locale.en-US.yaml`:
+```yaml
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
+PackageIdentifier: MDZip.Studio
+PackageVersion: <ver>
+PackageLocale: en-US
+Publisher: MDZip Project
+PublisherUrl: https://github.com/mdzip-project
+PublisherSupportUrl: https://github.com/mdzip-project/mdzip-studio/issues
+Author: MDZip Project
+PackageName: MDZip Studio
+PackageUrl: https://mdzip.org
+License: Apache-2.0
+LicenseUrl: https://github.com/mdzip-project/mdzip-studio/blob/main/LICENSE
+Copyright: Copyright (c) MDZip Project
+ShortDescription: Desktop app for viewing and editing .mdz (MDZip) files, with Windows Explorer preview integration.
+Moniker: mdzip-studio
+Tags:
+- mdz
+- mdzip
+- markdown
+- editor
+- viewer
+ReleaseNotesUrl: https://github.com/mdzip-project/mdzip-studio/releases/tag/v<ver>
+ManifestType: defaultLocale
+ManifestVersion: 1.12.0
+```
 
-Once the manifest exists, update interactively (reuses cached sign-in):
+`MDZip.Studio.yaml`:
+```yaml
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json
+PackageIdentifier: MDZip.Studio
+PackageVersion: <ver>
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.12.0
+```
+
+## Validate & submit
 
 ```powershell
-wingetcreate update MDZip.Studio --version <ver> --urls "https://github.com/mdzip-project/mdzip-studio/releases/download/v<ver>/MDZip-Studio-Setup-<ver>.exe" --submit
+winget validate --manifest winget/MDZip.Studio/<ver>
+wingetcreate submit --prtitle "New package: MDZip.Studio version <ver>" winget/MDZip.Studio/<ver>
 ```
-If the installer's silent switches or the .NET dependency change, re-edit the
-manifest (as in step 2) before submitting.
+
+For later releases, copy the folder, bump `PackageVersion` / `InstallerUrl` /
+`InstallerSha256` (re-edit switches/dependency only if they change), validate, submit.
 
 ## Notes
-- **Default `winget install` is user scope = app only.** The Explorer previewer
-  needs `--scope machine` (HKLM + elevation) — document this in release notes.
-- An expired cached credential just triggers a fresh browser sign-in.
+- **Default `winget install MDZip.Studio` is user scope = app only.** The Explorer
+  previewer needs `winget install MDZip.Studio --scope machine` (HKLM + elevation) —
+  document this in release notes.
+- Declaring `Microsoft.DotNet.DesktopRuntime.10` makes winget install the runtime
+  first, so the installer's bundled download is skipped and sandboxed validation
+  doesn't hit the network (design Phase 6).
+- The bundled CLI inside Studio is **not** winget-managed — it tracks Studio's
+  version; headless users wanting independent CLI updates install `MDZip.Cli`.
 - Unsigned installer → users may see SmartScreen until reputation builds
   (accepted by winget; code signing is out of scope for now).
