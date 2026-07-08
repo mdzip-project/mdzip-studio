@@ -1,13 +1,5 @@
-import { getTestBed } from '@angular/core/testing';
-import {
-  BrowserDynamicTestingModule,
-  platformBrowserDynamicTesting,
-} from '@angular/platform-browser-dynamic/testing';
-
-getTestBed().initTestEnvironment(
-  BrowserDynamicTestingModule,
-  platformBrowserDynamicTesting(),
-);
+// No manual getTestBed().initTestEnvironment() here: the `@angular/build:unit-test`
+// builder initializes the test platform itself, and a second init throws NG0400.
 
 class MemoryStorage implements Storage {
   private readonly items = new Map<string, string>();

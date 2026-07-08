@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.21] - 2026-07-08
+
+### Added
+
+- **Find & Replace in the editor (Ctrl/Cmd+F)** — the search panel from
+  `@mdzip/editor` 1.3.15, with a toolbar search button. Works in edit and
+  read-only viewing alike; opening search from preview mode switches to a
+  layout with the source visible.
+- Added **File -> Print... (Ctrl+P)** in the desktop app. It opens a paginated
+  print preview of the open document (rendered light, with images and Mermaid
+  diagrams included), from which you can print via the system dialog or save a
+  PDF. For `.mdz` archives it prints the document entry currently being viewed.
+  Unsaved edits are included, the same as Save.
+- The print preview window has a small **Print** menu: **Quick Print to
+  Default Printer (Ctrl+P)** sends the document straight to the default
+  printer with no further dialogs, and **Close Preview (Ctrl+W)** closes the
+  preview (instead of falling through to the main window and closing the
+  document).
+- The manifest.json view (formerly "Document Internals") is now titled
+  **Manifest** and has two tabs: the **Settings** form and a read-only
+  **JSON** tab showing the manifest as it will be saved, pretty-printed with
+  greyscale syntax highlighting.
+
+### Fixed
+
+- Images referenced only by raw HTML `<img>` tags no longer show as orphaned
+  in the contents pane when it is first opened, and images referenced from a
+  different document than the open one are no longer flagged either.
+- The manifest Settings form no longer shows stale values after an edit when
+  the manifest entry is reopened.
+
+### Changed
+
+- Updated the embedded MDZip editor libraries to the published
+  `@mdzip/editor` / `@mdzip/editor-ng` **1.3.15** (from npm rather than local
+  packages): find/replace search, raw HTML tag muting in the source pane,
+  image layout attributes for raw HTML `<img>`, table alignment fixes, and
+  contained Mermaid error rendering.
+
 ## [1.3.20] - 2026-06-22
 
 ### Added
@@ -204,7 +243,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.20...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.21...HEAD
+[1.3.21]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.20...v1.3.21
 [1.3.20]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.19...v1.3.20
 [1.3.19]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.18...v1.3.19
 [1.3.18]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.17...v1.3.18

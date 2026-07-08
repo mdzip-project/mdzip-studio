@@ -1,10 +1,11 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs/promises');
-const { constants: fsConstants } = require('fs');
+const { constants: fsConstants, readdirSync, unlinkSync } = require('fs');
 const { execFile } = require('child_process');
 const os = require('os');
 const path = require('path');
+const { pathToFileURL } = require('url');
 
 // ProgID the installer registers for .md (see build/installer.nsh). Used to
 // detect whether Studio is already the default Markdown editor.
@@ -769,6 +770,200 @@ ipcMain.handle('mdzip:show-in-folder', async (_event, payload) => {
   return { ok: true };
 });
 
+// --- Print preview -----------------------------------------------------------
+// The renderer builds a standalone HTML document (print CSS + inlined images)
+// from the open document and sends it here. A hidden window renders it to PDF,
+// and Chromium's built-in PDF viewer shows the result — supplying zoom, page
+// navigation, a print button (system print dialog), and save-as-PDF for free.
+const PRINT_TEMP_PREFIX = 'mdzip-studio-print-';
+let printPreviewWindow = null;
+let printPreviewPdfPath = null;
+let printPreviewTitle = 'Print Preview';
+
+function printTempPath(extension) {
+  return path.join(
+    app.getPath('temp'),
+    `${PRINT_TEMP_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2)}${extension}`
+  );
+}
+
+async function renderHtmlToPdf(htmlPath) {
+  const renderWindow = new BrowserWindow({
+    show: false,
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+  });
+  try {
+    // Bound the whole load: a stalled external image (the print document leaves
+    // http(s) sources un-inlined) would otherwise hold did-finish-load forever
+    // and leak this hidden window.
+    await Promise.race([
+      renderWindow.loadFile(htmlPath),
+      new Promise((_resolve, reject) =>
+        setTimeout(() => reject(new Error('Timed out preparing the document.')), 20000)
+      ),
+    ]);
+    // Let webfonts settle so text measures at its final metrics before layout
+    // is committed to PDF. executeJavaScript awaits the returned promise.
+    await renderWindow.webContents.executeJavaScript('document.fonts.ready.then(() => undefined)', true);
+    return await renderWindow.webContents.printToPDF({ printBackground: true, pageSize: 'Letter' });
+  } finally {
+    if (!renderWindow.isDestroyed()) renderWindow.destroy();
+  }
+}
+
+function showPdfPreview(pdfPath, title) {
+  const windowTitle = title ? `Print Preview — ${title}` : 'Print Preview';
+  printPreviewTitle = windowTitle;
+  const previousPdf = printPreviewPdfPath;
+  printPreviewPdfPath = pdfPath;
+
+  if (printPreviewWindow && !printPreviewWindow.isDestroyed()) {
+    printPreviewWindow.setTitle(windowTitle);
+    printPreviewWindow.loadURL(pathToFileURL(pdfPath).toString());
+    printPreviewWindow.focus();
+    // Best-effort: Windows may still hold a lock on the displayed PDF; the
+    // will-quit sweep is the backstop for anything that survives.
+    if (previousPdf && previousPdf !== pdfPath) fs.unlink(previousPdf).catch(() => {});
+    return;
+  }
+
+  printPreviewWindow = new BrowserWindow({
+    width: 900,
+    height: 1000,
+    title: windowTitle,
+    icon: windowIconForTheme(),
+    webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      // Chromium's built-in PDF viewer is gated behind the plugins flag.
+      plugins: true,
+    },
+  });
+  // A window-specific menu (replacing the app menu, whose document accelerators
+  // don't belong here) that makes Quick Print discoverable. The PDF viewer's
+  // toolbar print button remains the route with printer/settings choices.
+  printPreviewWindow.setMenu(Menu.buildFromTemplate([
+    {
+      label: 'Print',
+      submenu: [
+        {
+          label: 'Quick Print to Default Printer',
+          accelerator: 'CmdOrCtrl+P',
+          click: () => quickPrintPreviewPdf(),
+        },
+        { type: 'separator' },
+        {
+          label: 'Close Preview',
+          accelerator: 'CmdOrCtrl+W',
+          click: () => {
+            if (printPreviewWindow && !printPreviewWindow.isDestroyed()) printPreviewWindow.close();
+          },
+        },
+      ],
+    },
+  ]));
+  // Keep our title: the PDF viewer pushes the document's metadata title, and
+  // preventDefault alone doesn't hold the native title (the update originates
+  // in the viewer's extension frame), so set ours back explicitly.
+  printPreviewWindow.webContents.on('page-title-updated', (event) => {
+    event.preventDefault();
+    if (printPreviewWindow && !printPreviewWindow.isDestroyed()) {
+      printPreviewWindow.setTitle(printPreviewTitle);
+    }
+  });
+  // The PDF viewer registers beforeunload while it holds unsaved ink/text
+  // annotations, and in Electron a page that blocks unload silently vetoes
+  // the window's close button. The preview is disposable — force close through.
+  printPreviewWindow.webContents.on('will-prevent-unload', (event) => event.preventDefault());
+  // Quick print: Ctrl+P sends the PDF straight to the default printer — this
+  // window already is the preview, so no further dialogs. The toolbar print
+  // button keeps the full settings route (viewer dialog → system dialog).
+  // Ctrl+W closes just this window. Without these handlers both keys fall
+  // through to the hidden app menu's accelerators and act on the main
+  // document window instead (Ctrl+W there closes the open document).
+  printPreviewWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || !(input.control || input.meta)) return;
+    const key = input.key.toLowerCase();
+    if (key === 'p' && !input.shift && !input.alt) {
+      event.preventDefault();
+      quickPrintPreviewPdf();
+    } else if (key === 'w' && !input.shift && !input.alt) {
+      event.preventDefault();
+      printPreviewWindow?.close();
+    }
+  });
+  printPreviewWindow.on('closed', () => {
+    printPreviewWindow = null;
+    const pdf = printPreviewPdfPath;
+    printPreviewPdfPath = null;
+    if (pdf) fs.unlink(pdf).catch(() => {});
+  });
+  printPreviewWindow.loadURL(pathToFileURL(pdfPath).toString());
+}
+
+// Print the previewed PDF to the system default printer with no dialogs.
+// Feedback lives in the window title so nothing modal interrupts the flow;
+// failures (no default printer, spooler error) get a real error dialog.
+function quickPrintPreviewPdf() {
+  const window = printPreviewWindow;
+  if (!window || window.isDestroyed()) return;
+  window.setTitle(`${printPreviewTitle} — printing…`);
+  window.webContents.print({ silent: true, printBackground: true }, (success, failureReason) => {
+    if (window.isDestroyed()) return;
+    if (success) {
+      window.setTitle(`${printPreviewTitle} — sent to printer`);
+      setTimeout(() => {
+        if (!window.isDestroyed()) window.setTitle(printPreviewTitle);
+      }, 4000);
+      return;
+    }
+    window.setTitle(printPreviewTitle);
+    // A canceled driver prompt (e.g. print-to-file printers) isn't an error.
+    if (/cancel/i.test(failureReason || '')) return;
+    dialog.showMessageBox(window, {
+      type: 'error',
+      title: 'Quick Print',
+      message: 'Could not print to the default printer.',
+      detail: failureReason || 'Check that a default printer is set, or use the print button in the toolbar to choose a printer.',
+    });
+  });
+}
+
+ipcMain.handle('mdzip:print-preview', async (_event, payload) => {
+  const html = typeof payload?.html === 'string' ? payload.html : '';
+  const title = typeof payload?.title === 'string' ? payload.title : '';
+  if (!html) return { error: 'Nothing to print.' };
+
+  // A temp file instead of a data: URL — those cap out well below an HTML
+  // document carrying its images as base64 data: URIs.
+  const htmlPath = printTempPath('.html');
+  try {
+    await fs.writeFile(htmlPath, html, 'utf8');
+    const pdf = await renderHtmlToPdf(htmlPath);
+    const pdfPath = printTempPath('.pdf');
+    await fs.writeFile(pdfPath, pdf);
+    showPdfPreview(pdfPath, title);
+    return { ok: true };
+  } catch (error) {
+    return { error: error?.message ?? 'Could not build the print preview.' };
+  } finally {
+    fs.unlink(htmlPath).catch(() => {});
+  }
+});
+
+// Sweep print temp files on exit — covers PDFs Windows kept locked while the
+// viewer had them open, plus strays from any earlier crashed session.
+app.on('will-quit', () => {
+  try {
+    const tempDir = app.getPath('temp');
+    for (const name of readdirSync(tempDir)) {
+      if (!name.startsWith(PRINT_TEMP_PREFIX)) continue;
+      try { unlinkSync(path.join(tempDir, name)); } catch { /* locked or gone */ }
+    }
+  } catch { /* temp dir unreadable */ }
+});
+
 ipcMain.handle('mdzip:write-markdown-image', async (_event, payload) => {
   const documentPath = path.resolve(String(payload.documentPath ?? ''));
   const documentDirectory = path.dirname(documentPath);
@@ -838,6 +1033,8 @@ const createMenu = () => {
       { type: 'separator' },
       { label: 'Save', accelerator: 'CmdOrCtrl+S', click: () => dispatchAppEvent('mdzip-studio:save-archive') },
       { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', click: () => dispatchAppEvent('mdzip-studio:save-archive-as') },
+      { type: 'separator' },
+      { label: 'Print...', accelerator: 'CmdOrCtrl+P', click: () => dispatchAppEvent('mdzip-studio:print') },
       { type: 'separator' },
       { label: 'Show in File Manager', click: () => dispatchAppEvent('mdzip-studio:show-in-folder') },
       { type: 'separator' },

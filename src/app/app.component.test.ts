@@ -6,6 +6,7 @@ import type { MdzipConversionContext, MdzipEntryRenderContext } from '@mdzip/edi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppComponent } from './app.component';
 import { ArchiveService } from './core/services/archive.service';
+import { PrintService } from './core/services/print.service';
 import { StorageService } from './core/services/storage.service';
 import { ValidationService } from './core/services/validation.service';
 
@@ -35,6 +36,7 @@ describe('AppComponent', () => {
     runInInjectionContext(injector, () => {
       component = new AppComponent(
         TestBed.inject(ArchiveService),
+        TestBed.inject(PrintService),
         TestBed.inject(StorageService),
         TestBed.inject(ValidationService),
         TestBed.inject(NgZone),
@@ -357,10 +359,13 @@ describe('AppComponent', () => {
       }
     );
     const archiveBytes = new Uint8Array(await built.blob.arrayBuffer());
-    let writePayload: {
+    interface UnpackWritePayload {
       defaultFolderName: string;
       entries: { path: string; bytes: number[] }[];
-    } | null = null;
+    }
+    // Captured via a holder object: a plain `let` assigned only inside the mock
+    // callback stays narrowed to its `null` initializer at the assertions below.
+    const captured: { writePayload: UnpackWritePayload | null } = { writePayload: null };
     const originalBridge = (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio;
     (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = {
       pickMdzForUnpack: vi.fn().mockResolvedValue({
@@ -368,8 +373,8 @@ describe('AppComponent', () => {
         name: 'demo.mdz',
         bytes: Array.from(archiveBytes),
       }),
-      writeUnpackedFolder: vi.fn().mockImplementation(async (payload) => {
-        writePayload = payload;
+      writeUnpackedFolder: vi.fn().mockImplementation(async (payload: UnpackWritePayload) => {
+        captured.writePayload = payload;
         return { canceled: false, folderPath: 'C:/docs/demo', fileCount: payload.entries.length };
       }),
       showInFolder: vi.fn().mockResolvedValue({ ok: true }),
@@ -378,6 +383,7 @@ describe('AppComponent', () => {
     try {
       await component.unpackMdzToFolder();
 
+      const writePayload = captured.writePayload;
       expect(writePayload?.defaultFolderName).toBe('demo');
       expect(writePayload?.entries.map((entry) => entry.path).sort()).toEqual([
         'images/photo.png',
@@ -460,21 +466,22 @@ describe('AppComponent', () => {
     });
   });
 
-  it('does not treat raw HTML image references as orphaned nav assets', () => {
+  it('does not treat raw HTML image references as orphaned nav assets', async () => {
     const render = vi.fn();
     const workspace = {
-      liveOrphanedPaths: ['images/logo.svg', 'images/unused.png'],
+      liveOrphanedPaths: ['images/logo.svg', 'images/unused.png'] as string[] | null,
     };
     Object.defineProperty(component, 'workspaceEditor', {
       configurable: true,
       value: { view: { workspace, render } },
     });
 
-    (component as unknown as {
-      correctWorkspaceOrphansForHtmlImages(snapshot: unknown): void;
+    await (component as unknown as {
+      correctWorkspaceOrphansForHtmlImages(snapshot: unknown): Promise<void>;
     }).correctWorkspaceOrphansForHtmlImages({
       sourceFormat: 'mdz',
       currentPath: 'index.md',
+      currentPathType: 'markdown',
       currentText: '<img src="images/logo.svg" align="right" width="180" alt="Logo image">',
       content: {
         orphanedAssetPaths: ['images/logo.svg', 'images/unused.png'],
@@ -489,6 +496,75 @@ describe('AppComponent', () => {
 
     expect(workspace.liveOrphanedPaths).toEqual(['images/unused.png']);
     expect(render).toHaveBeenCalledOnce();
+  });
+
+  it('seeds orphan state at load so the lazy markdown-only analysis never overwrites it', async () => {
+    const render = vi.fn();
+    // Fresh load: the editor has not analyzed orphans yet (null state).
+    const workspace = { liveOrphanedPaths: null as string[] | null };
+    Object.defineProperty(component, 'workspaceEditor', {
+      configurable: true,
+      value: { view: { workspace, render } },
+    });
+
+    await (component as unknown as {
+      correctWorkspaceOrphansForHtmlImages(snapshot: unknown): Promise<void>;
+    }).correctWorkspaceOrphansForHtmlImages({
+      sourceFormat: 'mdz',
+      currentPath: 'index.md',
+      currentPathType: 'markdown',
+      currentText: '<img src="images/star-wars.png" alt="Pasted image" width="250" align="right">',
+      content: {
+        orphanedAssetPaths: [],
+        paths: [
+          { path: 'index.md', isImage: false },
+          { path: 'images/poster.png', isImage: true },
+          { path: 'images/star-wars.png', isImage: true },
+        ],
+      },
+      workspace: { manifest: {} },
+    });
+
+    // Seeded (non-null) with the html-aware result: the editor's lazy
+    // ensureOrphanedAssetsAnalyzed() only runs while the state is null.
+    expect(workspace.liveOrphanedPaths).toEqual(['images/poster.png']);
+    expect(render).toHaveBeenCalledOnce();
+  });
+
+  it('counts image references from non-open markdown documents when correcting orphans', async () => {
+    const render = vi.fn();
+    const readPathBytes = vi.fn(async (path: string) =>
+      path === 'chapters/two.md'
+        ? new TextEncoder().encode('<img src="../images/poster.png" alt="Poster">')
+        : undefined
+    );
+    const workspace = { liveOrphanedPaths: null as string[] | null, readPathBytes };
+    Object.defineProperty(component, 'workspaceEditor', {
+      configurable: true,
+      value: { view: { workspace, render } },
+    });
+
+    await (component as unknown as {
+      correctWorkspaceOrphansForHtmlImages(snapshot: unknown): Promise<void>;
+    }).correctWorkspaceOrphansForHtmlImages({
+      sourceFormat: 'mdz',
+      currentPath: 'index.md',
+      currentPathType: 'markdown',
+      currentText: '# No images here',
+      content: {
+        orphanedAssetPaths: [],
+        paths: [
+          { path: 'index.md', isImage: false },
+          { path: 'chapters/two.md', isImage: false },
+          { path: 'images/poster.png', isImage: true },
+          { path: 'images/unused.png', isImage: true },
+        ],
+      },
+      workspace: { manifest: {} },
+    });
+
+    expect(readPathBytes).toHaveBeenCalledWith('chapters/two.md');
+    expect(workspace.liveOrphanedPaths).toEqual(['images/unused.png']);
   });
 
   it('adds Studio HTML tag highlighting to the mounted editor once', () => {

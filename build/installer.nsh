@@ -172,6 +172,9 @@ FunctionEnd
 
     WriteRegStr HKLM "Software\Classes\.mdz\ShellEx\${MDZIP_PREVIEW_IID}" "" "${MDZIP_CLSID}"
     WriteRegStr HKLM "Software\Classes\.mdz\OpenWithProgids" "${MDZIP_PROGID}" ""
+    ; System fallback default for .mdz (our own extension, no incumbent to
+    ; respect). A per-user UserChoice still overrides this when present.
+    WriteRegStr HKLM "Software\Classes\.mdz" "" "${MDZIP_PROGID}"
 
     WriteRegStr HKLM "Software\Classes\${MDZIP_PROGID}" "" "MDZip Document"
     WriteRegStr HKLM "Software\Classes\${MDZIP_PROGID}\DefaultIcon" "" \
@@ -220,6 +223,12 @@ FunctionEnd
   ${EndIf}
   DeleteRegValue HKLM "Software\Classes\.mdz\OpenWithProgids" "${MDZIP_PROGID}"
   DeleteRegValue HKLM "Software\Classes\.md\OpenWithProgids" "${MDZIP_MD_PROGID}"
+
+  ; Drop the .mdz fallback default only if it still points at Studio.
+  ReadRegStr $0 HKLM "Software\Classes\.mdz" ""
+  ${If} $0 == "${MDZIP_PROGID}"
+    DeleteRegValue HKLM "Software\Classes\.mdz" ""
+  ${EndIf}
 
   ; Drop the .md default only if it still points at Studio (don't clobber a
   ; choice the user later made for another editor). The Capabilities key, and

@@ -16,6 +16,7 @@ import {
   MdzipConversionAction,
   MdzipConversionContext,
   MdzipDocumentChangeEvent,
+  MdzipEditorSnapshot,
   MdzipEntryRenderContext,
   MdzipMarkdownRenderContext,
   MdzipMarkdownRenderExtension,
@@ -50,6 +51,7 @@ import {
   lucideX,
 } from '@ng-icons/lucide';
 import { ArchiveService, Asset, Document, Manifest, MDZipArchive } from './core/services/archive.service';
+import { PrintService } from './core/services/print.service';
 import { StorageService } from './core/services/storage.service';
 import { ValidationError, ValidationService } from './core/services/validation.service';
 import {
@@ -149,6 +151,33 @@ function loadStudioMermaid(): Promise<MdzipMermaidApi> {
     };
   });
   return studioMermaidPromise;
+}
+
+function escapeJsonHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Greyscale syntax highlighting for the manifest entry view's read-only JSON
+// tab. The input is JSON.stringify output, so the token set is predictable:
+// strings (keys when followed by a colon), numbers, true/false/null, and
+// structural characters — which carry nothing HTML-sensitive themselves.
+function highlightJsonHtml(json: string): string {
+  const token = /("(?:[^"\\]|\\.)*")(\s*:)?|-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b|\btrue\b|\bfalse\b|\bnull\b/g;
+  let html = '';
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = token.exec(json))) {
+    html += escapeJsonHtml(json.slice(last, match.index));
+    if (match[1] !== undefined) {
+      html += `<span class="${match[2] ? 'json-key' : 'json-string'}">${escapeJsonHtml(match[1])}</span>${match[2] ?? ''}`;
+    } else if (match[0] === 'true' || match[0] === 'false' || match[0] === 'null') {
+      html += `<span class="json-literal">${match[0]}</span>`;
+    } else {
+      html += `<span class="json-number">${match[0]}</span>`;
+    }
+    last = match.index + match[0].length;
+  }
+  return html + escapeJsonHtml(json.slice(last));
 }
 
 interface StatusbarDisplay {
@@ -286,6 +315,7 @@ interface ElectronBridge {
     relativePath: string;
   }) => Promise<{ dataUri?: string; error?: string }>;
   showInFolder?: (filePath: string) => Promise<{ ok?: boolean; error?: string }>;
+  printPreview?: (payload: { html: string; title: string }) => Promise<{ ok?: boolean; error?: string }>;
   getMarkdownDefaultStatus?: () => Promise<MarkdownDefaultStatus>;
   promptMarkdownDefault?: () => Promise<MarkdownDefaultStatus>;
 }
@@ -532,20 +562,33 @@ interface ArchiveTreeData {
                   <section class="studio-entry-view">
                     <div class="studio-entry-view-header">
                       <div>
-                        <h2>Document Internals</h2>
-                        <p>Structured manifest settings provided by MDZip Studio.</p>
+                        <h2>Manifest</h2>
+                        <p>How this document is packaged and presented — stored in manifest.json.</p>
                       </div>
                     </div>
-                    <app-manifest-editor
-                      [title]="entryManifestTitle(context)"
-                      [author]="entryManifestText(context, 'author')"
-                      [description]="entryManifestText(context, 'description')"
-                      [mode]="entryManifestMode(context)"
-                      [version]="entryManifestVersion(context)"
-                      [entryPoint]="entryManifestEntryPoint(context)"
-                      [documents]="documentPaths()"
-                      (fieldChange)="onEmbeddedManifestChange(context, $event)"
-                    />
+                    <p-tabs class="manifest-entry-tabs" [value]="manifestEntryTab()" (valueChange)="manifestEntryTab.set($any($event))">
+                      <p-tablist>
+                        <p-tab value="settings">Settings</p-tab>
+                        <p-tab value="json">JSON</p-tab>
+                      </p-tablist>
+                      <p-tabpanels>
+                        <p-tabpanel value="settings">
+                          <app-manifest-editor
+                            [title]="entryManifestTitle(context)"
+                            [author]="entryManifestText(context, 'author')"
+                            [description]="entryManifestText(context, 'description')"
+                            [mode]="entryManifestMode(context)"
+                            [version]="entryManifestVersion(context)"
+                            [entryPoint]="entryManifestEntryPoint(context)"
+                            [documents]="documentPaths()"
+                            (fieldChange)="onEmbeddedManifestChange(context, $event)"
+                          />
+                        </p-tabpanel>
+                        <p-tabpanel value="json">
+                          <pre class="manifest-json" [innerHTML]="entryManifestJsonHtml(context)"></pre>
+                        </p-tabpanel>
+                      </p-tabpanels>
+                    </p-tabs>
                   </section>
                 </ng-template>
               </mdzip-workspace>
@@ -849,6 +892,29 @@ interface ArchiveTreeData {
         <p-button label="Set as Default" [loading]="mdDefaultBusy()" (onClick)="setMarkdownDefault()" />
       </ng-template>
     </p-dialog>
+
+    <!-- Hidden print-capture workspace. Off-screen but laid out (not
+         display:none): Mermaid needs real geometry to measure its diagrams.
+         Forced light so the PDF never bakes in dark-scheme colors. -->
+    @if (printCapture(); as capture) {
+      <div class="print-capture-host" aria-hidden="true">
+        <mdzip-workspace
+          #printWorkspace
+          [bytes]="capture.bytes"
+          [fileName]="capture.fileName"
+          mode="read-only"
+          [sourceFormat]="sourceFormat()"
+          controls="preview"
+          initialLayout="preview"
+          initialColorScheme="light"
+          [imageHydrationAnimation]="'off'"
+          [markdownExtensions]="markdownExtensions"
+          [navigationButtonActive]="false"
+          (assetsHydrated)="onPrintCaptureReady()"
+          (failed)="onPrintCaptureFailed($event)"
+        />
+      </div>
+    }
   `,
   styleUrls: ['./app.component.scss'],
 })
@@ -858,6 +924,7 @@ export class AppComponent implements OnDestroy {
   @ViewChild('markdownImageInput') private markdownImageInput?: ElementRef<HTMLInputElement>;
   @ViewChild('folderInput') private folderInput?: ElementRef<HTMLInputElement>;
   @ViewChild('workspaceEditor') private workspaceEditor?: MdzipWorkspaceComponent;
+  @ViewChild('printWorkspace', { read: ElementRef }) private printWorkspaceRef?: ElementRef<HTMLElement>;
 
   readonly currentArchive = this.archiveService.currentArchive;
   readonly isDesktopShell = signal(Boolean(window.mdzipStudio?.isElectron));
@@ -971,6 +1038,12 @@ export class AppComponent implements OnDestroy {
   // Data-URI cache for a .md's relative images, keyed by archive path. Used to
   // recover bytes when embedding images on conversion/save.
   private readonly mdAssetCache = new Map<string, string>();
+  // Per-document image-reference sets for the orphan correction, keyed by
+  // lowercased archive path. Cleared on structural (changed) events; the open
+  // document is always recomputed from its live text instead.
+  private readonly orphanRefsByPath = new Map<string, Set<string>>();
+  // Monotonic token so a stale async orphan pass never overwrites a newer one.
+  private orphanCorrectionRun = 0;
   // Preview cache of blob: object URLs for the same images. The preview re-runs
   // on every keystroke, so it must reference short, stable URLs the browser can
   // decode once and reuse instead of re-decoding multi-MB data URIs.
@@ -1062,6 +1135,8 @@ export class AppComponent implements OnDestroy {
   readonly newArchiveFormat = signal<'markdown' | 'mdz'>('markdown');
   readonly aboutOpen = signal(false);
   readonly aboutTab = signal<'about' | 'libraries' | 'license' | 'debug'>('about');
+  // Active tab of the manifest.json entry view (Settings form vs read-only JSON).
+  readonly manifestEntryTab = signal<'settings' | 'json'>('settings');
   readonly debugCopied = signal(false);
   readonly helpDialogOpen = signal(false);
   readonly helpDialogTitle = signal('Help');
@@ -1070,6 +1145,15 @@ export class AppComponent implements OnDestroy {
   readonly helpDialogStatus = signal('');
   readonly helpDialogLoading = signal(false);
   readonly helpDialogError = signal(false);
+
+  // Print flow: setting printCapture mounts the hidden capture workspace; its
+  // (assetsHydrated) hands the rendered preview to PrintService → main process.
+  // Null means no print is in flight.
+  readonly printCapture = signal<{ bytes: Uint8Array; fileName: string; title: string } | null>(null);
+  // assetsHydrated fires once per preview render, so a re-render of the capture
+  // workspace could re-enter the handler; this makes the capture one-shot.
+  private printCaptureHandled = false;
+  private printCaptureTimer: ReturnType<typeof setTimeout> | null = null;
   readonly mdDefaultPromptOpen = signal(false);
   readonly mdDefaultBusy = signal(false);
   private static readonly MD_DEFAULT_PROMPT_KEY = 'mdDefaultPromptSeen';
@@ -1185,6 +1269,7 @@ export class AppComponent implements OnDestroy {
   private readonly handleShowInFolderCommand = () => void this.showInFileManager();
   private readonly handleReloadDocumentCommand = () => void this.reloadDocumentFromDisk();
   private readonly handleToggleLineNumbersCommand = () => this.toggleLineNumbers();
+  private readonly handlePrintCommand = () => void this.printDocument();
 
   private readonly handleKeyDown = (e: KeyboardEvent): void => {
     const ctrl = e.ctrlKey || e.metaKey;
@@ -1211,6 +1296,7 @@ export class AppComponent implements OnDestroy {
 
   constructor(
     private archiveService: ArchiveService,
+    private printService: PrintService,
     private storageService: StorageService,
     private validationService: ValidationService,
     private ngZone: NgZone,
@@ -1240,6 +1326,7 @@ export class AppComponent implements OnDestroy {
     window.addEventListener('mdzip-studio:show-in-folder', this.handleShowInFolderCommand);
     window.addEventListener('mdzip-studio:reload-document', this.handleReloadDocumentCommand);
     window.addEventListener('mdzip-studio:toggle-line-numbers', this.handleToggleLineNumbersCommand);
+    window.addEventListener('mdzip-studio:print', this.handlePrintCommand);
     document.addEventListener('keydown', this.handleKeyDown);
     document.addEventListener('click', this.closeMenuOnDocumentClick);
     document.addEventListener('mouseover', this.handleLinkMouseOver);
@@ -1286,6 +1373,7 @@ export class AppComponent implements OnDestroy {
     window.removeEventListener('mdzip-studio:show-in-folder', this.handleShowInFolderCommand);
     window.removeEventListener('mdzip-studio:reload-document', this.handleReloadDocumentCommand);
     window.removeEventListener('mdzip-studio:toggle-line-numbers', this.handleToggleLineNumbersCommand);
+    window.removeEventListener('mdzip-studio:print', this.handlePrintCommand);
     document.removeEventListener('keydown', this.handleKeyDown);
     document.removeEventListener('click', this.closeMenuOnDocumentClick);
     document.removeEventListener('mouseover', this.handleLinkMouseOver);
@@ -1293,6 +1381,7 @@ export class AppComponent implements OnDestroy {
     this.osColorSchemeQuery?.removeEventListener('change', this.handleOsColorSchemeChange);
     this.removeOpenDocumentRequestedListener?.();
     if (this.workspaceLoadTimeoutId !== null) clearTimeout(this.workspaceLoadTimeoutId);
+    if (this.printCaptureTimer !== null) clearTimeout(this.printCaptureTimer);
   }
 
   toggleMenu(id: string): void {
@@ -2443,7 +2532,7 @@ export class AppComponent implements OnDestroy {
     this.statusMessage.set(validation.valid ? `Saved ${archive.name}.mdz` : `Saved ${archive.name}.mdz with technical issues`);
   }
 
-  private async flushWorkspaceEdits(): Promise<void> {
+  private async flushWorkspaceEdits(): Promise<MdzipEditorSnapshot | null> {
     // `flush()` materializes the editor's pending text into the archive bytes and
     // returns a snapshot whose bytes match the active source format (raw markdown
     // for `.md`, archive bytes for `.mdz`) — the same representation the save
@@ -2451,6 +2540,120 @@ export class AppComponent implements OnDestroy {
     const snapshot = await this.workspaceEditor?.flush();
     if (snapshot) {
       this.latestWorkspaceBytes.set(new Uint8Array(await snapshot.bytes.arrayBuffer()));
+    }
+    return snapshot ?? null;
+  }
+
+  // File → Print… (Ctrl+P). Renders the document in a hidden light-scheme
+  // workspace, converts the captured preview to standalone HTML, and hands it
+  // to the main process, which shows it as a paginated PDF print preview.
+  private async printDocument(): Promise<void> {
+    const archive = this.currentArchive();
+    // Browser mode has no native menu (and no printPreview bridge): no-op in V1.
+    if (!archive || !window.mdzipStudio?.printPreview) return;
+    if (this.printCapture()) return; // a print is already in flight
+
+    this.statusMessage.set('Preparing print preview…');
+    await this.yieldForPaint();
+    try {
+      // Same flush as Save, so unsaved typing prints.
+      const flushed = await this.flushWorkspaceEdits();
+      let bytes = this.latestWorkspaceBytes() ?? this.workspaceBytes();
+      if (!bytes) throw new Error('the document has no content');
+
+      const title = flushed?.state.displayTitle || archive.name || 'Document';
+      if (this.sourceFormat() === 'mdz') {
+        bytes = await this.retargetPrintEntryPoint(bytes, flushed?.state.currentPath ?? null);
+      } else {
+        // Pre-resolve the .md's sibling images into cached blob: URLs so the
+        // capture render substitutes them synchronously in transformHtml —
+        // assetsHydrated does not wait for Studio's async image mount extension.
+        await this.warmMarkdownImageCaches(new TextDecoder().decode(bytes));
+      }
+
+      this.printCaptureHandled = false;
+      this.printCapture.set({ bytes, fileName: this.workspaceFileName(), title });
+      // A wedged render (bad bytes, hung asset) must not leave printing armed
+      // forever; fail the capture and unmount if nothing hydrates in time.
+      this.printCaptureTimer = setTimeout(
+        () => this.ngZone.run(() => this.failPrintCapture('timed out rendering the document')),
+        15000
+      );
+    } catch (error) {
+      this.printCapture.set(null);
+      this.statusMessage.set(`Print failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
+  }
+
+  // Prints the entry currently being viewed: patches it in as the manifest
+  // entryPoint of the print-render bytes only (the real document is untouched).
+  // Non-markdown selections — an image asset, manifest.json's Internals view —
+  // aren't printable pages, so those keep the real entry point.
+  private async retargetPrintEntryPoint(bytes: Uint8Array, currentPath: string | null): Promise<Uint8Array> {
+    if (!currentPath || !/\.(?:md|markdown)$/i.test(currentPath)) return bytes;
+    const manifest = await (await MdzArchiveCore.open(bytes)).readManifest();
+    if (!manifest || manifest.entryPoint === currentPath) return bytes;
+    const result = await MdzArchiveCore.updateFiles(bytes, [], [], {
+      manifest: { ...manifest, entryPoint: currentPath },
+    });
+    return new Uint8Array(await result.blob.arrayBuffer());
+  }
+
+  async onPrintCaptureReady(): Promise<void> {
+    if (this.printCaptureHandled) return;
+    this.printCaptureHandled = true;
+    const capture = this.printCapture();
+    try {
+      const previewRoot = this.printWorkspaceRef?.nativeElement
+        .querySelector<HTMLElement>('[data-ref="preview-content"], .preview-content');
+      if (!capture || !previewRoot) throw new Error('could not capture the rendered document');
+      const html = await this.printService.buildPrintDocument(previewRoot, capture.title);
+      const result = await window.mdzipStudio?.printPreview?.({ html, title: capture.title });
+      if (result?.error) throw new Error(result.error);
+      this.statusMessage.set('Opened print preview');
+    } catch (error) {
+      this.statusMessage.set(`Print failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+    } finally {
+      this.clearPrintCapture();
+    }
+  }
+
+  onPrintCaptureFailed(error: unknown): void {
+    this.failPrintCapture(error instanceof Error ? error.message : 'the document could not be rendered');
+  }
+
+  private failPrintCapture(message: string): void {
+    if (this.printCaptureHandled) return;
+    this.printCaptureHandled = true;
+    this.clearPrintCapture();
+    this.statusMessage.set(`Print failed: ${message}`);
+  }
+
+  private clearPrintCapture(): void {
+    if (this.printCaptureTimer !== null) {
+      clearTimeout(this.printCaptureTimer);
+      this.printCaptureTimer = null;
+    }
+    this.printCapture.set(null);
+  }
+
+  // Warm mdPreviewUrlCache for every relative image the markdown references.
+  // Best-effort: anything unreadable keeps its relative src and prints broken,
+  // matching how the visible preview treats it.
+  private async warmMarkdownImageCaches(markdown: string): Promise<void> {
+    const documentPath = this.currentMarkdownPath;
+    if (!documentPath || !window.mdzipStudio?.readMarkdownAsset) return;
+    const seen = new Set<string>();
+    for (const ref of this.extractMarkdownImageRefs(markdown)) {
+      const archivePath = this.toArchiveAssetPath(ref);
+      if (!archivePath || seen.has(archivePath) || this.mdPreviewUrlCache.has(archivePath)) continue;
+      seen.add(archivePath);
+      const imageBytes = await this.readRelativeImageBytes(documentPath, archivePath);
+      if (!imageBytes) continue;
+      this.mdPreviewUrlCache.set(
+        archivePath,
+        URL.createObjectURL(new Blob([imageBytes as BlobPart], { type: this.imageMimeType(archivePath) }))
+      );
     }
   }
 
@@ -2572,13 +2775,14 @@ export class AppComponent implements OnDestroy {
     return out.length > 0 ? out.join('/') : null;
   }
 
-  private correctWorkspaceOrphansForHtmlImages(snapshot: MdzipWorkspaceSnapshot): void {
+  private async correctWorkspaceOrphansForHtmlImages(snapshot: MdzipWorkspaceSnapshot): Promise<void> {
     if (snapshot.sourceFormat !== 'mdz') return;
 
     const editor = this.workspaceEditor as unknown as {
       view?: {
         workspace?: {
           liveOrphanedPaths?: string[] | null;
+          readPathBytes?: (archivePath: string) => Promise<Uint8Array | undefined>;
         };
         render?: () => void;
       };
@@ -2586,17 +2790,38 @@ export class AppComponent implements OnDestroy {
     const workspace = editor?.view?.workspace;
     if (!workspace) return;
 
-    const existingOrphans = workspace.liveOrphanedPaths ?? snapshot.content.orphanedAssetPaths;
-    if (workspace.liveOrphanedPaths === null && existingOrphans.length === 0) return;
-
-    const baseDir = snapshot.currentPath.includes('/')
-      ? snapshot.currentPath.slice(0, snapshot.currentPath.lastIndexOf('/') + 1)
-      : '';
+    const run = ++this.orphanCorrectionRun;
     const refs = new Set<string>();
+    const collectRefs = (text: string, documentPath: string, into: Set<string>) => {
+      const baseDir = documentPath.includes('/')
+        ? documentPath.slice(0, documentPath.lastIndexOf('/') + 1)
+        : '';
+      for (const ref of this.extractMarkdownImageRefs(text)) {
+        const resolved = this.resolveArchiveAssetRef(ref, baseDir);
+        if (resolved) into.add(resolved.toLowerCase());
+      }
+    };
 
-    for (const ref of this.extractMarkdownImageRefs(snapshot.currentText)) {
-      const resolved = this.resolveArchiveAssetRef(ref, baseDir);
-      if (resolved) refs.add(resolved.toLowerCase());
+    // The open document contributes its live editor text…
+    if (snapshot.currentPathType === 'markdown') {
+      collectRefs(snapshot.currentText, snapshot.currentPath, refs);
+    }
+    // …and every other markdown document is read from the archive (cached per
+    // path; those texts only change through structural edits, which clear the
+    // cache in onWorkspaceChanged). Without the full scan, an image referenced
+    // only from another document would be flagged as an orphan.
+    for (const entry of snapshot.content.paths) {
+      if (entry.isImage || !/\.(?:md|markdown)$/i.test(entry.path)) continue;
+      if (entry.path === snapshot.currentPath) continue;
+      let cached = this.orphanRefsByPath.get(entry.path.toLowerCase());
+      if (!cached) {
+        const bytes = await workspace.readPathBytes?.(entry.path);
+        if (this.orphanCorrectionRun !== run) return; // superseded by a newer pass
+        cached = new Set<string>();
+        if (bytes) collectRefs(new TextDecoder().decode(bytes), entry.path, cached);
+        this.orphanRefsByPath.set(entry.path.toLowerCase(), cached);
+      }
+      for (const ref of cached) refs.add(ref);
     }
 
     const cover = (snapshot.workspace.manifest as { cover?: unknown } | null | undefined)?.cover;
@@ -2608,14 +2833,19 @@ export class AppComponent implements OnDestroy {
     const nextOrphans = snapshot.content.paths
       .filter((entry) => entry.isImage && !refs.has(entry.path.toLowerCase()))
       .map((entry) => entry.path);
-    const currentKey = existingOrphans.map((path) => path.toLowerCase()).sort().join('\n');
-    const nextKey = nextOrphans.map((path) => path.toLowerCase()).sort().join('\n');
-    if (currentKey === nextKey) return;
 
     // Host-side bridge until @mdzip/core-js/@mdzip/editor include raw HTML
-    // <img src> references in their orphan analysis. Keep this limited to the
-    // editor's already-active orphan state so normal navigation behavior stays
-    // unchanged.
+    // <img src> references in their orphan analysis. Always seed the editor's
+    // live orphan state, even before it has analyzed anything itself: the nav
+    // pane's lazy ensureOrphanedAssetsAnalyzed() only runs while that state is
+    // null, so seeding both corrects the badges and stops the editor's
+    // markdown-only analysis from overwriting them afterwards.
+    const existingOrphans = workspace.liveOrphanedPaths ?? null;
+    const nextKey = nextOrphans.map((path) => path.toLowerCase()).sort().join('\n');
+    if (existingOrphans !== null
+      && existingOrphans.map((path) => path.toLowerCase()).sort().join('\n') === nextKey) {
+      return;
+    }
     workspace.liveOrphanedPaths = nextOrphans;
     editor?.view?.render?.();
   }
@@ -3114,21 +3344,30 @@ export class AppComponent implements OnDestroy {
     await context.updateManifest(manifest);
   }
 
+  // The entry view reads Studio's app state first: manifest edits live there
+  // until save (see onWorkspaceManifestChanged), so the workspace's own
+  // manifest copy can lag behind after an embedded edit.
   entryManifestTitle(context: MdzipEntryRenderContext): string {
-    return context.manifest?.title ?? this.currentArchive()?.name ?? '';
+    return this.currentArchive()?.name ?? context.manifest?.title ?? '';
   }
 
   entryManifestText(
     context: MdzipEntryRenderContext,
     field: 'author' | 'description'
   ): string {
-    const value = context.manifest?.[field];
+    const archive = this.currentArchive();
+    // With an archive open, its metadata is authoritative — including absence
+    // (a field the user emptied must not resurface from the workspace copy).
+    const value = archive
+      ? (archive.manifest.metadata as Record<string, unknown> | undefined)?.[field]
+      : context.manifest?.[field];
     if (typeof value === 'string') return value;
-    return field === 'author' && value?.name ? value.name : '';
+    const name = (value as { name?: unknown } | null | undefined)?.name;
+    return field === 'author' && typeof name === 'string' ? name : '';
   }
 
   entryManifestMode(context: MdzipEntryRenderContext): 'document' | 'project' {
-    return context.manifest?.mode ?? this.currentArchive()?.mode ?? 'document';
+    return this.currentArchive()?.mode ?? context.manifest?.mode ?? 'document';
   }
 
   entryManifestVersion(context: MdzipEntryRenderContext): string {
@@ -3139,10 +3378,23 @@ export class AppComponent implements OnDestroy {
   }
 
   entryManifestEntryPoint(context: MdzipEntryRenderContext): string {
-    return context.manifest?.entryPoint
-      ?? this.currentArchive()?.manifest.entryPoint
+    return this.currentArchive()?.manifest.entryPoint
+      ?? context.manifest?.entryPoint
       ?? this.documentPaths()[0]
       ?? 'index.md';
+  }
+
+  // Pretty-printed, syntax-highlighted manifest for the read-only JSON tab.
+  // Shows the manifest as it will be written at save time — Studio state
+  // merged over the workspace copy via the same toMdzManifest used by the
+  // save path. Produces only <span class="…"> markup with escaped content,
+  // so Angular's [innerHTML] sanitizer passes it through unchanged.
+  entryManifestJsonHtml(context: MdzipEntryRenderContext): string {
+    const archive = this.currentArchive();
+    const manifest = archive
+      ? this.toMdzManifest(archive, context.manifest ?? null)
+      : context.manifest ?? {};
+    return highlightJsonHtml(JSON.stringify(manifest, null, 2));
   }
 
   onWorkspaceChanged(event: MdzipWorkspaceChange): void {
@@ -3150,7 +3402,10 @@ export class AppComponent implements OnDestroy {
     this.scheduleStudioHtmlTagHighlight();
     this.latestWorkspaceBytes.set(event.bytes);
     this.latestWorkspaceSnapshot.set(event.snapshot);
-    this.correctWorkspaceOrphansForHtmlImages(event.snapshot);
+    // Structural change: other documents' texts may have changed, so their
+    // cached image-reference sets are stale.
+    this.orphanRefsByPath.clear();
+    void this.correctWorkspaceOrphansForHtmlImages(event.snapshot);
     // (changed) fires on load and on structural edits with an authoritative
     // snapshot, so keep isDirty in sync here too. (dirtyChanged only fires on
     // transitions, so on a clean load it wouldn't clear a stale value left over
@@ -3169,7 +3424,7 @@ export class AppComponent implements OnDestroy {
   }
 
   onWorkspacePreviewRendered(snapshot: MdzipWorkspaceSnapshot): void {
-    this.correctWorkspaceOrphansForHtmlImages(snapshot);
+    void this.correctWorkspaceOrphansForHtmlImages(snapshot);
   }
 
   // Status-bar label for the open document. For Markdown it's "<file>.md"; for

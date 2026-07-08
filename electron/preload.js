@@ -38,4 +38,5 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
   writeMarkdownImage: (payload) => ipcRenderer.invoke('mdzip:write-markdown-image', payload),
   readMarkdownAsset: (payload) => ipcRenderer.invoke('mdzip:read-markdown-asset', payload),
   showInFolder: (filePath) => ipcRenderer.invoke('mdzip:show-in-folder', { filePath }),
+  printPreview: (payload) => ipcRenderer.invoke('mdzip:print-preview', payload),
 });
