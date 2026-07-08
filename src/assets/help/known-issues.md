@@ -10,12 +10,12 @@ Known issues are tracked in GitHub Issues:
 - Raw HTML is not portable across all Markdown renderers. Studio preserves and
   renders safe HTML, but other apps may escape tags such as `<img>` or `<br>`.
   Prefer normal Markdown syntax when maximum portability matters.
-- Some Studio fixes are currently host-side workarounds while upstream editor
-  issues are tracked, including raw HTML image orphan detection, raw HTML tag
-  editor styling, Mermaid error containment, table alignment/layout polish, and
-  raw HTML image layout attributes.
-- MDZip Studio 1.3.20 uses `@mdzip/editor` / `@mdzip/editor-ng` 1.3.12 from npm.
-  Older Studio versions may render some raw HTML image layout differently.
+- MDZip Studio 1.3.21 uses `@mdzip/editor` / `@mdzip/editor-ng` 1.3.15 from
+  npm, which fixed the previously tracked upstream editor issues (raw HTML
+  image orphan detection, raw HTML tag editor styling, Mermaid error
+  containment, table alignment/layout polish, and raw HTML image layout
+  attributes). Older Studio versions may render some of these differently —
+  update via Help → "Check for Updates...".
 - Printing from the print preview window involves two dialogs on Windows: the
   viewer's print dialog, then the Windows print dialog. The Windows dialog may
   say "This app doesn't support print preview" in its preview pane — this is
