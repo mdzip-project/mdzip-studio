@@ -45,9 +45,11 @@ import {
   lucideDownload,
   lucideInfo,
   lucidePlus,
+  lucideRefreshCw,
   lucideSave,
   lucideSaveAll,
   lucideTrash2,
+  lucideTriangleAlert,
   lucideX,
 } from '@ng-icons/lucide';
 import { ArchiveService, Asset, Document, Manifest, MDZipArchive } from './core/services/archive.service';
@@ -202,6 +204,9 @@ interface ElectronDocumentSaveResult {
   filePath?: string;
   name?: string;
   format?: 'markdown' | 'mdz';
+  // Set when canceled because the file changed on disk since Studio last
+  // read/wrote it — distinguishes this from a plain user-canceled dialog.
+  conflict?: boolean;
 }
 
 interface ElectronUnpackSourceResult {
@@ -296,6 +301,7 @@ interface ElectronBridge {
   onPackFolderProgress?: (callback: (data: PackFolderProgress) => void) => () => void;
   takePendingOpenDocument?: () => Promise<ElectronDocumentOpenResult>;
   onOpenDocumentRequested?: (callback: () => void) => () => void;
+  onDocumentChangedExternally?: (callback: (data: { filePath: string }) => void) => () => void;
   saveDocument?: (payload: {
     filePath?: string;
     defaultDirectory?: string;
@@ -303,6 +309,7 @@ interface ElectronBridge {
     bytes: number[];
     mdzBytes?: number[];
     saveAs: boolean;
+    force?: boolean;
   }) => Promise<ElectronDocumentSaveResult>;
   writeMarkdownImage?: (payload: {
     documentPath: string;
@@ -365,9 +372,11 @@ interface ArchiveTreeData {
       lucideLayoutGrid,
       lucideList,
       lucidePlus,
+      lucideRefreshCw,
       lucideSave,
       lucideSaveAll,
       lucideTrash2,
+      lucideTriangleAlert,
       lucideX,
     }),
   ],
@@ -476,6 +485,18 @@ interface ArchiveTreeData {
       </header>
 
       <section class="workspace">
+        @if (externalChangeBannerVisible()) {
+          <div class="external-change-banner" role="status">
+            <ng-icon name="lucideTriangleAlert" size="14" />
+            <span>This file was changed by another program since it was opened.</span>
+            <div class="external-change-actions">
+              <button type="button" class="external-change-reload" (click)="reloadDocumentFromDisk()">
+                <ng-icon name="lucideRefreshCw" size="12" />Reload from disk
+              </button>
+              <button type="button" class="external-change-dismiss" (click)="externalChangeBannerVisible.set(false)">Dismiss</button>
+            </div>
+          </div>
+        }
         <section class="content">
           @if (!currentArchive()) {
             <div class="empty-state">
@@ -645,6 +666,16 @@ interface ArchiveTreeData {
         <p-button label="Cancel" severity="secondary" [text]="true" (onClick)="cancelUnsavedDialog()" />
         <p-button label="Don't Save" severity="secondary" (onClick)="discardUnsavedThenContinue()" />
         <p-button [label]="readOnly() ? 'Save As...' : 'Save'" (onClick)="saveUnsavedThenContinue()">
+          <ng-template #icon><ng-icon name="lucideSave" size="14" /></ng-template>
+        </p-button>
+      </ng-template>
+    </p-dialog>
+
+    <p-dialog header="File changed on disk" [visible]="saveConflictDialogOpen()" (visibleChange)="onSaveConflictDialogVisibleChange($event)" [modal]="true" [style]="{ width: 'min(92vw, 460px)' }">
+      <p class="unsaved-message"><strong>{{ currentArchive()?.name || 'This file' }}</strong> was changed by another program since Studio last read it. Overwriting now will discard those external changes.</p>
+      <ng-template pTemplate="footer">
+        <p-button label="Cancel" severity="secondary" [text]="true" (onClick)="cancelSaveConflict()" />
+        <p-button label="Overwrite Anyway" (onClick)="confirmOverwriteExternalChange()">
           <ng-template #icon><ng-icon name="lucideSave" size="14" /></ng-template>
         </p-button>
       </ng-template>
@@ -1090,6 +1121,13 @@ export class AppComponent implements OnDestroy {
   // the user was attempting; it runs only after they Save or choose Don't Save.
   readonly unsavedDialogOpen = signal(false);
   private pendingDiscardAction: (() => void) | null = null;
+  // In-place Save was blocked because the file changed on disk since Studio
+  // last read/wrote it (another program, or the same file open in another
+  // Studio window). "Overwrite Anyway" retries the save with force: true.
+  readonly saveConflictDialogOpen = signal(false);
+  // Live notice (main-process file watch) that the open document changed on
+  // disk — a softer heads-up than the save-time guard, shown while editing.
+  readonly externalChangeBannerVisible = signal(false);
   // Folder→.mdz packing state (issue #2). Modeled on mdzip.org/packager.html:
   // a path-only scan shows the options instantly; only files matching the
   // include-filters are read at build time.
@@ -1209,6 +1247,7 @@ export class AppComponent implements OnDestroy {
   private readonly htmlTagHighlightAppliedEditors = new WeakSet<EditorView>();
   private pendingMarkdownImageDestination: 'same' | 'subfolder' | 'mdz' | null = null;
   private removeOpenDocumentRequestedListener: (() => void) | null = null;
+  private removeDocumentChangedExternallyListener: (() => void) | null = null;
   private pendingElectronOpen: Promise<boolean> | null = null;
   private electronOpenRequestedWhilePending = false;
 
@@ -1341,6 +1380,15 @@ export class AppComponent implements OnDestroy {
         }
       })
     ) ?? null;
+    this.removeDocumentChangedExternallyListener = window.mdzipStudio?.onDocumentChangedExternally?.(
+      (data) => this.ngZone.run(() => {
+        // Guard against a notification arriving for a document this window
+        // has since closed or replaced.
+        if (this.currentArchive()?.path === data.filePath) {
+          this.externalChangeBannerVisible.set(true);
+        }
+      })
+    ) ?? null;
     if (window.mdzipStudio?.takePendingOpenDocument) {
       // Electron may have launched us with a file (double-click / "Open with").
       // Open it if one is pending; otherwise leave the workspace empty so the
@@ -1380,6 +1428,7 @@ export class AppComponent implements OnDestroy {
     document.removeEventListener('mouseout', this.handleLinkMouseOut);
     this.osColorSchemeQuery?.removeEventListener('change', this.handleOsColorSchemeChange);
     this.removeOpenDocumentRequestedListener?.();
+    this.removeDocumentChangedExternallyListener?.();
     if (this.workspaceLoadTimeoutId !== null) clearTimeout(this.workspaceLoadTimeoutId);
     if (this.printCaptureTimer !== null) clearTimeout(this.printCaptureTimer);
   }
@@ -1581,6 +1630,7 @@ export class AppComponent implements OnDestroy {
     this.currentMarkdownPath = null;
     this.clearMdAssetCaches();
     this.readOnly.set(false);
+    this.externalChangeBannerVisible.set(false);
     this.statusMessage.set('Closed document');
   }
 
@@ -1633,6 +1683,23 @@ export class AppComponent implements OnDestroy {
   onUnsavedDialogVisibleChange(visible: boolean): void {
     if (!visible) {
       this.cancelUnsavedDialog();
+    }
+  }
+
+  // The user chose to overwrite despite the on-disk change; retry the exact
+  // same in-place save, skipping the conflict check this time.
+  confirmOverwriteExternalChange(): void {
+    this.saveConflictDialogOpen.set(false);
+    void this.saveArchive(false, true);
+  }
+
+  cancelSaveConflict(): void {
+    this.saveConflictDialogOpen.set(false);
+  }
+
+  onSaveConflictDialogVisibleChange(visible: boolean): void {
+    if (!visible) {
+      this.cancelSaveConflict();
     }
   }
 
@@ -2272,6 +2339,7 @@ export class AppComponent implements OnDestroy {
     this.isDirty.set(false);
     this.validationIssues.set([]);
     this.saveValidationState.set('unchecked');
+    this.externalChangeBannerVisible.set(false);
     // Reset relative-image resolution; set below only for a plain .md from disk.
     this.currentMarkdownPath = null;
     this.clearMdAssetCaches();
@@ -2366,6 +2434,9 @@ export class AppComponent implements OnDestroy {
     if (!filePath && !fileName) {
       return;
     }
+    // A successful save just re-synced this file with disk, resolving any
+    // pending external-change notice.
+    this.externalChangeBannerVisible.set(false);
     // Keep relative-image resolution pointed at the saved location (e.g. Save As).
     if (filePath && this.sourceFormat() === 'markdown') {
       this.currentMarkdownPath = filePath;
@@ -2391,7 +2462,9 @@ export class AppComponent implements OnDestroy {
     return trimmed.slice(0, index);
   }
 
-  async saveArchive(saveAs = false): Promise<void> {
+  // force skips the on-disk conflict check — used only to retry after the
+  // user chooses "Overwrite Anyway" in the save-conflict dialog.
+  async saveArchive(saveAs = false, force = false): Promise<void> {
     const archive = this.currentArchive();
     if (!archive) return;
 
@@ -2413,13 +2486,13 @@ export class AppComponent implements OnDestroy {
     // Surface any failure: callers invoke this as `void saveArchive(...)`, which
     // would otherwise swallow a thrown error and look like nothing happened.
     try {
-      await this.performSave(archive, saveAs);
+      await this.performSave(archive, saveAs, force);
     } catch (error) {
       this.statusMessage.set(`Save failed: ${error instanceof Error ? error.message : 'unknown error'}`);
     }
   }
 
-  private async performSave(archive: MDZipArchive, saveAs: boolean): Promise<void> {
+  private async performSave(archive: MDZipArchive, saveAs: boolean, force = false): Promise<void> {
     // Pull the editor's latest text into fresh bytes before saving. The embedded
     // editor only emits `changed` (with rebuilt bytes) on structural edits, so
     // plain text edits live only inside the editor until flushed — without this
@@ -2460,12 +2533,21 @@ export class AppComponent implements OnDestroy {
             bytes: Array.from(bytes),
             mdzBytes: mdzBytes ? Array.from(mdzBytes) : undefined,
             saveAs,
+            force,
           });
         } catch (error) {
           this.statusMessage.set(`Save failed: ${error instanceof Error ? error.message : 'unknown error'}`);
           return;
         }
-        if (result.canceled) { this.statusMessage.set('Save canceled'); return; }
+        if (result.canceled) {
+          if (result.conflict) {
+            this.saveConflictDialogOpen.set(true);
+            this.statusMessage.set('Save blocked — the file changed on disk');
+            return;
+          }
+          this.statusMessage.set('Save canceled');
+          return;
+        }
 
         this.recordSavedRecent(result.filePath, result.format === 'mdz', archive.name);
         this.updateArchivePath(result.filePath, result.name);
@@ -2507,12 +2589,18 @@ export class AppComponent implements OnDestroy {
           defaultName,
           bytes: Array.from(bytes),
           saveAs,
+          force,
         });
       } catch (error) {
         this.statusMessage.set(`Save failed: ${error instanceof Error ? error.message : 'unknown error'}`);
         return;
       }
       if (result.canceled) {
+        if (result.conflict) {
+          this.saveConflictDialogOpen.set(true);
+          this.statusMessage.set('Save blocked — the file changed on disk');
+          return;
+        }
         this.statusMessage.set('Save canceled');
         return;
       }

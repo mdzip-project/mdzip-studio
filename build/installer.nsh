@@ -8,7 +8,7 @@
 ; Separate ProgID for .md so plain Markdown does NOT inherit the .mdz preview handler.
 !define MDZIP_MD_PROGID "MDZip.Studio.Markdown"
 !define MDZIP_CAPABILITIES "Software\MDZip Studio\Capabilities"
-!define MDZIP_RUNTIME_URL "https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe"
+!define MDZIP_RUNTIME_URL "https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe"
 
 !ifndef BUILD_UNINSTALLER
 Var ExplorerIntegrationCheckbox
@@ -37,24 +37,24 @@ FunctionEnd
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW CustomizeInstallScopePage
 
 Function EnsureDotNetDesktopRuntime
-  IfFileExists "$PROGRAMFILES64\dotnet\shared\Microsoft.WindowsDesktop.App\8.*\WindowsBase.dll" runtime_ready
+  IfFileExists "$PROGRAMFILES64\dotnet\shared\Microsoft.WindowsDesktop.App\10.*\WindowsBase.dll" runtime_ready
 
-  DetailPrint "Downloading the Microsoft .NET 8 Desktop Runtime..."
+  DetailPrint "Downloading the Microsoft .NET 10 Desktop Runtime..."
   nsExec::ExecToLog \
     '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ProgressPreference = $\'SilentlyContinue$\'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $\'${MDZIP_RUNTIME_URL}$\' -OutFile $\'$PLUGINSDIR\windowsdesktop-runtime.exe$\'"'
   Pop $0
   ${If} $0 != 0
     MessageBox MB_ICONSTOP|MB_OK \
-      "MDZip Studio could not download the Microsoft .NET 8 Desktop Runtime.$\r$\n$\r$\nDownload result: $0"
+      "MDZip Studio could not download the Microsoft .NET 10 Desktop Runtime.$\r$\n$\r$\nDownload result: $0"
     Abort
   ${EndIf}
 
-  DetailPrint "Installing the Microsoft .NET 8 Desktop Runtime..."
+  DetailPrint "Installing the Microsoft .NET 10 Desktop Runtime..."
   ExecWait '"$PLUGINSDIR\windowsdesktop-runtime.exe" /install /quiet /norestart' $0
   ${If} $0 != 0
   ${AndIf} $0 != 3010
     MessageBox MB_ICONSTOP|MB_OK \
-      "The Microsoft .NET 8 Desktop Runtime installer failed with exit code $0."
+      "The Microsoft .NET 10 Desktop Runtime installer failed with exit code $0."
     Abort
   ${EndIf}
 
@@ -101,7 +101,7 @@ FunctionEnd
     Pop $ExplorerIntegrationCheckbox
 
     ${NSD_CreateLabel} 14u 58u 94% 24u \
-      "Adds .mdz and .md file registration and Explorer previews. Installs the Microsoft .NET 8 Desktop Runtime if needed."
+      "Adds .mdz and .md file registration and Explorer previews. Installs the Microsoft .NET 10 Desktop Runtime if needed."
     Pop $0
 
     ${NSD_CreateCheckbox} 0 88u 100% 14u \

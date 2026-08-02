@@ -25,7 +25,7 @@ const result = spawnSync(
     'publish',
     project,
     '--configuration', 'Release',
-    '--framework', 'net8.0-windows',
+    '--framework', 'net10.0-windows',
     '--runtime', 'win-x64',
     '--self-contained', 'false',
     '--output', output,

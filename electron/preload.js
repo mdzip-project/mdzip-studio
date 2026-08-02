@@ -32,6 +32,11 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
     ipcRenderer.on('mdzip:open-document-requested', listener);
     return () => ipcRenderer.removeListener('mdzip:open-document-requested', listener);
   },
+  onDocumentChangedExternally: (callback) => {
+    const listener = (_event, data) => callback(data);
+    ipcRenderer.on('mdzip:document-changed-externally', listener);
+    return () => ipcRenderer.removeListener('mdzip:document-changed-externally', listener);
+  },
   saveDocument: (payload) => ipcRenderer.invoke('mdzip:save-document', payload),
   getMarkdownDefaultStatus: () => ipcRenderer.invoke('mdzip:get-md-default-status'),
   promptMarkdownDefault: () => ipcRenderer.invoke('mdzip:prompt-md-default'),

@@ -1,11 +1,23 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs/promises');
-const { constants: fsConstants, readdirSync, unlinkSync } = require('fs');
+const { constants: fsConstants, readdirSync, unlinkSync, watch: watchFs } = require('fs');
 const { execFile } = require('child_process');
 const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const { documentPathFromArgs } = require('./lib/document-path');
+const { saveDialogFilters } = require('./lib/save-dialog');
+const { resolveInsidePackFolder } = require('./lib/pack-folder');
+const { buildJumpList } = require('./lib/jump-list');
+const { statsDiffer } = require('./lib/file-watch');
+const {
+  updateAvailableDialog,
+  updateNotAvailableDialog,
+  updateDownloadedDialog,
+  updateErrorDialog,
+} = require('./lib/updater');
+const { buildMenuTemplate } = require('./lib/menu');
 
 // ProgID the installer registers for .md (see build/installer.nsh). Used to
 // detect whether Studio is already the default Markdown editor.
@@ -18,13 +30,165 @@ const DARK_WINDOW_ICON = path.join(__dirname, 'icons', 'mdzip-mark-dark.ico');
 const windowIconForTheme = () =>
   nativeTheme.shouldUseDarkColors ? DARK_WINDOW_ICON : LIGHT_WINDOW_ICON;
 
-let mainWindow;
-let currentDocumentPath = null;
-let pendingOpenDocumentPath = null;
-// Whether a document is open in the renderer. Gates the document-only File menu
-// items (Save, Save As, Close, Show in File Manager); updated over IPC.
-let documentOpen = false;
+// Multi-window: each open BrowserWindow gets its own document/menu state —
+// there is no single "the" window once more than one can be open at once.
+// state shape: { documentPath, documentOpen, pendingOpenPath, lastPackFolder }
+const windows = new Map();
+let lastFocusedWindow = null;
 const isDev = !app.isPackaged;
+
+function windowState(win) {
+  return win ? windows.get(win) : undefined;
+}
+
+function findWindowForPath(filePath) {
+  for (const [win, state] of windows) {
+    if (state.documentPath === filePath) return win;
+  }
+  return null;
+}
+
+function focusWindow(win) {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+// Best-effort "an existing window to bring forward" for cases with no specific
+// file to route to (e.g. relaunching the app with no file argument).
+function anyWindow() {
+  if (lastFocusedWindow && !lastFocusedWindow.isDestroyed()) return lastFocusedWindow;
+  const [firstWin] = windows.keys();
+  return firstWin ?? null;
+}
+
+// Open filePath in whichever window already has it open (just focus it — no
+// duplicate), otherwise in a brand-new window. A null filePath just surfaces
+// an existing window, or creates one if none exist.
+function openOrFocus(filePath) {
+  if (!filePath) {
+    const win = anyWindow();
+    if (win) {
+      focusWindow(win);
+    } else {
+      createWindow();
+    }
+    return;
+  }
+  const existing = findWindowForPath(filePath);
+  if (existing) {
+    focusWindow(existing);
+    return;
+  }
+  // Don't focus a brand-new window here — it's created hidden and shows
+  // itself via 'ready-to-show' once loaded, avoiding a blank-window flash.
+  createWindow({ pendingOpenPath: filePath });
+}
+
+function showAppDialog(win, options) {
+  if (win && !win.isDestroyed()) return dialog.showMessageBox(win, options);
+  return dialog.showMessageBox(options);
+}
+
+// --- External-change detection ----------------------------------------------
+// Each window's active document gets a directory watch (not a file watch — a
+// file handle can be invalidated by an atomic replace-via-rename, which many
+// editors and sync tools use for a "save") plus a remembered mtime/size
+// baseline, so we can tell "this window's document changed on disk" apart
+// from noise elsewhere in the folder.
+
+async function snapshotDocumentStat(win, filePath) {
+  const state = windowState(win);
+  if (!state) return;
+  try {
+    const stat = await fs.stat(filePath);
+    state.documentStat = { mtimeMs: stat.mtimeMs, size: stat.size };
+  } catch {
+    state.documentStat = null;
+  }
+  // A fresh, legitimate baseline (open/save/reload) — any previously-notified
+  // external change is resolved as of now.
+  state.externalChangeNotifiedFor = null;
+}
+
+function unwatchDocument(win) {
+  const state = windowState(win);
+  if (!state) return;
+  if (state.externalChangeTimer) {
+    clearTimeout(state.externalChangeTimer);
+    state.externalChangeTimer = null;
+  }
+  if (state.fileWatcher) {
+    try { state.fileWatcher.close(); } catch { /* already closed */ }
+    state.fileWatcher = null;
+  }
+}
+
+async function checkExternalChange(win, filePath) {
+  const state = windowState(win);
+  // Ignore a stale event that fires after this window moved on to a
+  // different document (or closed it) since the watch was set up.
+  if (!state || state.documentPath !== filePath) return;
+  let stat;
+  try {
+    stat = await fs.stat(filePath);
+  } catch {
+    return; // mid atomic-replace, or briefly deleted; a later fs event will re-check
+  }
+  const nextStat = { mtimeMs: stat.mtimeMs, size: stat.size };
+  // Deliberately compare against documentStat (the last legitimate
+  // open/save/reload baseline) and never overwrite it here — only resolving
+  // the change for real (reload, or a forced save) advances the baseline.
+  // Otherwise the very notification meant to warn about a conflict would
+  // also erase the save-time guard's ability to catch it.
+  if (!statsDiffer(state.documentStat, nextStat)) return;
+  // Still dedupe repeat fs events for the *same* external change so one save
+  // doesn't re-fire the notice a dozen times.
+  if (state.externalChangeNotifiedFor && !statsDiffer(state.externalChangeNotifiedFor, nextStat)) return;
+  state.externalChangeNotifiedFor = nextStat;
+  if (!win.isDestroyed()) {
+    win.webContents.send('mdzip:document-changed-externally', { filePath });
+  }
+}
+
+function scheduleExternalChangeCheck(win, filePath) {
+  const state = windowState(win);
+  if (!state) return;
+  if (state.externalChangeTimer) clearTimeout(state.externalChangeTimer);
+  // Debounce: a single save often fires several fs events in quick succession.
+  state.externalChangeTimer = setTimeout(() => {
+    state.externalChangeTimer = null;
+    checkExternalChange(win, filePath).catch(() => {});
+  }, 300);
+}
+
+function watchDocument(win, filePath) {
+  const state = windowState(win);
+  if (!state) return;
+  unwatchDocument(win);
+  if (!filePath) return;
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  try {
+    state.fileWatcher = watchFs(dir, { persistent: false }, (_eventType, filename) => {
+      if (filename && filename !== base) return;
+      scheduleExternalChangeCheck(win, filePath);
+    });
+  } catch {
+    // Watching can fail (e.g. a removable/network drive going away); the
+    // save-time conflict check is the backstop when live watching isn't available.
+    state.fileWatcher = null;
+  }
+}
+
+// Refresh both the change-detection baseline and the watch for a window's
+// newly-active document in one call — used everywhere a window's document
+// path is set to a real, on-disk file.
+async function trackDocument(win, filePath) {
+  await snapshotDocumentStat(win, filePath);
+  watchDocument(win, filePath);
+}
 
 // Match the AppUserModelID the NSIS installer assigns the shortcut (electron-builder
 // defaults it to the build appId). Windows keys the taskbar Jump List off this, so
@@ -41,6 +205,9 @@ if (process.platform === 'win32') {
 // baked into app-update.yml at build time. Updates only work in a packaged
 // build; in dev the feed is absent and checkForUpdates() rejects.
 let updaterWired = false;
+// The window that triggered the in-flight check — only one check happens at a
+// time, so this is enough to parent the outcome dialog to the right window.
+let updateDialogParent = null;
 
 function wireAutoUpdater() {
   if (updaterWired) return;
@@ -49,59 +216,32 @@ function wireAutoUpdater() {
   autoUpdater.autoDownload = false;
 
   autoUpdater.on('update-available', (info) => {
-    dialog
-      .showMessageBox(mainWindow, {
-        type: 'info',
-        buttons: ['Download', 'Not now'],
-        defaultId: 0,
-        cancelId: 1,
-        title: 'Update available',
-        message: `MDZip Studio ${info.version} is available (you have ${app.getVersion()}).`,
-        detail: 'Download it now? You choose when to install once the download finishes.',
-      })
+    showAppDialog(updateDialogParent, updateAvailableDialog(info, app.getVersion()))
       .then(({ response }) => {
         if (response === 0) autoUpdater.downloadUpdate().catch(() => {});
       });
   });
 
   autoUpdater.on('update-not-available', () => {
-    dialog.showMessageBox(mainWindow, {
-      type: 'info',
-      title: 'Check for Updates',
-      message: 'You’re up to date.',
-      detail: `MDZip Studio ${app.getVersion()} is the latest version.`,
-    });
+    showAppDialog(updateDialogParent, updateNotAvailableDialog(app.getVersion()));
   });
 
   autoUpdater.on('update-downloaded', (info) => {
-    dialog
-      .showMessageBox(mainWindow, {
-        type: 'question',
-        buttons: ['Restart and install', 'Later'],
-        defaultId: 0,
-        cancelId: 1,
-        title: 'Update ready',
-        message: `MDZip Studio ${info.version} has been downloaded.`,
-        detail: 'Restart now to install it, or it will install the next time you quit.',
-      })
+    showAppDialog(updateDialogParent, updateDownloadedDialog(info))
       .then(({ response }) => {
         if (response === 0) autoUpdater.quitAndInstall();
       });
   });
 
   autoUpdater.on('error', (error) => {
-    dialog.showMessageBox(mainWindow, {
-      type: 'error',
-      title: 'Check for Updates',
-      message: 'Could not check for updates.',
-      detail: error?.message ?? 'Could not reach the update server. Check your connection and try again.',
-    });
+    showAppDialog(updateDialogParent, updateErrorDialog(error));
   });
 }
 
-function checkForUpdates() {
+function checkForUpdates(win) {
+  updateDialogParent = win ?? null;
   if (!app.isPackaged) {
-    dialog.showMessageBox(mainWindow, {
+    showAppDialog(win, {
       type: 'info',
       title: 'Check for Updates',
       message: 'Updates are only available in an installed build.',
@@ -115,13 +255,6 @@ function checkForUpdates() {
   autoUpdater.checkForUpdates().catch(() => {});
 }
 
-function documentPathFromArgs(args) {
-  const candidate = args.find((arg) =>
-    typeof arg === 'string' && /\.(?:mdz|md)$/i.test(arg) && !arg.startsWith('--')
-  );
-  return candidate ? path.resolve(candidate) : null;
-}
-
 async function isPathReadOnly(filePath) {
   // On Windows W_OK reflects the read-only file attribute; on POSIX it reflects
   // write permission. Either way, a failure means the user can't save in place.
@@ -133,11 +266,13 @@ async function isPathReadOnly(filePath) {
   }
 }
 
-async function readDocument(filePath, options = {}) {
+async function readDocument(win, filePath, options = {}) {
   const resolvedPath = path.resolve(filePath);
   const bytes = await fs.readFile(resolvedPath);
   if (options.activate !== false) {
-    currentDocumentPath = resolvedPath;
+    const state = windowState(win);
+    if (state) state.documentPath = resolvedPath;
+    await trackDocument(win, resolvedPath);
   }
   return {
     canceled: false,
@@ -221,10 +356,6 @@ function showMarkdownOpenWithDialog(options) {
   });
 }
 
-// Folder of the most recent pick, so the (separate) read step only ever touches
-// a directory the user actually chose via the dialog.
-let lastPackFolder = null;
-
 const toPosixRelative = (root, abs) => path.relative(root, abs).split(path.sep).join('/');
 
 // Cheap scan: enumerate file paths only — no contents, no stat, no filtering
@@ -243,17 +374,6 @@ async function enumerateFolderPaths(root, current = root, out = []) {
     }
   }
   return out;
-}
-
-// Resolve an archive-relative path back to an absolute path inside the picked
-// folder, refusing anything that escapes it.
-function resolveInsidePackFolder(rel) {
-  const abs = path.resolve(lastPackFolder, rel);
-  const relCheck = path.relative(lastPackFolder, abs);
-  if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
-    throw new Error(`Refusing to read outside the selected folder: "${rel}".`);
-  }
-  return abs;
 }
 
 function safeUnpackFolderName(name) {
@@ -294,84 +414,37 @@ function resolveInsideUnpackFolder(root, rel) {
   return abs;
 }
 
-function queueOpenDocument(filePath) {
-  if (!filePath) return;
-  pendingOpenDocumentPath = path.resolve(filePath);
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
-    mainWindow.webContents.send('mdzip:open-document-requested');
-  }
-}
-
-// Build the relaunch arguments for a Jump List item. A packaged build's
-// execPath IS the app, so the file path alone suffices; in dev, execPath is
-// electron.exe and needs the app directory before the file argument.
-function jumpListLaunchArgs(filePath) {
-  const quotedFile = `"${filePath}"`;
-  return app.isPackaged ? quotedFile : `"${app.getAppPath()}" ${quotedFile}`;
-}
-
 // The per-file-type .ico files ship via extraResources (packaged) and live under
 // build/ in dev. These are the same icons the installer registers for .md/.mdz.
 const FILE_ICONS_DIR = app.isPackaged
   ? path.join(process.resourcesPath, 'file-icons')
   : path.join(__dirname, '..', 'build', 'file-icons');
 
-function jumpListIconFor(filePath) {
-  const iconFile = /\.md$/i.test(filePath) ? 'md.ico' : 'mdz.ico';
-  return { iconPath: path.join(FILE_ICONS_DIR, iconFile), iconIndex: 0 };
-}
-
 // Mirror the renderer's recent-files list into the Windows taskbar Jump List.
-// Each entry relaunches the exe with the file path, which the single-instance
-// handler routes through queueOpenDocument just like a double-click would.
 function updateJumpList(recentPaths) {
   if (process.platform !== 'win32') return;
-  const items = (Array.isArray(recentPaths) ? recentPaths : [])
-    // Only .md/.mdz survive — these are what documentPathFromArgs accepts on relaunch.
-    .filter((p) => typeof p === 'string' && /\.(?:mdz|md)$/i.test(p))
-    .slice(0, 10)
-    .map((p) => ({
-      type: 'task',
-      program: process.execPath,
-      args: jumpListLaunchArgs(p),
-      title: path.basename(p),
-      description: p,
-      // Per-type document icon instead of the program's (electron.exe) icon.
-      ...jumpListIconFor(p),
-    }));
   try {
-    app.setJumpList(items.length ? [{ type: 'custom', name: 'Recent', items }] : null);
+    app.setJumpList(
+      buildJumpList(recentPaths, {
+        isPackaged: app.isPackaged,
+        appPath: app.getAppPath(),
+        execPath: process.execPath,
+        fileIconsDir: FILE_ICONS_DIR,
+      })
+    );
   } catch {
     // setJumpList throws if Windows rejects an item; a stale list is harmless.
   }
 }
 
-function dispatchAppEvent(name) {
-  return mainWindow?.webContents.executeJavaScript(
+function dispatchAppEvent(win, name) {
+  return win?.webContents.executeJavaScript(
     `window.dispatchEvent(new CustomEvent(${JSON.stringify(name)}))`
   );
 }
 
-function saveDialogFilters(defaultName) {
-  if (/\.md$/i.test(defaultName)) {
-    return [
-      { name: 'Markdown Files', extensions: ['md'] },
-      { name: 'MDZip Documents', extensions: ['mdz'] },
-      { name: 'All Files', extensions: ['*'] },
-    ];
-  }
-
-  return [
-    { name: 'MDZip Documents', extensions: ['mdz'] },
-    { name: 'All Files', extensions: ['*'] },
-  ];
-}
-
-function createWindow() {
-  mainWindow = new BrowserWindow({
+function createWindow({ pendingOpenPath = null } = {}) {
+  const win = new BrowserWindow({
     show: false,
     width: 1200,
     height: 800,
@@ -384,20 +457,39 @@ function createWindow() {
     },
   });
 
+  windows.set(win, {
+    documentPath: null,
+    documentOpen: false,
+    pendingOpenPath,
+    lastPackFolder: null,
+    documentStat: null,
+    externalChangeNotifiedFor: null,
+    fileWatcher: null,
+    externalChangeTimer: null,
+  });
+  refreshWindowMenu(win);
+
   const startUrl = isDev
     ? 'http://localhost:4300'
     : `file://${path.join(__dirname, '../dist/mdzip-studio/index.html')}`;
 
-  mainWindow.loadURL(startUrl);
-  mainWindow.once('ready-to-show', () => {
-    mainWindow?.show();
-    if (pendingOpenDocumentPath) {
-      mainWindow?.webContents.send('mdzip:open-document-requested');
+  win.loadURL(startUrl);
+  win.once('ready-to-show', () => {
+    if (win.isDestroyed()) return;
+    win.show();
+    if (windowState(win)?.pendingOpenPath) {
+      win.webContents.send('mdzip:open-document-requested');
     }
   });
 
-  mainWindow.on('closed', () => {
-    mainWindow = null;
+  win.on('focus', () => {
+    lastFocusedWindow = win;
+  });
+
+  win.on('closed', () => {
+    unwatchDocument(win);
+    windows.delete(win);
+    if (lastFocusedWindow === win) lastFocusedWindow = null;
   });
 
   const appOrigin = isDev
@@ -405,7 +497,7 @@ function createWindow() {
     : `file://${path.join(__dirname, '../dist')}`;
 
   // Open external links in the OS default browser instead of navigating the app window.
-  mainWindow.webContents.on('will-navigate', (event, url) => {
+  win.webContents.on('will-navigate', (event, url) => {
     if (!url.startsWith(appOrigin)) {
       event.preventDefault();
       shell.openExternal(url);
@@ -413,26 +505,27 @@ function createWindow() {
   });
 
   // Handle target="_blank" links the same way.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
   });
+
+  return win;
 }
 
 const initialDocumentPath = documentPathFromArgs(process.argv.slice(1));
-if (initialDocumentPath) {
-  pendingOpenDocumentPath = initialDocumentPath;
-}
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', (_event, commandLine) => {
-    queueOpenDocument(documentPathFromArgs(commandLine.slice(1)));
+    openOrFocus(documentPathFromArgs(commandLine.slice(1)));
   });
 
-  app.on('ready', createWindow);
+  app.on('ready', () => {
+    createWindow({ pendingOpenPath: initialDocumentPath });
+  });
 }
 
 app.on('window-all-closed', () => {
@@ -442,13 +535,14 @@ app.on('window-all-closed', () => {
 });
 
 app.on('activate', () => {
-  if (mainWindow === null) {
+  if (windows.size === 0) {
     createWindow();
   }
 });
 
-ipcMain.handle('mdzip:open-document', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
+ipcMain.handle('mdzip:open-document', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showOpenDialog(win, {
     title: 'Open Document',
     properties: ['openFile'],
     filters: [
@@ -463,16 +557,17 @@ ipcMain.handle('mdzip:open-document', async () => {
     return { canceled: true };
   }
 
-  return readDocument(result.filePaths[0]);
+  return readDocument(win, result.filePaths[0]);
 });
 
-ipcMain.handle('mdzip:open-document-path', async (_event, payload) => {
+ipcMain.handle('mdzip:open-document-path', async (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
   const filePath = payload?.filePath;
   if (!filePath) {
     return { canceled: true };
   }
   try {
-    return await readDocument(filePath);
+    return await readDocument(win, filePath);
   } catch (error) {
     return {
       canceled: true,
@@ -485,38 +580,55 @@ ipcMain.on('mdzip:set-recent-files', (_event, payload) => {
   updateJumpList(payload?.paths);
 });
 
-ipcMain.on('mdzip:set-document-open', (_event, open) => {
+ipcMain.on('mdzip:set-document-open', (event, open) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const state = windowState(win);
+  if (!state) return;
   const next = Boolean(open);
   if (!next) {
-    currentDocumentPath = null;
+    state.documentPath = null;
+    unwatchDocument(win);
   }
-  if (next === documentOpen) return;
-  documentOpen = next;
-  // Rebuild the menu so the document-only items reflect the new state.
-  createMenu();
+  if (next === state.documentOpen) return;
+  state.documentOpen = next;
+  // Rebuild this window's menu so the document-only items reflect its new state.
+  refreshWindowMenu(win);
 });
 
-ipcMain.on('mdzip:set-current-document-path', (_event, payload) => {
+ipcMain.on('mdzip:set-current-document-path', (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const state = windowState(win);
+  if (!state) return;
   const filePath = typeof payload?.filePath === 'string' && payload.filePath
     ? payload.filePath
     : null;
-  currentDocumentPath = filePath ? path.resolve(filePath) : null;
+  const resolved = filePath ? path.resolve(filePath) : null;
+  state.documentPath = resolved;
+  if (resolved) {
+    trackDocument(win, resolved).catch(() => {});
+  } else {
+    unwatchDocument(win);
+  }
 });
 
-ipcMain.handle('mdzip:take-pending-open-document', async () => {
-  const filePath = pendingOpenDocumentPath;
-  pendingOpenDocumentPath = null;
+ipcMain.handle('mdzip:take-pending-open-document', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const state = windowState(win);
+  const filePath = state?.pendingOpenPath ?? null;
+  if (state) state.pendingOpenPath = null;
   if (!filePath) {
     return { canceled: true };
   }
   // Do not activate the pending path here. Studio may still have a dirty
   // document open and can cancel the OS-level open request. Activating before
   // the renderer accepts the replacement breaks document-relative image reads
-  // because mdzip:read-markdown-asset only serves assets for currentDocumentPath.
-  return readDocument(filePath, { activate: false });
+  // because mdzip:read-markdown-asset only serves assets for this window's
+  // current document path.
+  return readDocument(win, filePath, { activate: false });
 });
 
-ipcMain.handle('mdzip:save-document', async (_event, payload) => {
+ipcMain.handle('mdzip:save-document', async (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
   let filePath = payload.filePath;
 
   if (payload.saveAs || !filePath) {
@@ -529,7 +641,7 @@ ipcMain.handle('mdzip:save-document', async (_event, payload) => {
     const defaultPath = defaultDirectory
       ? path.join(defaultDirectory, defaultName)
       : defaultName;
-    const result = await dialog.showSaveDialog(mainWindow, {
+    const result = await dialog.showSaveDialog(win, {
       title: 'Save Document',
       defaultPath,
       filters: saveDialogFilters(payload.defaultName),
@@ -540,6 +652,22 @@ ipcMain.handle('mdzip:save-document', async (_event, payload) => {
     }
 
     filePath = result.filePath;
+  } else if (!payload.force) {
+    // In-place overwrite of a path we already have open: check nothing else
+    // touched the file since our last read/write before silently clobbering
+    // it. Save As always goes through the dialog above (whose own OS-level
+    // "replace this file?" prompt covers that case).
+    const state = windowState(win);
+    let onDiskStat = null;
+    try {
+      const stat = await fs.stat(filePath);
+      onDiskStat = { mtimeMs: stat.mtimeMs, size: stat.size };
+    } catch {
+      onDiskStat = null; // deleted externally — let the write recreate it, not a conflict
+    }
+    if (onDiskStat && statsDiffer(state?.documentStat ?? null, onDiskStat)) {
+      return { canceled: true, conflict: true, filePath };
+    }
   }
 
   const format = /\.mdz$/i.test(filePath) ? 'mdz' : 'markdown';
@@ -549,7 +677,12 @@ ipcMain.handle('mdzip:save-document', async (_event, payload) => {
   const bytes = Buffer.from(selectedBytes);
 
   await fs.writeFile(filePath, bytes);
-  currentDocumentPath = path.resolve(filePath);
+  const resolvedPath = path.resolve(filePath);
+  const state = windowState(win);
+  if (state) state.documentPath = resolvedPath;
+  // Re-baseline after our own write so the live watch doesn't mistake it for
+  // an external change, and keep watching (Save As may have changed the path).
+  await trackDocument(win, resolvedPath);
   return {
     canceled: false,
     filePath,
@@ -561,8 +694,9 @@ ipcMain.handle('mdzip:save-document', async (_event, payload) => {
 // Step 1: pick a folder and enumerate its file paths (no contents) so the UI can
 // show options instantly. Also reads a root manifest.json, if present, to
 // pre-fill the option fields.
-ipcMain.handle('mdzip:pick-folder', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
+ipcMain.handle('mdzip:pick-folder', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showOpenDialog(win, {
     title: 'Pack Folder to MDZip',
     properties: ['openDirectory'],
   });
@@ -577,7 +711,8 @@ ipcMain.handle('mdzip:pick-folder', async () => {
     throw new Error('The selected path is not a folder.');
   }
 
-  lastPackFolder = folderPath;
+  const state = windowState(win);
+  if (state) state.lastPackFolder = folderPath;
   const paths = (await enumerateFolderPaths(folderPath)).sort();
   let manifestText = null;
   if (paths.some((p) => p.toLowerCase() === 'manifest.json')) {
@@ -593,22 +728,24 @@ ipcMain.handle('mdzip:pick-folder', async () => {
 // Step 2: read the specific files the renderer selected (after applying the
 // include-filters), streaming progress so the UI can show a bar + ETA. Only
 // reads inside the folder picked in step 1.
-ipcMain.handle('mdzip:read-folder', async (_event, payload) => {
+ipcMain.handle('mdzip:read-folder', async (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const lastPackFolder = windowState(win)?.lastPackFolder ?? null;
   if (!lastPackFolder) {
     throw new Error('Select a folder before reading it.');
   }
   const requested = Array.isArray(payload?.paths) ? payload.paths : [];
   const list = [];
   for (const rel of requested) {
-    const abs = resolveInsidePackFolder(rel);
+    const abs = resolveInsidePackFolder(lastPackFolder, rel);
     list.push({ rel, abs, size: (await fs.stat(abs)).size });
   }
   const total = list.length;
   const bytesTotal = list.reduce((sum, file) => sum + file.size, 0);
 
   const emit = (done, bytesDone) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('mdzip:pack-folder-progress', { done, total, bytesDone, bytesTotal });
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('mdzip:pack-folder-progress', { done, total, bytesDone, bytesTotal });
     }
   };
 
@@ -623,8 +760,9 @@ ipcMain.handle('mdzip:read-folder', async (_event, payload) => {
   return { files };
 });
 
-ipcMain.handle('mdzip:pick-mdz-for-unpack', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
+ipcMain.handle('mdzip:pick-mdz-for-unpack', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showOpenDialog(win, {
     title: 'Unpack MDZip Archive',
     properties: ['openFile'],
     filters: [
@@ -647,13 +785,14 @@ ipcMain.handle('mdzip:pick-mdz-for-unpack', async () => {
   };
 });
 
-ipcMain.handle('mdzip:write-unpacked-folder', async (_event, payload) => {
+ipcMain.handle('mdzip:write-unpacked-folder', async (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
   const entries = Array.isArray(payload?.entries) ? payload.entries : [];
   if (!entries.length) {
     throw new Error('The archive has no files to unpack.');
   }
 
-  const result = await dialog.showOpenDialog(mainWindow, {
+  const result = await dialog.showOpenDialog(win, {
     title: 'Choose Destination Folder',
     properties: ['openDirectory', 'createDirectory'],
   });
@@ -689,10 +828,12 @@ ipcMain.handle('mdzip:get-md-default-status', async () => {
   return { supported: true, isDefault: progId === MD_PROGID };
 });
 
-ipcMain.handle('mdzip:prompt-md-default', async () => {
+ipcMain.handle('mdzip:prompt-md-default', async (event) => {
   if (process.platform !== 'win32') {
     return { supported: false, isDefault: false };
   }
+
+  const win = BrowserWindow.fromWebContents(event.sender);
 
   // SHOpenWithDialog needs a file whose extension is .md; the file is never
   // opened (no OAIF_EXEC), so a throwaway in the temp dir is enough.
@@ -700,9 +841,9 @@ ipcMain.handle('mdzip:prompt-md-default', async () => {
   await fs.writeFile(tempPath, '');
 
   let hwnd = '0';
-  if (mainWindow && !mainWindow.isDestroyed()) {
+  if (win && !win.isDestroyed()) {
     try {
-      hwnd = mainWindow.getNativeWindowHandle().readBigUInt64LE(0).toString();
+      hwnd = win.getNativeWindowHandle().readBigUInt64LE(0).toString();
     } catch {
       hwnd = '0';
     }
@@ -735,11 +876,13 @@ const MARKDOWN_ASSET_MIME = {
 // it as a data URI. Plain .md files keep their images as loose sibling files;
 // the renderer (served from app:// or the dev server) can't resolve those
 // relative paths itself, so the preview inlines them through here.
-ipcMain.handle('mdzip:read-markdown-asset', async (_event, payload) => {
+ipcMain.handle('mdzip:read-markdown-asset', async (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const state = windowState(win);
   const documentPath = path.resolve(String(payload?.documentPath ?? ''));
   const relativePath = String(payload?.relativePath ?? '');
-  // Only serve assets for the document Studio currently has open.
-  if (!currentDocumentPath || documentPath !== currentDocumentPath) {
+  // Only serve assets for the document this window currently has open.
+  if (!state?.documentPath || documentPath !== state.documentPath) {
     return { error: 'stale-document' };
   }
   // Reject absolute paths and URLs; only document-relative references resolve here.
@@ -964,13 +1107,15 @@ app.on('will-quit', () => {
   } catch { /* temp dir unreadable */ }
 });
 
-ipcMain.handle('mdzip:write-markdown-image', async (_event, payload) => {
+ipcMain.handle('mdzip:write-markdown-image', async (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const state = windowState(win);
   const documentPath = path.resolve(String(payload.documentPath ?? ''));
   const documentDirectory = path.dirname(documentPath);
   const requestedDirectory = String(payload.relativeDirectory ?? '').trim();
   const fileName = path.basename(String(payload.fileName ?? 'image'));
 
-  if (!currentDocumentPath || documentPath !== currentDocumentPath) {
+  if (!state?.documentPath || documentPath !== state.documentPath) {
     throw new Error('The Markdown document path is no longer current.');
   }
   if (!/\.md$/i.test(documentPath)) {
@@ -1016,113 +1161,67 @@ ipcMain.handle('mdzip:write-markdown-image', async (_event, payload) => {
   };
 });
 
-// Create menu
-const createMenu = () => {
-  // Electron's native Windows menu doesn't expose a styleable disabled state, so
-  // the document-only items would look enabled until hovered. Instead of greying
-  // them out, omit them entirely when no document is open — unambiguous, and they
-  // reappear when one is. (The menu is rebuilt on the document-open IPC.)
-  const fileSubmenu = [
-    { label: 'New Document', accelerator: 'CmdOrCtrl+N', click: () => dispatchAppEvent('mdzip-studio:new-archive') },
-    { label: 'Open Document...', accelerator: 'CmdOrCtrl+O', click: () => dispatchAppEvent('mdzip-studio:open-archive') },
-    { label: 'Pack Folder to .mdz...', click: () => dispatchAppEvent('mdzip-studio:pack-folder') },
-    { label: 'Unpack .mdz to Folder...', click: () => dispatchAppEvent('mdzip-studio:unpack-mdz') },
-  ];
-  if (documentOpen) {
-    fileSubmenu.push(
-      { type: 'separator' },
-      { label: 'Save', accelerator: 'CmdOrCtrl+S', click: () => dispatchAppEvent('mdzip-studio:save-archive') },
-      { label: 'Save As...', accelerator: 'CmdOrCtrl+Shift+S', click: () => dispatchAppEvent('mdzip-studio:save-archive-as') },
-      { type: 'separator' },
-      { label: 'Print...', accelerator: 'CmdOrCtrl+P', click: () => dispatchAppEvent('mdzip-studio:print') },
-      { type: 'separator' },
-      { label: 'Show in File Manager', click: () => dispatchAppEvent('mdzip-studio:show-in-folder') },
-      { type: 'separator' },
-      { label: 'Close Document', accelerator: 'CmdOrCtrl+W', click: () => dispatchAppEvent('mdzip-studio:close-archive') },
-    );
-  }
-  fileSubmenu.push(
-    { type: 'separator' },
-    { label: 'Exit', accelerator: 'CmdOrCtrl+Q', click: () => app.quit() },
-  );
+// Build the menu handlers for a given window. win may be null (the app-level
+// fallback menu, shown before any window exists / after the last one closes
+// on platforms that don't quit on window-all-closed) — dispatchAppEvent and
+// the devtools toggle no-op gracefully in that case.
+function menuHandlersFor(win) {
+  return {
+    newDocument: () => dispatchAppEvent(win, 'mdzip-studio:new-archive'),
+    newWindow: () => createWindow(),
+    openDocument: () => dispatchAppEvent(win, 'mdzip-studio:open-archive'),
+    packFolder: () => dispatchAppEvent(win, 'mdzip-studio:pack-folder'),
+    unpackMdz: () => dispatchAppEvent(win, 'mdzip-studio:unpack-mdz'),
+    save: () => dispatchAppEvent(win, 'mdzip-studio:save-archive'),
+    saveAs: () => dispatchAppEvent(win, 'mdzip-studio:save-archive-as'),
+    print: () => dispatchAppEvent(win, 'mdzip-studio:print'),
+    showInFolder: () => dispatchAppEvent(win, 'mdzip-studio:show-in-folder'),
+    closeDocument: () => dispatchAppEvent(win, 'mdzip-studio:close-archive'),
+    quit: () => app.quit(),
+    reload: () => dispatchAppEvent(win, 'mdzip-studio:reload-document'),
+    toggleLineNumbers: () => dispatchAppEvent(win, 'mdzip-studio:toggle-line-numbers'),
+    toggleDevTools: () => win?.webContents.toggleDevTools(),
+    setMdDefault: () => dispatchAppEvent(win, 'mdzip-studio:set-md-default'),
+    showKnownIssues: () => dispatchAppEvent(win, 'mdzip-studio:show-known-issues'),
+    showChangelog: () => dispatchAppEvent(win, 'mdzip-studio:show-changelog'),
+    checkForUpdates: () => checkForUpdates(win),
+    showAbout: () => dispatchAppEvent(win, 'mdzip-studio:show-about'),
+    exportDraft: () => dispatchAppEvent(win, 'mdzip-studio:export-draft'),
+  };
+}
 
-  const template = [
-    {
-      label: 'File',
-      submenu: fileSubmenu,
-    },
-    {
-      label: 'Edit',
-      submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
-        { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-      ],
-    },
-    {
-      label: 'View',
-      submenu: [
-        { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => dispatchAppEvent('mdzip-studio:reload-document') },
-        {
-          label: 'Line Numbers',
-          type: 'checkbox',
-          checked: true,
-          click: () => dispatchAppEvent('mdzip-studio:toggle-line-numbers'),
-        },
-        { type: 'separator' },
-        {
-          label: 'Toggle DevTools',
-          accelerator: 'CmdOrCtrl+Shift+I',
-          click: () => mainWindow?.webContents.toggleDevTools(),
-        },
-      ],
-    },
-    {
-      label: 'Help',
-      submenu: [
-        ...(process.platform === 'win32'
-          ? [
-              { label: 'Set as Default for .md Files...', click: () => dispatchAppEvent('mdzip-studio:set-md-default') },
-              { type: 'separator' },
-            ]
-          : []),
-        { label: 'Known Issues', click: () => dispatchAppEvent('mdzip-studio:show-known-issues') },
-        { label: 'Change Log', click: () => dispatchAppEvent('mdzip-studio:show-changelog') },
-        { type: 'separator' },
-        { label: 'Check for Updates...', click: () => checkForUpdates() },
-        { type: 'separator' },
-        { label: 'About MDZip Studio', click: () => dispatchAppEvent('mdzip-studio:show-about') },
-      ],
-    },
-  ];
+// Each window carries its own menu (Save/Print/etc. reflect that window's own
+// document-open state) via win.setMenu, rather than one shared app menu.
+function refreshWindowMenu(win) {
+  const state = windowState(win);
+  const template = buildMenuTemplate({
+    documentOpen: state?.documentOpen ?? false,
+    isDev,
+    platform: process.platform,
+    handlers: menuHandlersFor(win),
+  });
+  win.setMenu(Menu.buildFromTemplate(template));
+}
 
-  if (isDev) {
-    template.splice(3, 0, {
-      label: 'Developer',
-      submenu: [
-        {
-          label: 'Export Studio JSON Draft',
-          click: () => dispatchAppEvent('mdzip-studio:export-draft'),
-        },
-      ],
-    });
-  }
+// App-level fallback menu (no window: e.g. macOS after the last window closes,
+// since that platform doesn't quit on window-all-closed). Individual windows
+// override this via refreshWindowMenu once created.
+app.on('ready', () => {
+  const template = buildMenuTemplate({
+    documentOpen: false,
+    isDev,
+    platform: process.platform,
+    handlers: menuHandlersFor(null),
+  });
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+});
 
-  const menu = Menu.buildFromTemplate(template);
-  Menu.setApplicationMenu(menu);
-};
-
-app.on('ready', createMenu);
-
-// Swap the window/taskbar icon when the OS theme changes (the BrowserWindow is
+// Swap the window/taskbar icon when the OS theme changes (each BrowserWindow is
 // created with the correct one for the current theme).
 app.on('ready', () => {
   nativeTheme.on('updated', () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.setIcon(windowIconForTheme());
+    for (const win of windows.keys()) {
+      if (!win.isDestroyed()) win.setIcon(windowIconForTheme());
     }
   });
 });

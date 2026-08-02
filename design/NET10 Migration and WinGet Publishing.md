@@ -64,42 +64,42 @@ Constraints on bundling the CLI in Studio:
 
 ### Phase 0 — Decisions & prerequisites
 
-- [ ] **Confirm CLI distribution model.** Decide whether the CLI ships **framework-dependent** (needs .NET 10 runtime installed) or **self-contained / NativeAOT** (no runtime dependency). AOT is recommended for the CLI: it removes the runtime install and eliminates the WinGet sandbox validation risk. Verify the CLI's dependencies are AOT-compatible before committing. (AOT also makes bundling the CLI into Studio cheap — see below.)
-- [ ] **Bundling decisions confirmed** (see *Packaging & bundling decisions*): preview handler is **not** bundled into the CLI (optional `register` command only); the CLI **is** bundled into Studio with an opt-in PATH checkbox.
-- [ ] **Confirm the .NET 10 runtime download URL** redirect is live and correct: `https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe`.
-- [ ] **Confirm WinGet runtime dependency identifier** exists: `Microsoft.DotNet.DesktopRuntime.10`.
-- [ ] Install tooling: current .NET 10 SDK on the build machine; `wingetcreate`.
+- [x] **Confirm CLI distribution model.** Already **self-contained + trimmed** (not framework-dependent, not literally NativeAOT): `mdz.Cli.csproj` targets `net10.0` with `PublishSingleFile`, `IncludeNativeLibrariesForSelfExtract`, and partial `PublishTrimmed` (2026-07-24 check — this predates the current session). Achieves the same "no runtime install" goal AOT would.
+- [x] **Bundling decisions confirmed** (see *Packaging & bundling decisions*): preview handler is **not** bundled into the CLI (optional `register` command only); the CLI **is** bundled into Studio with an opt-in PATH checkbox. — decision recorded above; the Studio-bundling implementation itself is still open (see Phase 4).
+- [x] **Confirm the .NET 10 runtime download URL** redirect is live and correct: `https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-x64.exe`. (2026-07-24: confirmed, 301s to `builds.dotnet.microsoft.com/dotnet/WindowsDesktop/10.0.10/windowsdesktop-runtime-10.0.10-win-x64.exe`.)
+- [x] **Confirm WinGet runtime dependency identifier** exists: `Microsoft.DotNet.DesktopRuntime.10`. (2026-07-24: confirmed present in `microsoft/winget-pkgs` — manifests exist for 10.0.0 through 10.0.10.)
+- [x] Install tooling: current .NET 10 SDK confirmed on the build machine (10.0.301, alongside 6/8/9 — no removal needed). `wingetcreate` **not yet confirmed installed** — not visible from this session's shell; needed only at actual submission time (Phase 6), and that step requires an interactive GitHub browser sign-in anyway, so it's a you-task.
 
 ### Phase 1 — Core library (`mdzip.core`)
 
-- [ ] Bump `TargetFramework` → `net10.0` (single target; drop `net8.0`).
-- [ ] Update any deprecated APIs flagged by the net10 build/analyzers.
-- [ ] Build, run tests, publish the updated `mdzip.core` assembly/package that downstream consumers reference.
+- [x] Bump `TargetFramework` → `net10.0` — **done with a deviation**: `mdzip-core.csproj` kept **`net8.0;net10.0` multi-target** rather than dropping to net10.0-only as this line originally specified (done in an earlier session's NuGet rename/parity work, not this one). Functionally this satisfies every downstream net10 consumer; the only gap vs. the letter of this task is that `net8.0` wasn't retired from the package itself.
+- [x] Update any deprecated APIs flagged by the net10 build/analyzers. (Covered by the earlier "Core parity" work — 69/69 tests passing on both `net8.0` and `net10.0`.)
+- [x] Build, run tests, publish the updated `mdzip.core` assembly/package that downstream consumers reference. (Published as `MDZip.Core` 1.4.0 on NuGet — see the hub roadmap's "NuGet: MDZip.Core rename" entry, 2026-07-09. Note: `mdz.WinPrev.csproj` still references the older, deprecated `mdzip-core` 1.3.3 package ID rather than `MDZip.Core` 1.4.0 — it still resolves and builds fine since the legacy package isn't unlisted, just deprecated, but switching it over is an easy piece of housekeeping nobody's done yet.)
 
 > Rationale: core is the upstream dependency for both the previewer and the CLI; it must move first so the others build against net10 cleanly (avoids net8-assembly roll-forward in a net10 host).
 
 ### Phase 2 — Preview handler (`mdzip-win-prev`)
 
-- [ ] Bump `mdz.WinPrev.csproj` `TargetFramework` → `net10.0-windows`.
-- [ ] Rebuild against the net10 `mdzip.core`; confirm Markdig and the COM/preview-handler APIs compile and behave on net10.
-- [ ] Smoke-test the built handler locally.
+- [x] Bump `mdz.WinPrev.csproj` `TargetFramework` → `net10.0-windows` (2026-07-24; also bumped the `net8.0`/`net10.0` non-Windows leg and `mdz.WinPrev.Tests.csproj` to match).
+- [x] Rebuild against the net10 `mdzip.core`; confirm Markdig and the COM/preview-handler APIs compile and behave on net10 (2026-07-24; the existing `mdzip-core` 1.3.3 package reference already carries a net10.0 asset, so no package bump was needed here — build succeeds on both `net10.0-windows` and `net10.0`, 16/16 xUnit tests pass).
+- [x] Smoke-test the built handler locally (2026-07-24; `dotnet publish -f net10.0-windows -r win-x64 --self-contained false` produces `mdz.WinPrev.comhost.dll` with `runtimeconfig.json` reporting `tfm: net10.0` / `Microsoft.WindowsDesktop.App 10.0.0`. Registering the CLSID and verifying an actual Explorer preview still needs a real install — see Phase 5).
 
 > Decision: the preview handler stays a **standalone deliverable owned by `mdzip-win-prev`**, distributed via Studio. It is **not** bundled into the CLI (would invert the layering — see *Packaging & bundling decisions*).
 
 ### Phase 3 — CLI
 
-- [ ] Bump CLI project `TargetFramework` → `net10.0`.
-- [ ] Rebuild against net10 `mdzip.core`.
-- [ ] If AOT/self-contained (per Phase 0 decision): configure publish profile, verify single-file/AOT output runs on a machine with **no** .NET runtime installed.
-- [ ] Run CLI test suite / smoke tests.
+- [x] Bump CLI project `TargetFramework` → `net10.0`. (Already done in an earlier session — `mdz.Cli.csproj` targets `net10.0`.)
+- [x] Rebuild against net10 `mdzip.core`. (Already on `MDZip.Core` 1.4.0, the current package, unlike `mdz.WinPrev` — see Phase 1 note.)
+- [ ] If AOT/self-contained (per Phase 0 decision): configure publish profile, verify single-file/AOT output runs on a machine with **no** .NET runtime installed. — publish profile is configured; the no-runtime-machine verification itself hasn't been done (needs a clean VM, same constraint as Phase 5).
+- [ ] Run CLI test suite / smoke tests. — not re-verified in this session.
 - [ ] *(Optional, only if there's demand)* Add a Windows-only `mdzip preview register|unregister` command that writes/removes the same HKLM CLSID + `PreviewHandlers` keys the NSIS installer does, operating on a separately provided handler directory. This gives headless previewer setup without bundling handler binaries into the CLI.
 
 ### Phase 4 — MDZip Studio (this repo)
 
-- [ ] Update [scripts/publish-preview-handler.cjs:28](../scripts/publish-preview-handler.cjs#L28): `net8.0-windows` → `net10.0-windows`.
-- [ ] Update [build/installer.nsh:11](../build/installer.nsh#L11): runtime URL → `…/10.0/…`.
-- [ ] Update [build/installer.nsh:40](../build/installer.nsh#L40): `IfFileExists` check `8.*` → `10.*`.
-- [ ] Rebuild Studio (`npm run build`); confirm `build/preview-handler/*.runtimeconfig.json` now reports `tfm: net10.0` and `version: 10.0.0`.
+- [x] Update [scripts/publish-preview-handler.cjs:28](../scripts/publish-preview-handler.cjs#L28): `net8.0-windows` → `net10.0-windows`. (2026-07-24)
+- [x] Update [build/installer.nsh:11](../build/installer.nsh#L11): runtime URL → `…/10.0/…`. (2026-07-24; also updated the `EnsureDotNetDesktopRuntime` user-facing strings that still said ".NET 8".)
+- [x] Update [build/installer.nsh:40](../build/installer.nsh#L40): `IfFileExists` check `8.*` → `10.*`. (2026-07-24)
+- [x] Rebuild Studio (`npm run build`); confirm `build/preview-handler/*.runtimeconfig.json` now reports `tfm: net10.0` and `version: 10.0.0`. (2026-07-24; confirmed in both `build/preview-handler/` and the packaged `dist/win-unpacked/resources/preview-handler/`. Also ran the mandatory `RELEASE_CHECKLIST.md` smoke test: launched `dist/win-unpacked/MDZip Studio.exe` — it opens and renders normally, no "Cannot find module" dialog.)
 
 **Bundle the CLI into Studio** (decision: yes, opt-in PATH):
 

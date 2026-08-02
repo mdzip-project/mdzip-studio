@@ -285,6 +285,58 @@ p {
   overflow: hidden;
 }
 
+.external-change-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  background: #f4f6f8;
+  border-bottom: 1px solid #e2e6ea;
+  font-size: 13px;
+  color: #3d434b;
+  flex-shrink: 0;
+
+  ng-icon {
+    flex-shrink: 0;
+    color: #9a7b1f;
+  }
+
+  span {
+    flex: 1;
+  }
+}
+
+.external-change-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.external-change-reload,
+.external-change-dismiss {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  border: 1px solid #d0d5db;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #3d434b;
+  cursor: pointer;
+
+  &:hover {
+    background: #eef1f4;
+  }
+}
+
+.external-change-dismiss {
+  border-color: transparent;
+  background: transparent;
+}
+
 .icon-action {
   display: inline-flex;
   align-items: center;
@@ -1450,6 +1502,15 @@ p-button {
   .menubar-status { color: #8c8c8c; }
   .menubar-status.valid { color: #4ec98a; }
   .menubar-status.invalid { color: #f08a8a; }
+
+  /* External-change banner */
+  .external-change-banner { background: #2d2d2d; border-bottom-color: #3c3c3c; color: #d4d4d4; }
+  .external-change-banner ng-icon { color: #d7ba7d; }
+  .external-change-reload,
+  .external-change-dismiss { border-color: #454545; background: #2d2d2d; color: #d4d4d4; }
+  .external-change-reload:hover,
+  .external-change-dismiss:hover { background: #3a3a3a; }
+  .external-change-dismiss { border-color: transparent; background: transparent; }
 
   /* Toolbar */
   .toolbar { background: #252526; }

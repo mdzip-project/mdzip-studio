@@ -25,7 +25,7 @@ confirm the download, then choose when to restart and install it.
 - Node.js 20+ and npm (the Angular/Electron toolchain is installed via `npm install`)
 
 For building the Windows installer only (see below), you also need:
-- .NET 8 SDK
+- .NET 10 SDK
 - The sibling [`mdzip-win-prev`](https://github.com/mdzip-project) repository checked out next to this one (or pointed to via `MDZIP_WIN_PREV_DIR`), which provides the Explorer preview handler
 
 ### Installation
@@ -79,7 +79,7 @@ This bumps the patch version, regenerates about-data, builds the preview handler
 `build/preview-handler/`), produces the production Angular bundle, and packages a
 signed-capable NSIS installer under `dist/`.
 
-> The full installer build requires the .NET 8 SDK and the `mdzip-win-prev`
+> The full installer build requires the .NET 10 SDK and the `mdzip-win-prev`
 > sibling repo. Without them the `build:preview-handler` step fails with a clear
 > message — use `npm run build:angular` / `npm start` if you only need the app
 > itself. Installers are currently shipped unsigned.
