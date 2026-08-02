@@ -66,6 +66,9 @@ type ArchiveTreeKind = 'folder' | 'document' | 'asset';
 type HelpDocumentKind = 'known-issues' | 'changelog';
 type SaveValidationState = 'unchecked' | 'valid' | 'invalid';
 const MARKDOWN_IMAGE_SOURCE_ATTR = 'mdzip-studio-src';
+// Marks a preview container once its copy listener is bound, so a re-mount
+// (same node reused across renders) doesn't stack duplicate listeners.
+const COPY_IMAGES_BOUND_ATTR = 'data-mdzip-copy-bound';
 const HELP_DOCUMENTS: Record<HelpDocumentKind, {
   title: string;
   fileName: string;
@@ -468,6 +471,11 @@ interface ArchiveTreeData {
             </span>
           }
         </div>
+        }
+        @if (previewContextMenuPos(); as pos) {
+          <ul class="menu-popup" role="menu" style="position: fixed;" [style.left.px]="pos.x" [style.top.px]="pos.y" (click)="$event.stopPropagation()">
+            <li role="none"><button class="menu-item" type="button" role="menuitem" (click)="selectAllPreview()"><span></span><span>Select All</span><kbd>Ctrl+A</kbd></button></li>
+          </ul>
         }
         <div class="toolbar">
           <button class="tb-btn" type="button" title="New (Ctrl+N)" (click)="newArchive()"><ng-icon name="lucidePlus" size="15" /></button>
@@ -1047,6 +1055,13 @@ export class AppComponent implements OnDestroy {
   });
 
   readonly openMenu = signal<string | null>(null);
+  // Right-click "Select All" for the preview pane. Ctrl+A with nothing focused
+  // selects the whole app chrome (not just the preview), which is why the
+  // preview's own copy listener (see mountCopyImagesInline) never sees the
+  // selection: the resulting copy event doesn't target/bubble through the
+  // preview container. This scopes selection to that container explicitly.
+  readonly previewContextMenuPos = signal<{ x: number; y: number } | null>(null);
+  private previewContextMenuTarget: HTMLElement | null = null;
   readonly sourceFormat = signal<'markdown' | 'mdz'>('markdown');
   readonly showLineNumbers = signal(true);
   readonly workspaceControls = computed(() => {
@@ -1108,6 +1123,16 @@ export class AppComponent implements OnDestroy {
       sanitize: { addAttr: [MARKDOWN_IMAGE_SOURCE_ATTR] },
       transformHtml: (html, context) => this.markRelativeMarkdownImages(html, context),
       mount: (container, context) => this.mountRelativeMarkdownImages(container, context),
+    },
+    {
+      // Copying preview text into another app (e.g. Word) loses images: the
+      // preview intentionally keeps blob: URLs live (see mountRelativeMarkdownImages)
+      // and blob: URLs only resolve inside this renderer, not in another app's
+      // paste target. This inlines blob: images as data: URIs in the *copied*
+      // HTML only, on demand at copy time — it never touches the live preview DOM,
+      // so it doesn't reintroduce the keystroke-lag that data: URIs caused there.
+      name: 'studio-copy-images-inline',
+      mount: (container) => this.mountCopyImagesInline(container),
     },
   ];
 
@@ -1271,7 +1296,10 @@ export class AppComponent implements OnDestroy {
     return true;
   };
 
-  private readonly closeMenuOnDocumentClick = () => this.openMenu.set(null);
+  private readonly closeMenuOnDocumentClick = () => {
+    this.openMenu.set(null);
+    this.previewContextMenuPos.set(null);
+  };
 
   // The editor reads the OS color scheme once when its view is created but does
   // not track later OS changes. Follow live OS changes here and push them into
@@ -2324,6 +2352,93 @@ export class AppComponent implements OnDestroy {
       }
       img.setAttribute('src', previewUrl);
     }));
+  }
+
+  // Binds a `copy` listener once per preview container (idempotent across
+  // re-mounts via COPY_IMAGES_BOUND_ATTR). Only intercepts when the browser
+  // supports async ClipboardItem writes AND the selection actually contains
+  // blob: images; every other copy (plain text, no images, unsupported browser)
+  // falls straight through to the default, already-working copy behavior.
+  private mountCopyImagesInline(container: HTMLElement): void {
+    if (container.hasAttribute(COPY_IMAGES_BOUND_ATTR)) return;
+    container.setAttribute(COPY_IMAGES_BOUND_ATTR, '1');
+    container.addEventListener('copy', (event) => this.handlePreviewCopy(event));
+    // A bare Ctrl+A / native Select All (nothing focused) selects the whole app
+    // chrome, not just the preview, so the copy event above never targets/bubbles
+    // through this container. Right-click → Select All scopes the selection here.
+    container.addEventListener('contextmenu', (event) => this.handlePreviewContextMenu(event as MouseEvent, container));
+  }
+
+  private handlePreviewContextMenu(event: MouseEvent, container: HTMLElement): void {
+    event.preventDefault();
+    this.previewContextMenuTarget = container;
+    this.previewContextMenuPos.set({ x: event.clientX, y: event.clientY });
+  }
+
+  selectAllPreview(): void {
+    const container = this.previewContextMenuTarget;
+    this.previewContextMenuPos.set(null);
+    if (!container) return;
+    const selection = window.getSelection();
+    if (!selection) return;
+    selection.removeAllRanges();
+    const range = document.createRange();
+    range.selectNodeContents(container);
+    selection.addRange(range);
+  }
+
+  private handlePreviewCopy(event: ClipboardEvent): void {
+    if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) return;
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return;
+
+    const range = selection.getRangeAt(0);
+    const fragment = range.cloneContents();
+    const images = Array.from(fragment.querySelectorAll('img')).filter((img) => img.getAttribute('src')?.startsWith('blob:'));
+    if (images.length === 0) return;
+
+    // Committed to handling this copy ourselves: the default HTML (with
+    // unresolvable blob: srcs) must not go out, even if the async path below
+    // ends up falling back to a text-only clipboard write.
+    event.preventDefault();
+
+    const wrapper = document.createElement('div');
+    wrapper.appendChild(fragment);
+    const plainText = selection.toString();
+
+    this.inlineBlobImages(images)
+      .then(() => navigator.clipboard.write([
+        new ClipboardItem({
+          'text/plain': new Blob([plainText], { type: 'text/plain' }),
+          'text/html': new Blob([wrapper.innerHTML], { type: 'text/html' }),
+        }),
+      ]))
+      .catch(() => navigator.clipboard.writeText(plainText).catch(() => {
+        this.statusMessage.set('Could not copy to clipboard');
+      }));
+  }
+
+  private async inlineBlobImages(images: readonly HTMLImageElement[]): Promise<void> {
+    await Promise.all(images.map(async (img) => {
+      const src = img.getAttribute('src');
+      if (!src) return;
+      try {
+        const blob = await (await fetch(src)).blob();
+        img.setAttribute('src', await this.blobToDataUrl(blob));
+      } catch {
+        // Leave this one image's blob: src as-is; the rest of the copy still succeeds.
+      }
+    }));
+  }
+
+  private blobToDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
   }
 
   private async openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly = false, recordRecent = true, showNavigation = false): Promise<void> {
