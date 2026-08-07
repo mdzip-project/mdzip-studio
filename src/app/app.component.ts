@@ -472,11 +472,6 @@ interface ArchiveTreeData {
           }
         </div>
         }
-        @if (previewContextMenuPos(); as pos) {
-          <ul class="menu-popup" role="menu" style="position: fixed;" [style.left.px]="pos.x" [style.top.px]="pos.y" (click)="$event.stopPropagation()">
-            <li role="none"><button class="menu-item" type="button" role="menuitem" (click)="selectAllPreview()"><span></span><span>Select All</span><kbd>Ctrl+A</kbd></button></li>
-          </ul>
-        }
         <div class="toolbar">
           <button class="tb-btn" type="button" title="New (Ctrl+N)" (click)="newArchive()"><ng-icon name="lucidePlus" size="15" /></button>
           <button class="tb-btn" type="button" title="Open (Ctrl+O)" (click)="openFilePicker()"><ng-icon name="lucideFolderOpen" size="15" /></button>
@@ -1055,13 +1050,6 @@ export class AppComponent implements OnDestroy {
   });
 
   readonly openMenu = signal<string | null>(null);
-  // Right-click "Select All" for the preview pane. Ctrl+A with nothing focused
-  // selects the whole app chrome (not just the preview), which is why the
-  // preview's own copy listener (see mountCopyImagesInline) never sees the
-  // selection: the resulting copy event doesn't target/bubble through the
-  // preview container. This scopes selection to that container explicitly.
-  readonly previewContextMenuPos = signal<{ x: number; y: number } | null>(null);
-  private previewContextMenuTarget: HTMLElement | null = null;
   readonly sourceFormat = signal<'markdown' | 'mdz'>('markdown');
   readonly showLineNumbers = signal(true);
   readonly workspaceControls = computed(() => {
@@ -1298,7 +1286,6 @@ export class AppComponent implements OnDestroy {
 
   private readonly closeMenuOnDocumentClick = () => {
     this.openMenu.set(null);
-    this.previewContextMenuPos.set(null);
   };
 
   // The editor reads the OS color scheme once when its view is created but does
@@ -2359,32 +2346,16 @@ export class AppComponent implements OnDestroy {
   // supports async ClipboardItem writes AND the selection actually contains
   // blob: images; every other copy (plain text, no images, unsupported browser)
   // falls straight through to the default, already-working copy behavior.
+  //
+  // This used to also own a right-click "Select All" menu for the preview
+  // (Ctrl+A with nothing focused selects the whole app chrome, not just the
+  // preview). That's now redundant with the editor's own preview context
+  // menu, which already offers Copy / Copy All / Copy All with Images
+  // (Ctrl+A) and was stacking its menu with this one on right-click.
   private mountCopyImagesInline(container: HTMLElement): void {
     if (container.hasAttribute(COPY_IMAGES_BOUND_ATTR)) return;
     container.setAttribute(COPY_IMAGES_BOUND_ATTR, '1');
     container.addEventListener('copy', (event) => this.handlePreviewCopy(event));
-    // A bare Ctrl+A / native Select All (nothing focused) selects the whole app
-    // chrome, not just the preview, so the copy event above never targets/bubbles
-    // through this container. Right-click → Select All scopes the selection here.
-    container.addEventListener('contextmenu', (event) => this.handlePreviewContextMenu(event as MouseEvent, container));
-  }
-
-  private handlePreviewContextMenu(event: MouseEvent, container: HTMLElement): void {
-    event.preventDefault();
-    this.previewContextMenuTarget = container;
-    this.previewContextMenuPos.set({ x: event.clientX, y: event.clientY });
-  }
-
-  selectAllPreview(): void {
-    const container = this.previewContextMenuTarget;
-    this.previewContextMenuPos.set(null);
-    if (!container) return;
-    const selection = window.getSelection();
-    if (!selection) return;
-    selection.removeAllRanges();
-    const range = document.createRange();
-    range.selectNodeContents(container);
-    selection.addRange(range);
   }
 
   private handlePreviewCopy(event: ClipboardEvent): void {
@@ -2679,6 +2650,14 @@ export class AppComponent implements OnDestroy {
           this.workspaceBytes.set(mdzBytes);
           this.latestWorkspaceBytes.set(null);
           this.latestWorkspaceSnapshot.set(null);
+        } else {
+          // Keep the reactive `[bytes]` input current with what was just
+          // flushed/saved. `updateArchivePath` above changes `fileName` on a
+          // rename (Save As), and the editor treats any `fileName` change as
+          // a reason to reopen the workspace from `bytes` — stale bytes there
+          // would reopen the view on old content, discarding the edits that
+          // were just written to disk out from under the user.
+          this.workspaceBytes.set(bytes);
         }
         this.statusMessage.set(`Saved ${result.filePath ?? result.name ?? archive.name}`);
         return;
@@ -2720,6 +2699,10 @@ export class AppComponent implements OnDestroy {
         return;
       }
       this.recordSavedRecent(result.filePath, true, archive.name);
+      // Same reasoning as the markdown path above: `updateArchivePath` changes
+      // `fileName` on a rename (Save As), which makes the editor reopen from
+      // `bytes` — keep it pointed at what was just saved, not stale content.
+      this.workspaceBytes.set(bytes);
       this.updateArchivePath(result.filePath, result.name);
       this.workspaceEditor?.markPersisted();
       this.isDirty.set(false);

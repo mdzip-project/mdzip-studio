@@ -833,4 +833,46 @@ describe('AppComponent', () => {
       (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
     }
   });
+
+  it('keeps the reactive workspace bytes current on Save As, so the editor does not reopen on stale content', async () => {
+    let savedBytes: number[] | undefined;
+    const originalBridge = (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio;
+    (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = {
+      saveDocument: vi.fn().mockImplementation(async (payload: { bytes: number[] }) => {
+        savedBytes = payload.bytes;
+        return { canceled: false, filePath: 'C:/jobs/patio/Renamed.mdz', name: 'Renamed.mdz', format: 'mdz' };
+      }),
+    };
+
+    try {
+      await (component as unknown as {
+        openDocumentBytes(
+          bytes: Uint8Array,
+          name: string,
+          filePath?: string,
+          readOnly?: boolean,
+          recordRecent?: boolean,
+        ): Promise<void>;
+      }).openDocumentBytes(
+        new TextEncoder().encode('# Patio\n'),
+        'Patio.md',
+        'C:/jobs/patio/Patio.md',
+        false,
+        false,
+      );
+      component.sourceFormat.set('mdz');
+
+      // `[fileName]` on <mdzip-workspace> is derived from the archive name,
+      // so renaming via Save As changes it — which makes the editor reopen
+      // from `[bytes]`. workspaceBytes() must reflect what was just saved,
+      // not whatever it held before this save.
+      await component.saveArchive(true);
+
+      expect(savedBytes).toBeDefined();
+      expect(component.currentArchive()?.name).toBe('Renamed');
+      expect(Array.from(component.workspaceBytes() ?? [])).toEqual(savedBytes);
+    } finally {
+      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
+    }
+  });
 });
