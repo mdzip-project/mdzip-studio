@@ -24,7 +24,7 @@ export const FIRST_PARTY_LIBRARIES: LibraryInfo[] = [
   },
   {
     "name": "@mdzip/editor-ng",
-    "version": "1.3.17",
+    "version": "1.3.21",
     "license": "Apache-2.0",
     "homepage": "https://mdzip.org"
   }
