@@ -1,6 +1,6 @@
 import { Injector, NgZone, runInInjectionContext } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { MdzPackagerCore } from '@mdzip/core-js';
+import { MdzArchiveCore, MdzPackagerCore } from '@mdzip/core-js';
 import { MdzipRenderingService } from '@mdzip/editor';
 import type { MdzipConversionContext, MdzipEntryRenderContext } from '@mdzip/editor';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -398,6 +398,170 @@ describe('AppComponent', () => {
     } finally {
       (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
     }
+  });
+
+  it('canInsertTemplateFile is true for any open document, .md included', async () => {
+    const app = component as unknown as {
+      openDocumentBytes(
+        bytes: Uint8Array,
+        name: string,
+        filePath?: string,
+        readOnly?: boolean,
+        recordRecent?: boolean
+      ): Promise<void>;
+    };
+
+    expect(component.canInsertTemplateFile()).toBe(false);
+
+    // A plain .md counts too — insertTemplateFile() routes it through the
+    // Convert-to-MDZip prompt rather than treating the item as unavailable
+    // (Electron's native Windows menu can't render a disabled item at all).
+    await app.openDocumentBytes(new TextEncoder().encode('# Patio\n'), 'Patio.md', 'C:/docs/Patio.md', false, false);
+    expect(component.canInsertTemplateFile()).toBe(true);
+  });
+
+  it('routes Insert AGENTS.md on a .md document through Convert to MDZip, then inserts', async () => {
+    const app = component as unknown as {
+      openDocumentBytes(
+        bytes: Uint8Array,
+        name: string,
+        filePath?: string,
+        readOnly?: boolean,
+        recordRecent?: boolean
+      ): Promise<void>;
+      insertTemplateFile(kind: 'agents' | 'readme'): Promise<void>;
+      convertThenInsertTemplate(kind: 'agents' | 'readme'): Promise<void>;
+    };
+    await app.openDocumentBytes(new TextEncoder().encode('# Patio\n'), 'Patio.md', 'C:/docs/Patio.md', false, false);
+    expect(component.sourceFormat()).toBe('markdown');
+
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => '# AGENTS\n\nGuidance.' });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await app.insertTemplateFile('agents');
+
+    // Not converted yet — the prompt is shown first, nothing fetched.
+    expect(component.convertDialogOpen()).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // confirmConvertToMdz() itself fires this off without awaiting it (matches
+    // the pre-existing convertPendingMarkdownToMdz path it mirrors); drive the
+    // same underlying work directly here so the assertions below are deterministic.
+    await app.convertThenInsertTemplate('agents');
+
+    expect(component.sourceFormat()).toBe('mdz');
+    expect(component.currentArchive()?.path).toBeUndefined();
+    expect(component.statusMessage()).toContain('Converted to MDZip and added AGENTS.md');
+    const opened = await MdzArchiveCore.open(component.workspaceBytes() ?? new Uint8Array());
+    expect(opened.listPaths()).toContain('AGENTS.md');
+  });
+
+  it('cancels the pending template insert when Convert to MDZip is dismissed', async () => {
+    const app = component as unknown as {
+      openDocumentBytes(
+        bytes: Uint8Array,
+        name: string,
+        filePath?: string,
+        readOnly?: boolean,
+        recordRecent?: boolean
+      ): Promise<void>;
+      insertTemplateFile(kind: 'agents' | 'readme'): Promise<void>;
+    };
+    await app.openDocumentBytes(new TextEncoder().encode('# Patio\n'), 'Patio.md', 'C:/docs/Patio.md', false, false);
+
+    await app.insertTemplateFile('readme');
+    expect(component.convertDialogOpen()).toBe(true);
+
+    component.cancelConvertToMdz();
+
+    expect(component.convertDialogOpen()).toBe(false);
+    expect(component.sourceFormat()).toBe('markdown');
+
+    // Confirming a later, unrelated convert prompt must not still try to
+    // insert a template — the canceled request should not linger.
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    component.convertDialogOpen.set(true);
+    component.confirmConvertToMdz();
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('inserts AGENTS.md into the open archive without a prompt when none exists', async () => {
+    const built = await MdzPackagerCore.buildArchive(
+      [{ path: 'index.md', text: '# Demo\n' }],
+      'demo',
+      { createIndex: false, mapFiles: false, filters: ['**/*'], title: 'Demo', mode: 'document', entryPoint: 'index.md' }
+    );
+    const app = component as unknown as {
+      openDocumentBytes(
+        bytes: Uint8Array,
+        name: string,
+        filePath?: string,
+        readOnly?: boolean,
+        recordRecent?: boolean
+      ): Promise<void>;
+      insertTemplateFile(kind: 'agents' | 'readme'): Promise<void>;
+    };
+    await app.openDocumentBytes(
+      new Uint8Array(await built.blob.arrayBuffer()),
+      'demo.mdz',
+      'C:/docs/demo.mdz',
+      false,
+      false
+    );
+
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => '# AGENTS\n\nGuidance.' });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await app.insertTemplateFile('agents');
+
+    expect(fetchMock).toHaveBeenCalledWith('assets/templates/embedded-agents-guide.md', { cache: 'no-store' });
+    expect(component.insertTemplateDialogOpen()).toBe(false);
+    expect(component.isDirty()).toBe(true);
+    expect(component.statusMessage()).toContain('Added AGENTS.md');
+    const opened = await MdzArchiveCore.open(component.workspaceBytes() ?? new Uint8Array());
+    expect(opened.listPaths()).toContain('AGENTS.md');
+  });
+
+  it('prompts instead of silently overwriting an existing AGENTS.md, and replaces it on confirm', async () => {
+    const built = await MdzPackagerCore.buildArchive(
+      [
+        { path: 'index.md', text: '# Demo\n' },
+        { path: 'AGENTS.md', text: 'old guidance' },
+      ],
+      'demo',
+      { createIndex: false, mapFiles: false, filters: ['**/*'], title: 'Demo', mode: 'document', entryPoint: 'index.md' }
+    );
+    const app = component as unknown as {
+      openDocumentBytes(
+        bytes: Uint8Array,
+        name: string,
+        filePath?: string,
+        readOnly?: boolean,
+        recordRecent?: boolean
+      ): Promise<void>;
+      insertTemplateFile(kind: 'agents' | 'readme'): Promise<void>;
+      performInsertTemplate(kind: 'agents' | 'readme', bytes: Uint8Array, replacing: boolean): Promise<void>;
+    };
+    const archiveBytes = new Uint8Array(await built.blob.arrayBuffer());
+    await app.openDocumentBytes(archiveBytes, 'demo.mdz', 'C:/docs/demo.mdz', false, false);
+
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => '# AGENTS\n\nNew guidance.' });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await app.insertTemplateFile('agents');
+
+    // Existing file found: prompts instead of writing.
+    expect(component.insertTemplateDialogOpen()).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await app.performInsertTemplate('agents', archiveBytes, true);
+
+    expect(component.statusMessage()).toContain('Replaced AGENTS.md');
+    const opened = await MdzArchiveCore.open(component.workspaceBytes() ?? new Uint8Array());
+    expect(opened.listPaths().filter((entry) => entry.toLowerCase() === 'agents.md')).toHaveLength(1);
+    expect(await opened.readText('AGENTS.md')).toContain('New guidance.');
   });
 
   it('inserts a relative image reference through the library conversion context', async () => {

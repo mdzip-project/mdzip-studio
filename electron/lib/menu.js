@@ -24,6 +24,9 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers }) {
       { type: 'separator' },
       { label: 'Show in File Manager', click: handlers.showInFolder },
       { type: 'separator' },
+      { label: 'Insert AGENTS.md', click: handlers.insertAgentsGuide },
+      { label: 'Insert README.md', click: handlers.insertReadme },
+      { type: 'separator' },
       { label: 'Close Document', accelerator: 'CmdOrCtrl+W', click: handlers.closeDocument },
     );
   }

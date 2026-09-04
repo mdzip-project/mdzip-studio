@@ -2,7 +2,7 @@ const { buildMenuTemplate } = require('./menu');
 
 const HANDLER_NAMES = [
   'newDocument', 'newWindow', 'openDocument', 'packFolder', 'unpackMdz',
-  'save', 'saveAs', 'print', 'showInFolder', 'closeDocument', 'quit',
+  'save', 'saveAs', 'print', 'showInFolder', 'insertAgentsGuide', 'insertReadme', 'closeDocument', 'quit',
   'reload', 'toggleLineNumbers', 'toggleDevTools',
   'setMdDefault', 'showKnownIssues', 'showChangelog', 'checkForUpdates', 'showAbout',
   'exportDraft',
@@ -43,6 +43,8 @@ describe('buildMenuTemplate', () => {
     expect(fileLabels).toContain('Save As...');
     expect(fileLabels).toContain('Print...');
     expect(fileLabels).toContain('Show in File Manager');
+    expect(fileLabels).toContain('Insert AGENTS.md');
+    expect(fileLabels).toContain('Insert README.md');
     expect(fileLabels).toContain('Close Document');
     // Exit always stays last.
     expect(fileLabels.at(-1)).toBe('Exit');
@@ -69,12 +71,16 @@ describe('buildMenuTemplate', () => {
     findMenu(template, 'File').submenu.find((i) => i.label === 'Save').click();
     findMenu(template, 'File').submenu.find((i) => i.label === 'Exit').click();
     findMenu(template, 'File').submenu.find((i) => i.label === 'New Window').click();
+    findMenu(template, 'File').submenu.find((i) => i.label === 'Insert AGENTS.md').click();
+    findMenu(template, 'File').submenu.find((i) => i.label === 'Insert README.md').click();
     findMenu(template, 'Help').submenu.find((i) => i.label === 'Check for Updates...').click();
     findMenu(template, 'Developer').submenu.find((i) => i.label === 'Export Studio JSON Draft').click();
 
     expect(handlers.save).toHaveBeenCalledTimes(1);
     expect(handlers.quit).toHaveBeenCalledTimes(1);
     expect(handlers.newWindow).toHaveBeenCalledTimes(1);
+    expect(handlers.insertAgentsGuide).toHaveBeenCalledTimes(1);
+    expect(handlers.insertReadme).toHaveBeenCalledTimes(1);
     expect(handlers.checkForUpdates).toHaveBeenCalledTimes(1);
     expect(handlers.exportDraft).toHaveBeenCalledTimes(1);
   });

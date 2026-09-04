@@ -28,6 +28,7 @@ import { mdzipMermaidExtension, type MdzipMermaidApi } from '@mdzip/editor/merma
 import { MdzipEntryRendererDirective, MdzipWorkspaceComponent } from '@mdzip/editor-ng';
 import { NgIconComponent, provideIcons } from '@ng-icons/core';
 import {
+  lucideBot,
   lucideCheck,
   lucideCircleCheck,
   lucideCircleMinus,
@@ -87,6 +88,14 @@ const HELP_DOCUMENTS: Record<HelpDocumentKind, {
     remoteUrl: 'https://raw.githubusercontent.com/mdzip-project/mdzip-studio/main/CHANGELOG.md',
     fallbackUrl: 'assets/help/CHANGELOG.md',
   },
+};
+type TemplateFileKind = 'agents' | 'readme';
+// Insert AGENTS.md / README.md (issue #12) — same fixed, bundled-asset templates
+// as mdzip-vscode's `mdzip.addAgentsGuide` (mdzTemplates.ts), reused here for
+// the same reasons: static, tool-agnostic guidance, no picker needed.
+const TEMPLATE_FILES: Record<TemplateFileKind, { path: string; assetUrl: string }> = {
+  agents: { path: 'AGENTS.md', assetUrl: 'assets/templates/embedded-agents-guide.md' },
+  readme: { path: 'README.md', assetUrl: 'assets/templates/embedded-readme.md' },
 };
 const STUDIO_FORMATTING_CONTROLS: NonNullable<MdzipControlPolicy['formatting']> = {
   bold: true,
@@ -358,6 +367,7 @@ interface ArchiveTreeData {
   ],
   providers: [
     provideIcons({
+      lucideBot,
       lucideCheck,
       lucideCircleCheck,
       lucideCircleMinus,
@@ -427,6 +437,9 @@ interface ArchiveTreeData {
                     <li class="menu-sep" role="separator"></li>
                     <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!hasFileOnDisk()" (click)="showInFileManager()"><ng-icon name="lucideFolderOpen" size="13" /><span>Show in File Manager</span></button></li>
                   }
+                  <li class="menu-sep" role="separator"></li>
+                  <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!canInsertTemplateFile()" (click)="insertAgentsGuide(); closeMenu()"><ng-icon name="lucideBot" size="13" /><span>Insert AGENTS.md</span></button></li>
+                  <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!canInsertTemplateFile()" (click)="insertReadme(); closeMenu()"><ng-icon name="lucideFileText" size="13" /><span>Insert README.md</span></button></li>
                   <li class="menu-sep" role="separator"></li>
                   <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="closeDocument(); closeMenu()"><ng-icon name="lucideX" size="13" /><span>Close Document</span><kbd>Ctrl+W</kbd></button></li>
                   <li class="menu-sep" role="separator"></li>
@@ -727,6 +740,16 @@ interface ArchiveTreeData {
         <p-button label="Pack" (onClick)="confirmPackFolder()">
           <ng-template #icon><ng-icon name="lucideFolder" size="14" /></ng-template>
         </p-button>
+      </ng-template>
+    </p-dialog>
+
+    <p-dialog [header]="insertTemplateDialogTitle()" [visible]="insertTemplateDialogOpen()" (visibleChange)="onInsertTemplateDialogVisibleChange($event)" [modal]="true" [style]="{ width: 'min(92vw, 440px)' }">
+      <div class="dialog-form">
+        <p>{{ insertTemplateDialogName() }} already exists in this document. Replace it with the built-in version?</p>
+      </div>
+      <ng-template pTemplate="footer">
+        <p-button label="Cancel" severity="secondary" [text]="true" (onClick)="cancelInsertTemplate()" />
+        <p-button label="Replace" (onClick)="confirmInsertTemplate()" />
       </ng-template>
     </p-dialog>
 
@@ -1209,10 +1232,27 @@ export class AppComponent implements OnDestroy {
   readonly mdDefaultBusy = signal(false);
   private static readonly MD_DEFAULT_PROMPT_KEY = 'mdDefaultPromptSeen';
   readonly imageDestinationDialogOpen = signal(false);
+  // Insert AGENTS.md / README.md (issue #12). Only a confirm-replace prompt is
+  // needed — nothing to configure — so this mirrors convertDialogOpen's shape:
+  // a visibility signal plus a pending-kind field set synchronously before it opens.
+  readonly insertTemplateDialogOpen = signal(false);
+  private pendingInsertTemplate: TemplateFileKind | null = null;
+  readonly insertTemplateDialogName = computed(() => TEMPLATE_FILES[this.pendingInsertTemplate ?? 'agents'].path);
+  readonly insertTemplateDialogTitle = computed(() => `Insert ${this.insertTemplateDialogName()}`);
+  // Insert AGENTS.md/README.md on a plain .md document routes through this same
+  // "Convert to MDZip" prompt (set just before opening it) instead of a dead
+  // disabled menu item or a separate prompt — see confirmConvertToMdz.
+  private pendingInsertTemplateAfterConvert: TemplateFileKind | null = null;
   // Confirmation before converting a Markdown doc to .mdz (nav-button path).
   // A deliberate seam for a future options dialog (title, subfolder, mode…).
   readonly convertDialogOpen = signal(false);
   readonly imageSubfolder = signal('images');
+  // Available whenever any document is open, .md included: inserting into a
+  // plain .md routes through the "Convert to MDZip" prompt first rather than
+  // showing a disabled item (Electron's native Windows menu can't render a
+  // visibly-disabled state — see menu.js — so a dead-end item there is worse
+  // than one that offers the fix).
+  readonly canInsertTemplateFile = computed(() => Boolean(this.currentArchive()));
   readonly canWriteLinkedMarkdownImage = computed(() =>
     Boolean(this.currentArchive()?.path && window.mdzipStudio?.writeMarkdownImage)
   );
@@ -1319,6 +1359,8 @@ export class AppComponent implements OnDestroy {
   private readonly handleShowChangelogCommand = () => void this.openHelpDocument('changelog');
   private readonly handleSetMdDefaultCommand = () => void this.promptMarkdownDefaultManually();
   private readonly handlePackFolderCommand = () => void this.packFolder();
+  private readonly handleInsertAgentsCommand = () => this.insertAgentsGuide();
+  private readonly handleInsertReadmeCommand = () => this.insertReadme();
   private readonly handleUnpackMdzCommand = () => void this.unpackMdzToFolder();
   private readonly handleShowInFolderCommand = () => void this.showInFileManager();
   private readonly handleReloadDocumentCommand = () => void this.reloadDocumentFromDisk();
@@ -1376,6 +1418,8 @@ export class AppComponent implements OnDestroy {
     window.addEventListener('mdzip-studio:show-changelog', this.handleShowChangelogCommand);
     window.addEventListener('mdzip-studio:set-md-default', this.handleSetMdDefaultCommand);
     window.addEventListener('mdzip-studio:pack-folder', this.handlePackFolderCommand);
+    window.addEventListener('mdzip-studio:insert-agents', this.handleInsertAgentsCommand);
+    window.addEventListener('mdzip-studio:insert-readme', this.handleInsertReadmeCommand);
     window.addEventListener('mdzip-studio:unpack-mdz', this.handleUnpackMdzCommand);
     window.addEventListener('mdzip-studio:show-in-folder', this.handleShowInFolderCommand);
     window.addEventListener('mdzip-studio:reload-document', this.handleReloadDocumentCommand);
@@ -1432,6 +1476,8 @@ export class AppComponent implements OnDestroy {
     window.removeEventListener('mdzip-studio:show-changelog', this.handleShowChangelogCommand);
     window.removeEventListener('mdzip-studio:set-md-default', this.handleSetMdDefaultCommand);
     window.removeEventListener('mdzip-studio:pack-folder', this.handlePackFolderCommand);
+    window.removeEventListener('mdzip-studio:insert-agents', this.handleInsertAgentsCommand);
+    window.removeEventListener('mdzip-studio:insert-readme', this.handleInsertReadmeCommand);
     window.removeEventListener('mdzip-studio:unpack-mdz', this.handleUnpackMdzCommand);
     window.removeEventListener('mdzip-studio:show-in-folder', this.handleShowInFolderCommand);
     window.removeEventListener('mdzip-studio:reload-document', this.handleReloadDocumentCommand);
@@ -3258,22 +3304,184 @@ export class AppComponent implements OnDestroy {
     this.imageDestinationDialogOpen.set(false);
   }
 
+  // Insert AGENTS.md / README.md (issue #12), matching mdzip-vscode's
+  // mdzip.addAgentsGuide: a single fixed, bundled template per file, added or
+  // (with confirmation) replaced in the current .mdz — never silently
+  // overwritten. Unlike vscode's version, this doesn't require the document
+  // to already be saved to disk first: it edits the in-memory workspace and
+  // marks it dirty, consistent with how New/Pack Folder leave a document
+  // unsaved for the user to commit with Ctrl+S.
+  insertAgentsGuide(): void {
+    void this.insertTemplateFile('agents');
+  }
+
+  insertReadme(): void {
+    void this.insertTemplateFile('readme');
+  }
+
+  private async insertTemplateFile(kind: TemplateFileKind): Promise<void> {
+    if (!this.canInsertTemplateFile()) return;
+
+    if (this.sourceFormat() !== 'mdz') {
+      // No archive to add a second file into yet — offer the fix instead of a
+      // dead end. confirmConvertToMdz()/cancelConvertToMdz() pick this back up.
+      this.pendingInsertTemplateAfterConvert = kind;
+      this.convertDialogOpen.set(true);
+      return;
+    }
+
+    await this.flushWorkspaceEdits();
+    const bytes = this.latestWorkspaceBytes() ?? this.workspaceBytes();
+    if (!bytes) return;
+
+    const { path } = TEMPLATE_FILES[kind];
+    let alreadyExists: boolean;
+    try {
+      const opened = await MdzArchiveCore.open(bytes);
+      alreadyExists = opened.listPaths().some((entry) => entry.toLowerCase() === path.toLowerCase());
+    } catch (error) {
+      this.statusMessage.set(`Could not read archive: ${error instanceof Error ? error.message : 'unknown error'}`);
+      return;
+    }
+
+    if (alreadyExists) {
+      this.pendingInsertTemplate = kind;
+      this.insertTemplateDialogOpen.set(true);
+      return;
+    }
+
+    await this.performInsertTemplate(kind, bytes, false, false);
+  }
+
+  // Converts the current Markdown document to MDZip in memory (self-contained:
+  // unlike convertPendingMarkdownToMdz, this doesn't depend on a conversion
+  // context supplied by the embedded editor's own "Convert" affordance, so it
+  // can be triggered from the File menu). Mirrors performSave's Save-As
+  // markdown→mdz branch: same buildFreshArchiveBytes + embedded-images path,
+  // just without writing to disk.
+  private async convertMarkdownToMdzInMemory(): Promise<boolean> {
+    const archive = this.currentArchive();
+    if (!archive || this.sourceFormat() !== 'markdown') return false;
+    try {
+      await this.flushWorkspaceEdits();
+      const markdownBytes = this.latestWorkspaceBytes() ?? this.workspaceBytes();
+      const markdown = markdownBytes ? new TextDecoder().decode(markdownBytes) : (archive.documents[0]?.content ?? '');
+      const embeddedImages = await this.collectMarkdownImages(markdown);
+      const convertedArchive: MDZipArchive = {
+        ...archive,
+        documents: archive.documents.map((document, index) =>
+          index === 0 ? { ...document, content: markdown } : document
+        ),
+      };
+      const bytes = await this.buildFreshArchiveBytes(convertedArchive, embeddedImages);
+      // The old .md path no longer matches this content/format — same as
+      // convertPendingMarkdownToMdz, force a Save As next time.
+      this.archiveService.currentArchive.update((current) => (current ? { ...current, path: undefined } : current));
+      this.sourceFormat.set('mdz');
+      this.workspaceBytes.set(bytes);
+      this.latestWorkspaceBytes.set(bytes);
+      this.isDirty.set(true);
+      return true;
+    } catch (error) {
+      this.statusMessage.set(`Could not convert to MDZip: ${error instanceof Error ? error.message : 'unknown error'}`);
+      return false;
+    }
+  }
+
+  private async convertThenInsertTemplate(kind: TemplateFileKind): Promise<void> {
+    if (!await this.convertMarkdownToMdzInMemory()) return;
+    const bytes = this.latestWorkspaceBytes() ?? this.workspaceBytes();
+    if (!bytes) return;
+    // A document that was just converted from Markdown can't already contain
+    // AGENTS.md/README.md, so no need to re-check and possibly prompt again.
+    await this.performInsertTemplate(kind, bytes, false, true);
+  }
+
+  private async performInsertTemplate(
+    kind: TemplateFileKind,
+    bytes: Uint8Array,
+    replacing: boolean,
+    converted: boolean
+  ): Promise<void> {
+    const archive = this.currentArchive();
+    if (!archive) return;
+    const { path, assetUrl } = TEMPLATE_FILES[kind];
+    try {
+      const response = await fetch(assetUrl, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`Could not load ${assetUrl}`);
+      const content = await response.text();
+      const result = await MdzArchiveCore.addFile(bytes, path, content);
+      const nextBytes = new Uint8Array(await result.blob.arrayBuffer());
+      // Route through the same full reopen every other bytes-replacing action
+      // uses (Open/New/Pack Folder/post-save) instead of poking workspaceBytes
+      // directly, so the nav tree, ArchiveService's document/asset lists, and
+      // the embedded editor's own state all stay consistent with the new file
+      // — not just the raw bytes. Preserves the archive's current name/path
+      // (this isn't a new document) and whatever nav-pane visibility is
+      // already showing (no unrequested layout change).
+      const name = archive.path ? this.recentFileName(archive.path) : `${this.toSafeFilename(archive.name)}.mdz`;
+      this.isLoading.set(true);
+      await this.yieldForPaint();
+      await this.openDocumentBytes(nextBytes, name, archive.path, false, false, this.navigationActive());
+      this.isDirty.set(true);
+      this.statusMessage.set(
+        converted
+          ? `Converted to MDZip and added ${path} — not saved yet`
+          : `${replacing ? 'Replaced' : 'Added'} ${path}`
+      );
+    } catch (error) {
+      this.isLoading.set(false);
+      this.statusMessage.set(`Could not insert ${path}: ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
+  }
+
+  confirmInsertTemplate(): void {
+    const kind = this.pendingInsertTemplate;
+    this.insertTemplateDialogOpen.set(false);
+    if (!kind) return;
+    const bytes = this.latestWorkspaceBytes() ?? this.workspaceBytes();
+    this.pendingInsertTemplate = null;
+    if (!bytes) return;
+    void this.performInsertTemplate(kind, bytes, true, false);
+  }
+
+  cancelInsertTemplate(): void {
+    this.insertTemplateDialogOpen.set(false);
+    this.pendingInsertTemplate = null;
+  }
+
+  onInsertTemplateDialogVisibleChange(visible: boolean): void {
+    this.insertTemplateDialogOpen.set(visible);
+    if (!visible) this.pendingInsertTemplate = null;
+  }
+
   confirmConvertToMdz(): void {
-    // Start the conversion first — it captures the pending context synchronously,
-    // before closing the dialog (whose visibleChange would otherwise clear it).
+    // Capture pending context synchronously, before closing the dialog (whose
+    // visibleChange would otherwise clear it).
+    const insertAfterConvert = this.pendingInsertTemplateAfterConvert;
+    this.pendingInsertTemplateAfterConvert = null;
+    if (insertAfterConvert) {
+      void this.convertThenInsertTemplate(insertAfterConvert);
+      this.convertDialogOpen.set(false);
+      return;
+    }
     void this.convertPendingMarkdownToMdz(true);
     this.convertDialogOpen.set(false);
   }
 
   cancelConvertToMdz(): void {
     this.convertDialogOpen.set(false);
+    this.pendingInsertTemplateAfterConvert = null;
     this.clearPendingMarkdownImage();
   }
 
   onConvertDialogVisibleChange(visible: boolean): void {
     this.convertDialogOpen.set(visible);
     // Dismissed (X / Esc) without confirming — drop the pending conversion.
-    if (!visible) this.clearPendingMarkdownImage();
+    if (!visible) {
+      this.pendingInsertTemplateAfterConvert = null;
+      this.clearPendingMarkdownImage();
+    }
   }
 
   chooseMarkdownImageDestination(destination: 'same' | 'subfolder'): void {

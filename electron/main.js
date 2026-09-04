@@ -1176,6 +1176,8 @@ function menuHandlersFor(win) {
     saveAs: () => dispatchAppEvent(win, 'mdzip-studio:save-archive-as'),
     print: () => dispatchAppEvent(win, 'mdzip-studio:print'),
     showInFolder: () => dispatchAppEvent(win, 'mdzip-studio:show-in-folder'),
+    insertAgentsGuide: () => dispatchAppEvent(win, 'mdzip-studio:insert-agents'),
+    insertReadme: () => dispatchAppEvent(win, 'mdzip-studio:insert-readme'),
     closeDocument: () => dispatchAppEvent(win, 'mdzip-studio:close-archive'),
     quit: () => app.quit(),
     reload: () => dispatchAppEvent(win, 'mdzip-studio:reload-document'),
@@ -1203,18 +1205,24 @@ function refreshWindowMenu(win) {
   win.setMenu(Menu.buildFromTemplate(template));
 }
 
-// App-level fallback menu (no window: e.g. macOS after the last window closes,
-// since that platform doesn't quit on window-all-closed). Individual windows
-// override this via refreshWindowMenu once created.
-app.on('ready', () => {
-  const template = buildMenuTemplate({
-    documentOpen: false,
-    isDev,
-    platform: process.platform,
-    handlers: menuHandlersFor(null),
+// App-level fallback menu — macOS only. That's the one platform where the app
+// stays alive with no windows open (it doesn't quit on window-all-closed), so
+// it needs its own menu for that state. On Windows/Linux, Menu.setApplicationMenu()
+// resets *every* window's menu (not just windowless ones), which was clobbering
+// the real per-window menu that refreshWindowMenu had just set — its handlers
+// close over `win = null`, so every menu item without a keyboard shortcut
+// (Pack Folder, Print, Show in File Manager, etc.) silently did nothing.
+if (process.platform === 'darwin') {
+  app.on('ready', () => {
+    const template = buildMenuTemplate({
+      documentOpen: false,
+      isDev,
+      platform: process.platform,
+      handlers: menuHandlersFor(null),
+    });
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
   });
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
-});
+}
 
 // Swap the window/taskbar icon when the OS theme changes (each BrowserWindow is
 // created with the correct one for the current theme).
