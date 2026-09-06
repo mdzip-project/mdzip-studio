@@ -37,6 +37,15 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
     ipcRenderer.on('mdzip:document-changed-externally', listener);
     return () => ipcRenderer.removeListener('mdzip:document-changed-externally', listener);
   },
+  // The main process asks before letting a window close (X button / app quit).
+  // The renderer runs its unsaved-changes prompt and answers with allow/deny.
+  onWindowCloseRequested: (callback) => {
+    const listener = (_event, requestId) => callback(requestId);
+    ipcRenderer.on('mdzip:window-close-requested', listener);
+    return () => ipcRenderer.removeListener('mdzip:window-close-requested', listener);
+  },
+  respondWindowClose: (requestId, allow) =>
+    ipcRenderer.send('mdzip:window-close-response', { requestId, allow }),
   saveDocument: (payload) => ipcRenderer.invoke('mdzip:save-document', payload),
   getMarkdownDefaultStatus: () => ipcRenderer.invoke('mdzip:get-md-default-status'),
   promptMarkdownDefault: () => ipcRenderer.invoke('mdzip:prompt-md-default'),

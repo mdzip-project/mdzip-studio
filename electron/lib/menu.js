@@ -2,7 +2,7 @@
 // state that decides shape (documentOpen/isDev/platform) plus a bag of click
 // handlers, and returns a plain template array — no Menu/BrowserWindow/app
 // references, so it's unit-testable without a running main process.
-function buildMenuTemplate({ documentOpen, isDev, platform, handlers }) {
+function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvailableVersion = null }) {
   // Electron's native Windows menu doesn't expose a styleable disabled state, so
   // the document-only items would look enabled until hovered. Instead of greying
   // them out, omit them entirely when no document is open — unambiguous, and they
@@ -34,6 +34,15 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers }) {
     { type: 'separator' },
     { label: 'Exit', accelerator: 'CmdOrCtrl+Q', click: handlers.quit },
   );
+
+  // A background check (see main.js) sets updateAvailableVersion when a newer
+  // release exists. Electron menus have no badge API on Windows/Linux, so the
+  // "indicator dot" is a bullet appended to the Help label (visible without
+  // opening the menu) and the check item itself renames to a call to action.
+  const helpLabel = updateAvailableVersion ? 'Help •' : 'Help';
+  const updateItem = updateAvailableVersion
+    ? { label: `Download Update (${updateAvailableVersion})...`, click: handlers.checkForUpdates }
+    : { label: 'Check for Updates...', click: handlers.checkForUpdates };
 
   const template = [
     {
@@ -70,7 +79,7 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers }) {
       ],
     },
     {
-      label: 'Help',
+      label: helpLabel,
       submenu: [
         ...(platform === 'win32'
           ? [
@@ -81,7 +90,7 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers }) {
         { label: 'Known Issues', click: handlers.showKnownIssues },
         { label: 'Change Log', click: handlers.showChangelog },
         { type: 'separator' },
-        { label: 'Check for Updates...', click: handlers.checkForUpdates },
+        updateItem,
         { type: 'separator' },
         { label: 'About MDZip Studio', click: handlers.showAbout },
       ],

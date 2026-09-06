@@ -5,7 +5,8 @@
   "author": "MDZip Project",
   "license": "Apache-2.0",
   "main": "electron/main.js",
-  "homepage": "./",
+  "homepage": "https://mdzip.org",
+  "desktopName": "mdzip-studio.desktop",
   "scripts": {
     "prestart": "node scripts/generate-about-data.js",
     "start": "concurrently --kill-others --names ng,electron \"npm run start:angular\" \"wait-on http://localhost:4300 && npm run start:electron\"",
@@ -45,10 +46,6 @@
     ],
     "extraResources": [
       {
-        "from": "build/preview-handler",
-        "to": "preview-handler"
-      },
-      {
         "from": "build/file-icons",
         "to": "file-icons"
       }
@@ -63,11 +60,40 @@
         }
       ],
       "icon": "icon.ico",
+      "extraResources": [
+        {
+          "from": "build/preview-handler",
+          "to": "preview-handler"
+        }
+      ],
       "signExts": [
         "mdz.WinPrev.comhost.dll",
         "mdz.WinPrev.dll",
         "mdzip.core.dll",
         "Markdig.dll"
+      ]
+    },
+    "linux": {
+      "target": [
+        "deb",
+        "AppImage"
+      ],
+      "artifactName": "MDZip-Studio-${version}.${ext}",
+      "icon": "icon.png",
+      "syncDesktopName": true,
+      "category": "Office",
+      "packageCategory": "editors",
+      "synopsis": "Create, edit, and validate MDZip (.mdz) archives",
+      "description": "MDZip Studio is the reference desktop application for the MDZip ecosystem: an editor and validator for .mdz archives (Markdown plus images and metadata in a single portable file).",
+      "maintainer": "MDZip Project <info@mdzip.org>",
+      "fileAssociations": [
+        {
+          "ext": "mdz",
+          "name": "MDZip Document",
+          "description": "MDZip Document",
+          "mimeType": "application/vnd.mdzip",
+          "icon": "file-icons/mdz.png"
+        }
       ]
     },
     "nsis": {

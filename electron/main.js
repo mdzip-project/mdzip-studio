@@ -23,12 +23,19 @@ const { buildMenuTemplate } = require('./lib/menu');
 // detect whether Studio is already the default Markdown editor.
 const MD_PROGID = 'MDZip.Studio.Markdown';
 
-// Light/dark window icons (bundled under electron/, so available in dev and in
-// the packaged asar). The window icon follows the OS theme via nativeTheme.
+// Window icons (bundled under electron/, so available in dev and in the packaged
+// asar). Windows uses light/dark .ico files and swaps them with the OS theme
+// (see the nativeTheme handler below). Electron on Linux/macOS can't load .ico
+// via nativeImage — `win.setIcon()` throws — so those platforms use a single PNG
+// (the real per-platform branding comes from the Linux .desktop entry / macOS
+// .icns bundle, not the per-window icon).
 const LIGHT_WINDOW_ICON = path.join(__dirname, 'icons', 'mdzip-mark-light.ico');
 const DARK_WINDOW_ICON = path.join(__dirname, 'icons', 'mdzip-mark-dark.ico');
-const windowIconForTheme = () =>
-  nativeTheme.shouldUseDarkColors ? DARK_WINDOW_ICON : LIGHT_WINDOW_ICON;
+const PNG_WINDOW_ICON = path.join(__dirname, 'icons', 'mdzip-mark.png');
+const windowIconForTheme = () => {
+  if (process.platform !== 'win32') return PNG_WINDOW_ICON;
+  return nativeTheme.shouldUseDarkColors ? DARK_WINDOW_ICON : LIGHT_WINDOW_ICON;
+};
 
 // Multi-window: each open BrowserWindow gets its own document/menu state —
 // there is no single "the" window once more than one can be open at once.
@@ -61,6 +68,67 @@ function anyWindow() {
   if (lastFocusedWindow && !lastFocusedWindow.isDestroyed()) return lastFocusedWindow;
   const [firstWin] = windows.keys();
   return firstWin ?? null;
+}
+
+// --- Unsaved-changes guard on window close / app quit --------------------
+// The renderer owns the unsaved-changes prompt (and the notion of "needs
+// save"), so before a window actually closes the main process asks it whether
+// closing is OK. The renderer runs its Save / Don't Save / Cancel dialog and
+// answers. Applies to the window's X button and to app quit (each window in
+// turn); the in-app "Close Document" (Ctrl+W) already prompts on its own.
+let closeApprovalSeq = 0;
+const pendingCloseApprovals = new Map();
+
+function requestRendererCloseApproval(win) {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    const requestId = ++closeApprovalSeq;
+    // If the renderer never answers (crashed / hung), don't wedge the close.
+    const timer = setTimeout(() => {
+      if (pendingCloseApprovals.delete(requestId)) resolve(true);
+    }, 30_000);
+    pendingCloseApprovals.set(requestId, (allow) => {
+      clearTimeout(timer);
+      resolve(allow);
+    });
+    win.webContents.send('mdzip:window-close-requested', requestId);
+  });
+}
+
+ipcMain.on('mdzip:window-close-response', (_event, payload) => {
+  const resolver = pendingCloseApprovals.get(payload?.requestId);
+  if (!resolver) return;
+  pendingCloseApprovals.delete(payload.requestId);
+  resolver(Boolean(payload?.allow));
+});
+
+// Quit is gated the same way: walk the open windows one at a time so a Cancel
+// on any of them aborts the quit without having already closed the others.
+let quitApproved = false;
+let quitFlowRunning = false;
+
+async function runQuitCloseFlow() {
+  if (quitFlowRunning) return;
+  quitFlowRunning = true;
+  try {
+    for (const win of [...windows.keys()]) {
+      if (win.isDestroyed()) continue;
+      const state = windowState(win);
+      if (state?.closeApproved) continue;
+      focusWindow(win);
+      // Sequential on purpose: one prompt at a time, and a Cancel here stops
+      // before we've touched any other window.
+      const allow = await requestRendererCloseApproval(win);
+      if (!allow) return; // user canceled — leave every window open
+      if (state) state.closeApproved = true;
+    }
+    quitApproved = true;
+    app.quit();
+  } finally {
+    quitFlowRunning = false;
+  }
 }
 
 // Open filePath in whichever window already has it open (just focus it — no
@@ -197,17 +265,34 @@ if (process.platform === 'win32') {
   app.setAppUserModelId('org.mdzip.studio');
 }
 
-// --- Manual update (electron-updater, GitHub Releases) ---------------------
-// Releases are vetted by hand, so the app never updates on its own: there is no
-// startup check and nothing downloads or installs automatically. The user opts
-// in through Help → Check for Updates, then confirms the download and (on the
-// next restart) the install. The feed is the `publish` block in package.json,
-// baked into app-update.yml at build time. Updates only work in a packaged
-// build; in dev the feed is absent and checkForUpdates() rejects.
+// --- Updates (electron-updater, GitHub Releases) --------------------------
+// Nothing downloads or installs on its own. A quiet background check runs a
+// short time after launch and every few hours after that; when it finds a newer
+// release it just marks the Help menu (see buildMenuTemplate's
+// updateAvailableVersion) — no dialog. The user opts in from there (or from
+// Help → Check for Updates), confirms the download, and confirms the install on
+// the next restart. The feed is the `publish` block in package.json, baked into
+// app-update.yml at build time. Updates only work in a packaged build; in dev
+// the feed is absent and checkForUpdates() rejects.
+const UPDATE_CHECK_STARTUP_DELAY_MS = 15_000;
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
 let updaterWired = false;
-// The window that triggered the in-flight check — only one check happens at a
-// time, so this is enough to parent the outcome dialog to the right window.
+// The window to parent an outcome dialog to — only one check runs at a time.
 let updateDialogParent = null;
+// Whether the most recent check was user-initiated. Background checks stay
+// silent on "up to date" / error; only the menu marker reacts.
+let updateCheckIsUserInitiated = false;
+// Info from the last `update-available` while a newer release is still waiting
+// to be downloaded — drives the Help-menu indicator. Cleared once the update is
+// downloaded (or the app restarts into it).
+let availableUpdateInfo = null;
+
+function refreshAllWindowMenus() {
+  for (const win of windows.keys()) {
+    if (!win.isDestroyed()) refreshWindowMenu(win);
+  }
+}
 
 function wireAutoUpdater() {
   if (updaterWired) return;
@@ -216,6 +301,10 @@ function wireAutoUpdater() {
   autoUpdater.autoDownload = false;
 
   autoUpdater.on('update-available', (info) => {
+    availableUpdateInfo = info;
+    refreshAllWindowMenus();
+    // Background check: just the menu marker, no interruption.
+    if (!updateCheckIsUserInitiated) return;
     showAppDialog(updateDialogParent, updateAvailableDialog(info, app.getVersion()))
       .then(({ response }) => {
         if (response === 0) autoUpdater.downloadUpdate().catch(() => {});
@@ -223,10 +312,20 @@ function wireAutoUpdater() {
   });
 
   autoUpdater.on('update-not-available', () => {
+    // A pending marker but the release is gone (pulled/yanked) — drop it.
+    if (availableUpdateInfo) {
+      availableUpdateInfo = null;
+      refreshAllWindowMenus();
+    }
+    if (!updateCheckIsUserInitiated) return;
     showAppDialog(updateDialogParent, updateNotAvailableDialog(app.getVersion()));
   });
 
   autoUpdater.on('update-downloaded', (info) => {
+    // It's now waiting on a restart, not a download — clear the "download me"
+    // marker (the restart prompt below, and one on quit, carry it from here).
+    availableUpdateInfo = null;
+    refreshAllWindowMenus();
     showAppDialog(updateDialogParent, updateDownloadedDialog(info))
       .then(({ response }) => {
         if (response === 0) autoUpdater.quitAndInstall();
@@ -234,12 +333,14 @@ function wireAutoUpdater() {
   });
 
   autoUpdater.on('error', (error) => {
+    if (!updateCheckIsUserInitiated) return;
     showAppDialog(updateDialogParent, updateErrorDialog(error));
   });
 }
 
 function checkForUpdates(win) {
   updateDialogParent = win ?? null;
+  updateCheckIsUserInitiated = true;
   if (!app.isPackaged) {
     showAppDialog(win, {
       type: 'info',
@@ -254,6 +355,20 @@ function checkForUpdates(win) {
   // an unreachable feed never produces an unhandled promise rejection.
   autoUpdater.checkForUpdates().catch(() => {});
 }
+
+function checkForUpdatesInBackground() {
+  if (!app.isPackaged) return;
+  updateCheckIsUserInitiated = false;
+  updateDialogParent = anyWindow();
+  wireAutoUpdater();
+  autoUpdater.checkForUpdates().catch(() => {});
+}
+
+app.on('ready', () => {
+  if (!app.isPackaged) return;
+  setTimeout(checkForUpdatesInBackground, UPDATE_CHECK_STARTUP_DELAY_MS).unref?.();
+  setInterval(checkForUpdatesInBackground, UPDATE_CHECK_INTERVAL_MS).unref?.();
+});
 
 async function isPathReadOnly(filePath) {
   // On Windows W_OK reflects the read-only file attribute; on POSIX it reflects
@@ -466,6 +581,9 @@ function createWindow({ pendingOpenPath = null } = {}) {
     externalChangeNotifiedFor: null,
     fileWatcher: null,
     externalChangeTimer: null,
+    // Set once the renderer has approved this window closing (X button or the
+    // quit flow), so the 'close' handler below lets the next attempt through.
+    closeApproved: false,
   });
   refreshWindowMenu(win);
 
@@ -484,6 +602,19 @@ function createWindow({ pendingOpenPath = null } = {}) {
 
   win.on('focus', () => {
     lastFocusedWindow = win;
+  });
+
+  // Ask the renderer before closing so unsaved work isn't lost to the X button.
+  // The quit flow marks closeApproved itself and then calls win.close().
+  win.on('close', (event) => {
+    const state = windowState(win);
+    if (state?.closeApproved) return;
+    event.preventDefault();
+    requestRendererCloseApproval(win).then((allow) => {
+      if (!allow || win.isDestroyed()) return;
+      if (state) state.closeApproved = true;
+      win.close();
+    });
   });
 
   win.on('closed', () => {
@@ -532,6 +663,16 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+// Menu Exit / Cmd-Q / OS logout: prompt for unsaved work in each open window
+// before quitting. window-all-closed → app.quit() lands here too, but by then
+// every window already went through its own 'close' guard, so there's nothing
+// left to ask.
+app.on('before-quit', (event) => {
+  if (quitApproved || windows.size === 0) return;
+  event.preventDefault();
+  runQuitCloseFlow();
 });
 
 app.on('activate', () => {
@@ -1201,6 +1342,7 @@ function refreshWindowMenu(win) {
     isDev,
     platform: process.platform,
     handlers: menuHandlersFor(win),
+    updateAvailableVersion: availableUpdateInfo?.version ?? null,
   });
   win.setMenu(Menu.buildFromTemplate(template));
 }
@@ -1219,17 +1361,22 @@ if (process.platform === 'darwin') {
       isDev,
       platform: process.platform,
       handlers: menuHandlersFor(null),
+      updateAvailableVersion: availableUpdateInfo?.version ?? null,
     });
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
   });
 }
 
 // Swap the window/taskbar icon when the OS theme changes (each BrowserWindow is
-// created with the correct one for the current theme).
-app.on('ready', () => {
-  nativeTheme.on('updated', () => {
-    for (const win of windows.keys()) {
-      if (!win.isDestroyed()) win.setIcon(windowIconForTheme());
-    }
+// created with the correct one for the current theme). Windows-only: it's the
+// only platform with per-theme .ico variants, and `setIcon` with the PNG the
+// other platforms use would just be a no-op reassignment.
+if (process.platform === 'win32') {
+  app.on('ready', () => {
+    nativeTheme.on('updated', () => {
+      for (const win of windows.keys()) {
+        if (!win.isDestroyed()) win.setIcon(windowIconForTheme());
+      }
+    });
   });
-});
+}

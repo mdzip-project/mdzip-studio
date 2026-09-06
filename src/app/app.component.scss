@@ -893,8 +893,28 @@ button.destination-option:hover:not(:disabled),
   font-size: 13px;
 }
 
+/* Right-hand group: live document stats (when a Markdown entry is open) then
+   the version. */
+.statusbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.statusbar-stats {
+  opacity: 0.7;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* No room for the stats on a narrow window — the version tag always stays. */
+@media (max-width: 720px) {
+  .statusbar-stats { display: none; }
+}
+
 .statusbar-version {
-  margin-left: auto;
   opacity: 0.5;
   font-size: 11px;
   font-variant-numeric: tabular-nums;

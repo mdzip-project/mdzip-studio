@@ -18,6 +18,11 @@ describe('documentPathFromArgs', () => {
     expect(documentPathFromArgs(['--flag.md', 'notes.mdz'])).toBe(path.resolve('notes.mdz'));
   });
 
+  it('converts a file:// URI argument to a path (Linux .desktop %U)', () => {
+    expect(documentPathFromArgs(['mdzip-studio', 'file:///home/kyle/My%20Notes.mdz']))
+      .toBe('/home/kyle/My Notes.mdz');
+  });
+
   it('returns null when no candidate is present', () => {
     expect(documentPathFromArgs(['electron.exe', '--dev'])).toBeNull();
   });

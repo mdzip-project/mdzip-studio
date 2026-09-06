@@ -85,6 +85,33 @@ describe('buildMenuTemplate', () => {
     expect(handlers.exportDraft).toHaveBeenCalledTimes(1);
   });
 
+  it('shows a plain Help menu and "Check for Updates..." when no update is pending', () => {
+    const template = buildMenuTemplate({
+      documentOpen: false, isDev: false, platform: 'linux', handlers: stubHandlers(),
+    });
+    expect(template.map((m) => m.label)).toContain('Help');
+    expect(labelsOf(findMenu(template, 'Help').submenu)).toContain('Check for Updates...');
+  });
+
+  it('marks the Help menu and renames the item when an update is available', () => {
+    const handlers = stubHandlers();
+    const template = buildMenuTemplate({
+      documentOpen: false, isDev: false, platform: 'linux', handlers,
+      updateAvailableVersion: '1.3.25',
+    });
+    expect(template.map((m) => m.label)).toContain('Help •');
+    expect(template.map((m) => m.label)).not.toContain('Help');
+
+    const helpLabels = labelsOf(findMenu(template, 'Help •').submenu);
+    expect(helpLabels).toContain('Download Update (1.3.25)...');
+    expect(helpLabels).not.toContain('Check for Updates...');
+
+    findMenu(template, 'Help •').submenu
+      .find((i) => i.label === 'Download Update (1.3.25)...')
+      .click();
+    expect(handlers.checkForUpdates).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps "New Window" available regardless of documentOpen state', () => {
     const closed = buildMenuTemplate({ documentOpen: false, isDev: false, platform: 'win32', handlers: stubHandlers() });
     const open = buildMenuTemplate({ documentOpen: true, isDev: false, platform: 'win32', handlers: stubHandlers() });

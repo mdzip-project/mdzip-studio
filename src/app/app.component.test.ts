@@ -57,19 +57,16 @@ describe('AppComponent', () => {
     expect(component.currentArchive()).toBeNull();
   });
 
-  it('creates an untitled document from the dialog', () => {
-    component.createArchiveFromDialog();
+  it('creates an untitled document immediately, no name prompt', async () => {
+    await component.createNewDocument('markdown');
     expect(component.currentArchive()?.name).toBe('Untitled');
     expect(component.documents().length).toBe(1);
   });
 
-  it('should create a named archive from the dialog', () => {
-    component.newArchiveName = 'Test Archive';
-    component.newArchiveMode = 'project';
-    component.createArchiveFromDialog();
-
-    expect(component.currentArchive()?.name).toBe('Test Archive');
-    expect(component.currentArchive()?.mode).toBe('project');
+  it('creates an .mdz document with the default name', async () => {
+    await component.createNewDocument('mdz');
+    expect(component.currentArchive()?.name).toBe('My Document');
+    expect(component.currentArchive()?.mode).toBe('document');
     expect(component.documents().length).toBe(1);
   });
 
@@ -133,8 +130,8 @@ describe('AppComponent', () => {
     expect(new TextDecoder().decode(component.helpDialogBytes() ?? new Uint8Array())).toContain('Bundled copy');
   });
 
-  it('routes manifest editor changes into Studio archive state', () => {
-    component.createArchiveFromDialog();
+  it('routes manifest editor changes into Studio archive state', async () => {
+    await component.createNewDocument('markdown');
     component.onManifestEditorChange({ field: 'title', value: 'Updated title' });
     component.onManifestEditorChange({ field: 'mode', value: 'project' });
     component.onManifestEditorChange({ field: 'author', value: 'Ada Lovelace' });
@@ -145,13 +142,82 @@ describe('AppComponent', () => {
     expect(component.metadataField('author')).toBe('Ada Lovelace');
   });
 
-  it('uses the archive name as the centered document title', () => {
-    component.createArchiveFromDialog();
+  it('uses the archive name as the centered document title', async () => {
+    await component.createNewDocument('markdown');
     expect(component.documentTitle()).toBe('Untitled');
 
     component.onManifestEditorChange({ field: 'title', value: 'Manifest title' });
 
     expect(component.documentTitle()).toBe('Manifest title');
+  });
+
+  // ── Status-bar document stats (issue #16) ────────────────────────────────
+
+  it('computes live document stats from a markdown snapshot', () => {
+    component.onWorkspaceSnapshotChanged({
+      currentPathType: 'markdown',
+      currentText: 'Hello world\n\nThree more words',
+    } as never);
+
+    expect(component.documentStats()).toMatchObject({ words: 5, lines: 3 });
+  });
+
+  it('clears document stats when a non-markdown entry is in view', () => {
+    component.onWorkspaceSnapshotChanged({ currentPathType: 'markdown', currentText: 'x' } as never);
+    expect(component.documentStats()).not.toBeNull();
+
+    component.onWorkspaceSnapshotChanged({ currentPathType: 'manifest', currentText: '{}' } as never);
+    expect(component.documentStats()).toBeNull();
+  });
+
+  it('does not show a stats label with no document open', () => {
+    component.documentStats.set({
+      words: 3, characters: 10, charactersNoSpaces: 8, lines: 1, readingTimeMinutes: 0,
+    });
+    expect(component.currentArchive()).toBeNull();
+    expect(component.documentStatsLabel()).toBeNull();
+  });
+
+  it('formats the stats label and adds reading time past a minute', async () => {
+    await component.createNewDocument('markdown');
+    component.documentStats.set({
+      words: 1200, characters: 6000, charactersNoSpaces: 5000, lines: 40, readingTimeMinutes: 6,
+    });
+    expect(component.documentStatsLabel()).toBe('1,200 words · 6,000 chars · 40 lines · 6 min read');
+  });
+
+  // ── Auto heading from file name (issue #18) ──────────────────────────────
+
+  it('seeds a heading from the file name when opening an empty, named .md', async () => {
+    const app = component as unknown as {
+      openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly?: boolean, recordRecent?: boolean): Promise<void>;
+    };
+    await app.openDocumentBytes(new TextEncoder().encode(''), 'my-trip-notes.md', 'C:/docs/my-trip-notes.md', false, false);
+
+    expect(component.documents()[0]?.content).toBe('# My Trip Notes\n');
+    expect(component.headingAutoInserted()).toBe(true);
+    expect(component.needsSave()).toBe(true);
+  });
+
+  it('leaves an empty file blank for default and repo-meta names', async () => {
+    const app = component as unknown as {
+      openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly?: boolean, recordRecent?: boolean): Promise<void>;
+    };
+    for (const fileName of ['Untitled.md', 'README.md', 'index.md']) {
+      await app.openDocumentBytes(new TextEncoder().encode(''), fileName, `C:/docs/${fileName}`, false, false);
+      expect(component.documents()[0]?.content).toBe('');
+      expect(component.headingAutoInserted()).toBe(false);
+    }
+  });
+
+  it('does not seed a heading when the opened file already has content', async () => {
+    const app = component as unknown as {
+      openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly?: boolean, recordRecent?: boolean): Promise<void>;
+    };
+    await app.openDocumentBytes(new TextEncoder().encode('already here'), 'my-notes.md', 'C:/docs/my-notes.md', false, false);
+
+    expect(component.documents()[0]?.content).toBe('already here');
+    expect(component.headingAutoInserted()).toBe(false);
   });
 
   it('persists embedded manifest edits through the entry render context', async () => {
@@ -598,9 +664,11 @@ describe('AppComponent', () => {
     );
 
   // Seed an open document (the app starts on the welcome screen with none), then
-  // optionally record an on-disk path to simulate a saved file.
+  // optionally record an on-disk path to simulate a saved file. createNewDocument
+  // sets currentArchive synchronously for the markdown format (the await only
+  // hits the .mdz branch), so callers that only read sync state need not await.
   const openTestArchive = (path?: string) => {
-    component.createArchiveFromDialog();
+    void component.createNewDocument('markdown');
     if (path !== undefined) setArchivePath(path);
   };
 
@@ -815,11 +883,23 @@ describe('AppComponent', () => {
   it('prompts before starting a new document when there is unsaved work', () => {
     component.isDesktopShell.set(true);
     openTestArchive();
+    const createNewDocument = vi.spyOn(component, 'createNewDocument');
 
     component.newArchive('markdown');
 
     expect(component.unsavedDialogOpen()).toBe(true);
-    expect(component.newDialogOpen()).toBe(false);
+    expect(createNewDocument).not.toHaveBeenCalled();
+  });
+
+  it('creates a new document with no name prompt when there is nothing to discard', () => {
+    component.isDesktopShell.set(true);
+    const createNewDocument = vi.spyOn(component, 'createNewDocument');
+
+    component.newArchive('markdown');
+
+    expect(component.unsavedDialogOpen()).toBe(false);
+    expect(createNewDocument).toHaveBeenCalledWith('markdown');
+    expect(component.currentArchive()?.name).toBe('Untitled');
   });
 
   it('discards and proceeds when the user chooses Don\'t Save', () => {
@@ -844,6 +924,60 @@ describe('AppComponent', () => {
 
     expect(component.unsavedDialogOpen()).toBe(false);
     expect(component.currentArchive()).not.toBeNull();
+  });
+
+  // ── Window-close guard: confirmDiscardIfUnsaved's onCancel branch (issue #8) ──
+
+  const confirmDiscardIfUnsaved = (proceed: () => void, onCancel?: () => void) =>
+    (component as unknown as {
+      confirmDiscardIfUnsaved(p: () => void, c?: () => void): void;
+    }).confirmDiscardIfUnsaved(proceed, onCancel);
+
+  it('window-close guard: a clean document approves the close with no prompt', () => {
+    component.isDesktopShell.set(true);
+    openTestArchive('C:/docs/saved.mdz');
+    component.isDirty.set(false);
+
+    let allow: boolean | undefined;
+    confirmDiscardIfUnsaved(() => { allow = true; }, () => { allow = false; });
+
+    expect(component.unsavedDialogOpen()).toBe(false);
+    expect(allow).toBe(true);
+  });
+
+  it('window-close guard: canceling the prompt denies the close', () => {
+    component.isDesktopShell.set(true);
+    openTestArchive(); // in memory → needsSave
+
+    let allow: boolean | undefined;
+    confirmDiscardIfUnsaved(() => { allow = true; }, () => { allow = false; });
+    expect(component.unsavedDialogOpen()).toBe(true);
+
+    component.cancelUnsavedDialog();
+    expect(allow).toBe(false);
+  });
+
+  it('window-close guard: Don\'t Save approves the close', () => {
+    component.isDesktopShell.set(true);
+    openTestArchive();
+
+    let allow: boolean | undefined;
+    confirmDiscardIfUnsaved(() => { allow = true; }, () => { allow = false; });
+    component.discardUnsavedThenContinue();
+
+    expect(allow).toBe(true);
+  });
+
+  it('window-close guard: a failed Save denies the close', async () => {
+    component.isDesktopShell.set(true);
+    openTestArchive();
+    vi.spyOn(component, 'saveArchive').mockResolvedValue(undefined); // user canceled Save As
+
+    let allow: boolean | undefined;
+    confirmDiscardIfUnsaved(() => { allow = true; }, () => { allow = false; });
+    await component.saveUnsavedThenContinue();
+
+    expect(allow).toBe(false);
   });
 
   it('proceeds after a successful save from the unsaved-changes prompt', async () => {

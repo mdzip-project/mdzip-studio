@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Linux packaging** — `electron-builder` now produces a `.deb` package and an
+  AppImage for x64 alongside the Windows installer (`npm run build` on Linux).
+  The `.deb` registers a `.mdz` file association (MIME type
+  `application/vnd.mdzip`, per the spec) so double-clicking an archive opens
+  Studio; the Windows-only shell preview handler is excluded from non-Windows
+  builds. (mdzip-studio#9)
+- **Background update check** — Studio now checks for a newer release shortly
+  after launch and every few hours after that. Nothing downloads or installs on
+  its own; when an update is found the Help menu gets a "•" and its
+  "Check for Updates..." entry becomes "Download Update (x.y.z)...". "Up to
+  date" and connection errors from the background check are silent — only a
+  check you start from the menu reports those. (mdzip-studio#17)
+- **Document stats in the status bar** — word, character, and line counts, plus
+  reading time past a minute, for the open Markdown document; live as you type.
+  Hidden for the manifest panel and on a narrow window. (mdzip-studio#16)
+- **Title from the file name** — opening an empty `.md` with a real, chosen name
+  (e.g. `weekly-report.md` created in the file manager) seeds a `# Weekly Report`
+  heading so you don't start on a blank page. Studio's own default names and
+  repo meta files (`README.md`, `index.md`, …) stay blank; the seeded heading
+  counts as an unsaved change until you save. (mdzip-studio#18)
+
+### Changed
+
+- **New Document no longer prompts for a name.** `File > New` (and the
+  welcome-screen buttons) create an untitled document immediately; the name and
+  location are chosen at the first Save, via the existing Save As dialog — the
+  way most editors handle "Untitled". (mdzip-studio#15)
+
+### Fixed
+
+- **Closing a window or quitting no longer discards unsaved work silently.**
+  Clicking a window's close button, or quitting the app, now runs the same
+  Save / Don't Save / Cancel prompt as `File > Close` for each window that has
+  unsaved changes — a Cancel on any of them aborts the quit with every window
+  still open. (mdzip-studio#8)
+- The document passed by a Linux `.desktop` launcher (a `file://` URI) is now
+  resolved to a real path on open, matching the Windows/macOS association
+  behaviour.
+- Linux/macOS builds no longer crash on an OS theme change — the window icon is
+  a PNG there instead of the Windows-only `.ico` (which Electron can't load
+  outside Windows, throwing from the `nativeTheme` handler).
+
 ## [1.3.21] - 2026-07-08
 
 ### Added

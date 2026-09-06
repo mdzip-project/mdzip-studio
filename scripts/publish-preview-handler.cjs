@@ -2,6 +2,15 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
+// The preview handler is a Windows shell (COM) component built with the
+// win-x64 .NET toolchain; it has no meaning on other platforms and is only
+// bundled into the Windows build (see `win.extraResources` in package.json).
+// Skip it elsewhere so `npm run build` works on Linux/macOS.
+if (process.platform !== 'win32') {
+  console.log(`Skipping Windows preview-handler publish on ${process.platform}.`);
+  process.exit(0);
+}
+
 const root = path.resolve(__dirname, '..');
 const previewRoot = path.resolve(
   process.env.MDZIP_WIN_PREV_DIR || path.join(root, '..', 'mdzip-win-prev')

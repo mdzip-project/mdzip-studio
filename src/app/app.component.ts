@@ -11,11 +11,14 @@ import { TreeModule } from 'primeng/tree';
 import { TreeNode } from 'primeng/api';
 import { MdzArchiveCore, MdzManifest, MdzPackagerCore } from '@mdzip/core-js';
 import {
+  computeDocumentStats,
+  MDZIP_DEFAULT_READING_WORDS_PER_MINUTE,
   MdzipColorScheme,
   MdzipControlPolicy,
   MdzipConversionAction,
   MdzipConversionContext,
   MdzipDocumentChangeEvent,
+  MdzipDocumentStats,
   MdzipEditorSnapshot,
   MdzipEntryRenderContext,
   MdzipMarkdownRenderContext,
@@ -314,6 +317,8 @@ interface ElectronBridge {
   takePendingOpenDocument?: () => Promise<ElectronDocumentOpenResult>;
   onOpenDocumentRequested?: (callback: () => void) => () => void;
   onDocumentChangedExternally?: (callback: (data: { filePath: string }) => void) => () => void;
+  onWindowCloseRequested?: (callback: (requestId: number) => void) => () => void;
+  respondWindowClose?: (requestId: number, allow: boolean) => void;
   saveDocument?: (payload: {
     filePath?: string;
     defaultDirectory?: string;
@@ -586,6 +591,7 @@ interface ArchiveTreeData {
                 (changed)="onWorkspaceChanged($event)"
                 (manifestChanged)="onWorkspaceManifestChanged($event)"
                 (dirtyChanged)="onWorkspaceDirtyChanged($event)"
+                (snapshotChanged)="onWorkspaceSnapshotChanged($event)"
                 (saved)="onWorkspaceSaved($event)"
                 (previewRendered)="onWorkspacePreviewRendered($event)"
                 (failed)="onWorkspaceFailed($event)"
@@ -656,25 +662,14 @@ interface ArchiveTreeData {
             <span class="statusbar-message" [class.statusbar-url]="displayStatus().kind === 'url'">{{ displayStatus().text }}</span>
           }
         </span>
-        <span class="statusbar-version">v{{ appVersion }}</span>
+        <span class="statusbar-right">
+          @if (documentStatsLabel()) {
+            <span class="statusbar-stats" [attr.title]="documentStatsTitle()">{{ documentStatsLabel() }}</span>
+          }
+          <span class="statusbar-version">v{{ appVersion }}</span>
+        </span>
       </footer>
     </main>
-
-    <p-dialog [header]="newArchiveFormat() === 'mdz' ? 'New MDZip Document' : 'New Markdown Document'" [visible]="newDialogOpen()" (visibleChange)="newDialogOpen.set($event)" [modal]="true" [style]="{ width: 'min(92vw, 440px)' }">
-      <div class="dialog-form">
-        <label>
-          Name
-          <input type="text" [(ngModel)]="newArchiveName" autofocus />
-          <small>Saves as {{ (newArchiveName.trim() || 'Untitled') }}{{ newArchiveFormat() === 'mdz' ? '.mdz' : '.md' }}</small>
-        </label>
-      </div>
-      <ng-template pTemplate="footer">
-        <p-button label="Cancel" severity="secondary" [text]="true" (onClick)="newDialogOpen.set(false)" />
-        <p-button label="Create" (onClick)="createArchiveFromDialog()">
-          <ng-template #icon><ng-icon name="lucidePlus" size="14" /></ng-template>
-        </p-button>
-      </ng-template>
-    </p-dialog>
 
     <p-dialog header="Unsaved changes" [visible]="unsavedDialogOpen()" (visibleChange)="onUnsavedDialogVisibleChange($event)" [modal]="true" [style]="{ width: 'min(92vw, 440px)' }">
       <p class="unsaved-message">You have unsaved changes to <strong>{{ currentArchive()?.name || 'this document' }}</strong>. Do you want to save them before continuing?</p>
@@ -1027,6 +1022,49 @@ export class AppComponent implements OnDestroy {
   });
   readonly latestWorkspaceBytes = signal<Uint8Array | null>(null);
   readonly latestWorkspaceSnapshot = signal<MdzipWorkspaceSnapshot | null>(null);
+
+  // Live word/character/line/reading-time stats for the open Markdown entry,
+  // shown in the status bar. Null when nothing markdown-shaped is in view
+  // (welcome screen, manifest.json panel, an image entry, …).
+  readonly documentStats = signal<MdzipDocumentStats | null>(null);
+
+  // Set when opening an empty, non-default-named file whose title we seeded from
+  // the file name (issue #18). The heading exists in the editor but not on disk,
+  // so it counts as unsaved (folded into needsSave); cleared on save/close/open.
+  readonly headingAutoInserted = signal(false);
+  readonly documentStatsLabel = computed(() => {
+    const s = this.documentStats();
+    if (!s || !this.currentArchive()) return null;
+    const n = (value: number) => value.toLocaleString();
+    const parts = [
+      `${n(s.words)} ${s.words === 1 ? 'word' : 'words'}`,
+      `${n(s.characters)} ${s.characters === 1 ? 'char' : 'chars'}`,
+      `${n(s.lines)} ${s.lines === 1 ? 'line' : 'lines'}`,
+    ];
+    if (s.readingTimeMinutes >= 1) {
+      parts.push(`${Math.round(s.readingTimeMinutes)} min read`);
+    }
+    return parts.join(' · ');
+  });
+  readonly documentStatsTitle = computed(() => {
+    const s = this.documentStats();
+    if (!s) return null;
+    const n = (value: number) => value.toLocaleString();
+    return [
+      `${n(s.words)} words`,
+      `${n(s.characters)} characters (${n(s.charactersNoSpaces)} without spaces)`,
+      `${n(s.lines)} lines`,
+      `~${Math.max(1, Math.round(s.readingTimeMinutes))} min read at ${MDZIP_DEFAULT_READING_WORDS_PER_MINUTE} wpm`,
+    ].join('\n');
+  });
+
+  private recomputeDocumentStats(snapshot: MdzipWorkspaceSnapshot | null): void {
+    this.documentStats.set(
+      snapshot && snapshot.currentPathType === 'markdown'
+        ? computeDocumentStats(snapshot.currentText)
+        : null
+    );
+  }
   readonly documentTree = computed(() =>
     this.buildTree(this.documents(), 'document')
   );
@@ -1148,7 +1186,6 @@ export class AppComponent implements OnDestroy {
   ];
 
   readonly appVersion = APP_VERSION;
-  readonly newDialogOpen = signal(false);
   // True while the editor holds unsaved edits, driven by the workspace's
   // (dirtyChanged) event. Powers the Save button's emphasis and the
   // unsaved-changes guard on close/new/open.
@@ -1157,6 +1194,10 @@ export class AppComponent implements OnDestroy {
   // the user was attempting; it runs only after they Save or choose Don't Save.
   readonly unsavedDialogOpen = signal(false);
   private pendingDiscardAction: (() => void) | null = null;
+  // Optional counterpart to pendingDiscardAction: run when the user backs out of
+  // the prompt (Cancel / Esc / a failed Save). Used by the window-close guard so
+  // the main process learns the window should stay open. No-op for close/new/open.
+  private pendingCancelAction: (() => void) | null = null;
   // In-place Save was blocked because the file changed on disk since Studio
   // last read/wrote it (another program, or the same file open in another
   // Studio window). "Overwrite Anyway" retries the save with force: true.
@@ -1204,9 +1245,10 @@ export class AppComponent implements OnDestroy {
     if (p.phase === 'packing') return `compressing • ${eta || 'estimating…'}`;
     return `${p.done}/${p.total} files${eta ? ` • ${eta}` : ''}`;
   });
-  newArchiveName = 'Untitled';
+  // New documents are created immediately with a default name (issue #15) —
+  // naming/location is deferred to the first Save. Mode stays 'document';
+  // nothing in the New flow selects project mode (Pack Folder does that).
   newArchiveMode: 'document' | 'project' = 'document';
-  readonly newArchiveFormat = signal<'markdown' | 'mdz'>('markdown');
   readonly aboutOpen = signal(false);
   readonly aboutTab = signal<'about' | 'libraries' | 'license' | 'debug'>('about');
   // Active tab of the manifest.json entry view (Settings form vs read-only JSON).
@@ -1301,6 +1343,7 @@ export class AppComponent implements OnDestroy {
   private pendingMarkdownImageDestination: 'same' | 'subfolder' | 'mdz' | null = null;
   private removeOpenDocumentRequestedListener: (() => void) | null = null;
   private removeDocumentChangedExternallyListener: (() => void) | null = null;
+  private removeWindowCloseRequestedListener: (() => void) | null = null;
   private pendingElectronOpen: Promise<boolean> | null = null;
   private electronOpenRequestedWhilePending = false;
 
@@ -1448,6 +1491,15 @@ export class AppComponent implements OnDestroy {
         }
       })
     ) ?? null;
+    this.removeWindowCloseRequestedListener = window.mdzipStudio?.onWindowCloseRequested?.(
+      (requestId) => this.ngZone.run(() => {
+        const respond = window.mdzipStudio?.respondWindowClose;
+        this.confirmDiscardIfUnsaved(
+          () => respond?.(requestId, true),
+          () => respond?.(requestId, false),
+        );
+      })
+    ) ?? null;
     if (window.mdzipStudio?.takePendingOpenDocument) {
       // Electron may have launched us with a file (double-click / "Open with").
       // Open it if one is pending; otherwise leave the workspace empty so the
@@ -1490,6 +1542,7 @@ export class AppComponent implements OnDestroy {
     this.osColorSchemeQuery?.removeEventListener('change', this.handleOsColorSchemeChange);
     this.removeOpenDocumentRequestedListener?.();
     this.removeDocumentChangedExternallyListener?.();
+    this.removeWindowCloseRequestedListener?.();
     if (this.workspaceLoadTimeoutId !== null) clearTimeout(this.workspaceLoadTimeoutId);
     if (this.printCaptureTimer !== null) clearTimeout(this.printCaptureTimer);
   }
@@ -1628,18 +1681,47 @@ export class AppComponent implements OnDestroy {
 
   newArchive(format: 'markdown' | 'mdz' = 'markdown'): void {
     this.confirmDiscardIfUnsaved(() => {
-      this.newArchiveFormat.set(format);
-      this.newArchiveName = this.defaultArchiveName(format);
-      this.newDialogOpen.set(true);
+      void this.createNewDocument(format);
     });
   }
 
-  // Default name for the New dialog, by output format (and .mdz mode). A plain
+  // Default name for a new document, by output format (and .mdz mode). A plain
   // .md is a single document; an .mdz is a bundle/archive — and, in future,
   // project mode would seed "My Project".
   private defaultArchiveName(format: 'markdown' | 'mdz', mode: 'document' | 'project' = this.newArchiveMode): string {
     if (format === 'mdz') return mode === 'project' ? 'My Project' : 'My Document';
     return 'Untitled';
+  }
+
+  // Turn a file stem into a friendly title: `my-trip-notes` → `My Trip Notes`.
+  // Splits on -/_/space, capitalises the first letter of each word, and leaves
+  // the rest of each word alone (so `my-API-client` → `My API Client`).
+  private titleFromFileName(stem: string): string {
+    return stem
+      .replace(/[-_]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .split(' ')
+      .map((word) => (word ? word[0].toUpperCase() + word.slice(1) : word))
+      .join(' ');
+  }
+
+  // Names for which a blank file should stay blank on open (issue #18): Studio's
+  // own New-document defaults, plus the common repo meta files nobody wants a
+  // `# Readme` heading on.
+  private static readonly HEADING_SKIP_STEMS = new Set([
+    'untitled', 'my document', 'my project',
+    'readme', 'agents', 'changelog', 'license', 'licence', 'contributing', 'index',
+  ]);
+
+  // When opening a file that has a real, user-chosen name but no content yet,
+  // seed a top-level heading from the file name so the user isn't staring at a
+  // blank page (issue #18). Skips Studio's default names and repo meta files.
+  private headingForEmptyFile(stem: string, content: string): string | null {
+    if (content.trim() !== '') return null;
+    if (AppComponent.HEADING_SKIP_STEMS.has(stem.trim().toLowerCase())) return null;
+    const title = this.titleFromFileName(stem);
+    return title ? `# ${title}\n` : null;
   }
 
   // Whether the open document exists on disk (so it can be revealed / saved in place).
@@ -1652,7 +1734,9 @@ export class AppComponent implements OnDestroy {
   // Save button keys off this instead of dirty alone. (In the browser shell
   // there is no on-disk path, so we fall back to dirty.)
   readonly needsSave = computed(() =>
-    this.isDirty() || (this.isDesktopShell() && !!this.currentArchive() && !this.hasFileOnDisk())
+    this.isDirty()
+    || this.headingAutoInserted()
+    || (this.isDesktopShell() && !!this.currentArchive() && !this.hasFileOnDisk())
   );
 
   async showInFileManager(): Promise<void> {
@@ -1683,6 +1767,8 @@ export class AppComponent implements OnDestroy {
     this.saveValidationState.set('unchecked');
     this.latestWorkspaceBytes.set(null);
     this.latestWorkspaceSnapshot.set(null);
+    this.documentStats.set(null);
+    this.headingAutoInserted.set(false);
     // The editor is torn down with the document, so it won't emit dirtyChanged;
     // clear the flag here.
     this.isDirty.set(false);
@@ -1698,7 +1784,7 @@ export class AppComponent implements OnDestroy {
   // Unsaved-changes guard. Runs `proceed` immediately when there are no unsaved
   // edits; otherwise stashes it and opens the confirmation dialog, which runs it
   // after the user saves or explicitly discards.
-  private confirmDiscardIfUnsaved(proceed: () => void): void {
+  private confirmDiscardIfUnsaved(proceed: () => void, onCancel?: () => void): void {
     // needsSave (not just isDirty) so a converted/packed/new document that has
     // never been written to disk also prompts — those aren't "dirty" but would
     // be lost on close/new/open.
@@ -1707,12 +1793,21 @@ export class AppComponent implements OnDestroy {
       return;
     }
     this.pendingDiscardAction = proceed;
+    this.pendingCancelAction = onCancel ?? null;
     this.unsavedDialogOpen.set(true);
   }
 
   private runPendingDiscard(): void {
     const action = this.pendingDiscardAction;
     this.pendingDiscardAction = null;
+    this.pendingCancelAction = null;
+    action?.();
+  }
+
+  private runPendingCancel(): void {
+    const action = this.pendingCancelAction;
+    this.pendingDiscardAction = null;
+    this.pendingCancelAction = null;
     action?.();
   }
 
@@ -1721,12 +1816,12 @@ export class AppComponent implements OnDestroy {
     // Read-only files can't save in place, so Save here means Save As.
     await this.saveArchive(this.readOnly());
     // A successful save clears needsSave (path recorded + dirty cleared). If it
-    // still needs saving, the save was canceled or blocked, so stay put and drop
-    // the pending action rather than discarding the user's work.
+    // still needs saving, the save was canceled or blocked, so stay put and treat
+    // it as a cancel rather than discarding the user's work.
     if (!this.needsSave()) {
       this.runPendingDiscard();
     } else {
-      this.pendingDiscardAction = null;
+      this.runPendingCancel();
     }
   }
 
@@ -1737,7 +1832,7 @@ export class AppComponent implements OnDestroy {
 
   cancelUnsavedDialog(): void {
     this.unsavedDialogOpen.set(false);
-    this.pendingDiscardAction = null;
+    this.runPendingCancel();
   }
 
   // Dismissing via the X or Esc is a cancel — never an implicit discard.
@@ -2245,10 +2340,16 @@ export class AppComponent implements OnDestroy {
     return files;
   }
 
-  async createArchiveFromDialog(): Promise<void> {
-    const name = this.newArchiveName.trim() || 'Untitled';
-    const format = this.newArchiveFormat();
-    this.archiveService.createNewArchive(name, this.newArchiveMode);
+  // Create a fresh in-memory document and open it. No name prompt — the
+  // document is untitled/path-less until the first Save routes through the
+  // Save As dialog (issue #15). Callers are responsible for the
+  // unsaved-changes guard (see newArchive()).
+  async createNewDocument(
+    format: 'markdown' | 'mdz' = 'markdown',
+    name: string = this.defaultArchiveName(format),
+    mode: 'document' | 'project' = 'document',
+  ): Promise<void> {
+    this.archiveService.createNewArchive(name, mode);
     this.archiveService.addDocument({
       id: crypto.randomUUID(),
       name: 'index.md',
@@ -2260,6 +2361,8 @@ export class AppComponent implements OnDestroy {
     this.saveValidationState.set('unchecked');
     this.latestWorkspaceBytes.set(null);
     this.latestWorkspaceSnapshot.set(null);
+    this.documentStats.set(null);
+    this.headingAutoInserted.set(false);
 
     // A markdown document is plain text the editor accepts empty. An .mdz is a
     // zip container, so it needs valid archive bytes — feeding empty bytes makes
@@ -2277,7 +2380,6 @@ export class AppComponent implements OnDestroy {
     this.clearMdAssetCaches();
     this.readOnly.set(false);
     this.statusMessage.set(`Created ${name}`);
-    this.newDialogOpen.set(false);
   }
 
   async openArchive(event: Event): Promise<void> {
@@ -2466,6 +2568,8 @@ export class AppComponent implements OnDestroy {
     // isLoading is set (and a paint yielded) by the caller before reading bytes.
     this.latestWorkspaceBytes.set(null);
     this.latestWorkspaceSnapshot.set(null);
+    this.documentStats.set(null);
+    this.headingAutoInserted.set(false);
     // Clear any dirty state carried over from a previously open document; the
     // freshly loaded one is clean until the editor reports otherwise.
     this.isDirty.set(false);
@@ -2491,8 +2595,17 @@ export class AppComponent implements OnDestroy {
         const fallbackName = name.replace(/\.mdz$/i, '');
         if (archive.name && archive.name !== fallbackName) recentTitle = archive.name;
       } else if (lowerName.endsWith('.md')) {
-        const content = new TextDecoder().decode(bytes);
+        const rawContent = new TextDecoder().decode(bytes);
         const archiveName = name.replace(/\.md$/i, '');
+        // Empty file with a real name → seed a heading from the file name so the
+        // user doesn't open onto a blank page (issue #18). The heading is not on
+        // disk yet, so headingAutoInserted marks the document as needing a save.
+        const seededHeading = this.headingForEmptyFile(archiveName, rawContent);
+        const content = seededHeading ?? rawContent;
+        if (seededHeading) {
+          bytes = new TextEncoder().encode(content);
+          this.headingAutoInserted.set(true);
+        }
         // Remember the disk path so the preview can resolve relative images.
         this.currentMarkdownPath = filePath ?? null;
         this.archiveService.createNewArchive(archiveName, 'document');
@@ -2567,8 +2680,9 @@ export class AppComponent implements OnDestroy {
       return;
     }
     // A successful save just re-synced this file with disk, resolving any
-    // pending external-change notice.
+    // pending external-change notice and the auto-heading "unsaved" marker.
     this.externalChangeBannerVisible.set(false);
+    this.headingAutoInserted.set(false);
     // Keep relative-image resolution pointed at the saved location (e.g. Save As).
     if (filePath && this.sourceFormat() === 'markdown') {
       this.currentMarkdownPath = filePath;
@@ -2712,6 +2826,7 @@ export class AppComponent implements OnDestroy {
       this.downloadBlob(this.bytesToBlob(bytes, 'text/markdown'), defaultName, 'text/markdown');
       this.workspaceEditor?.markPersisted();
       this.isDirty.set(false);
+      this.headingAutoInserted.set(false);
       this.statusMessage.set(`Saved ${archive.name}.md`);
       return;
     }
@@ -2761,6 +2876,7 @@ export class AppComponent implements OnDestroy {
     this.downloadBlob(this.bytesToBlob(bytes, 'application/vnd.mdzip'), defaultName, 'application/vnd.mdzip');
     this.workspaceEditor?.markPersisted();
     this.isDirty.set(false);
+    this.headingAutoInserted.set(false);
     this.statusMessage.set(validation.valid ? `Saved ${archive.name}.mdz` : `Saved ${archive.name}.mdz with technical issues`);
   }
 
@@ -3796,6 +3912,7 @@ export class AppComponent implements OnDestroy {
     this.scheduleStudioHtmlTagHighlight();
     this.latestWorkspaceBytes.set(event.bytes);
     this.latestWorkspaceSnapshot.set(event.snapshot);
+    this.recomputeDocumentStats(event.snapshot);
     // Structural change: other documents' texts may have changed, so their
     // cached image-reference sets are stale.
     this.orphanRefsByPath.clear();
@@ -3819,6 +3936,12 @@ export class AppComponent implements OnDestroy {
 
   onWorkspacePreviewRendered(snapshot: MdzipWorkspaceSnapshot): void {
     void this.correctWorkspaceOrphansForHtmlImages(snapshot);
+  }
+
+  // Fires on every text change (including plain typing, which (changed) does
+  // not) — the live feed for the status-bar document stats.
+  onWorkspaceSnapshotChanged(snapshot: MdzipWorkspaceSnapshot): void {
+    this.recomputeDocumentStats(snapshot);
   }
 
   // Status-bar label for the open document. For Markdown it's "<file>.md"; for
