@@ -220,6 +220,62 @@ describe('AppComponent', () => {
     expect(component.headingAutoInserted()).toBe(false);
   });
 
+  // ── Auto heading from file name for .mdz (issue #19) ─────────────────────
+
+  const buildMdz = async (entryText: string, title = 'Draft', mode: 'document' | 'project' = 'document') => {
+    const built = await MdzPackagerCore.buildArchive(
+      [{ path: 'index.md', text: entryText }],
+      title,
+      { createIndex: false, mapFiles: false, filters: ['**/*'], title, mode, entryPoint: 'index.md' },
+    );
+    return new Uint8Array(await built.blob.arrayBuffer());
+  };
+
+  const openMdzEntryText = async () =>
+    (await MdzArchiveCore.open(component.workspaceBytes() ?? new Uint8Array())).readText('index.md');
+
+  it('seeds a heading from the file name when a .mdz entry-point document is empty', async () => {
+    const app = component as unknown as {
+      openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly?: boolean, recordRecent?: boolean): Promise<void>;
+    };
+    await app.openDocumentBytes(await buildMdz(''), 'quarterly-plan.mdz', 'C:/docs/quarterly-plan.mdz', false, false);
+
+    expect(await openMdzEntryText()).toBe('# Quarterly Plan\n');
+    expect(component.headingAutoInserted()).toBe(true);
+    expect(component.needsSave()).toBe(true);
+  });
+
+  it('leaves an empty .mdz entry-point blank for default and repo-meta names', async () => {
+    const app = component as unknown as {
+      openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly?: boolean, recordRecent?: boolean): Promise<void>;
+    };
+    for (const fileName of ['My Document.mdz', 'CHANGELOG.mdz']) {
+      await app.openDocumentBytes(await buildMdz(''), fileName, `C:/docs/${fileName}`, false, false);
+      expect(await openMdzEntryText()).toBe('');
+      expect(component.headingAutoInserted()).toBe(false);
+    }
+  });
+
+  it('does not seed a heading when the .mdz entry-point already has content', async () => {
+    const app = component as unknown as {
+      openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly?: boolean, recordRecent?: boolean): Promise<void>;
+    };
+    await app.openDocumentBytes(await buildMdz('# Existing\n'), 'quarterly-plan.mdz', 'C:/docs/quarterly-plan.mdz', false, false);
+
+    expect(await openMdzEntryText()).toBe('# Existing\n');
+    expect(component.headingAutoInserted()).toBe(false);
+  });
+
+  it('does not seed a heading into a project-mode .mdz', async () => {
+    const app = component as unknown as {
+      openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly?: boolean, recordRecent?: boolean): Promise<void>;
+    };
+    await app.openDocumentBytes(await buildMdz('', 'Handbook', 'project'), 'team-handbook.mdz', 'C:/docs/team-handbook.mdz', false, false);
+
+    expect(await openMdzEntryText()).toBe('');
+    expect(component.headingAutoInserted()).toBe(false);
+  });
+
   it('persists embedded manifest edits through the entry render context', async () => {
     const updateManifest = vi.fn().mockResolvedValue(undefined);
     const manifest = MdzPackagerCore.updateManifest(null, {

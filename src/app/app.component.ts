@@ -1724,6 +1724,33 @@ export class AppComponent implements OnDestroy {
     return title ? `# ${title}\n` : null;
   }
 
+  // The .mdz counterpart of #18 (issue #19): opening a document-mode archive
+  // whose entry-point document is still empty seeds a heading from the archive's
+  // file name. Unlike the .md path this has to rewrite the entry inside the zip,
+  // so it returns fresh archive bytes — or null to leave the archive untouched.
+  private async seedHeadingIntoEmptyMdz(
+    bytes: Uint8Array,
+    name: string,
+    archive: MDZipArchive,
+  ): Promise<Uint8Array | null> {
+    if (archive.mode !== 'document') return null;
+    const entryPoint = archive.manifest.entryPoint;
+    if (!entryPoint) return null;
+    const mdz = await MdzArchiveCore.open(bytes);
+    if (!mdz.hasEntry(entryPoint)) return null;
+    const seededHeading = this.headingForEmptyFile(
+      name.replace(/\.mdz$/i, ''),
+      await mdz.readText(entryPoint),
+    );
+    if (!seededHeading) return null;
+    const result = await MdzArchiveCore.updateFiles(
+      bytes,
+      [{ path: entryPoint, content: seededHeading }],
+      [],
+    );
+    return new Uint8Array(await result.blob.arrayBuffer());
+  }
+
   // Whether the open document exists on disk (so it can be revealed / saved in place).
   readonly hasFileOnDisk = computed(() => !!this.currentArchive()?.path);
 
@@ -2587,6 +2614,14 @@ export class AppComponent implements OnDestroy {
       const lowerName = name.toLowerCase();
       if (lowerName.endsWith('.mdz')) {
         const archive = await this.parseMdzBytes(bytes, name, filePath);
+        // Empty entry-point document + real file name → seed a heading from the
+        // file name (issue #19), mirroring the .md path below. The seeded
+        // heading isn't on disk, so headingAutoInserted marks it unsaved.
+        const seededBytes = await this.seedHeadingIntoEmptyMdz(bytes, name, archive);
+        if (seededBytes) {
+          bytes = seededBytes;
+          this.headingAutoInserted.set(true);
+        }
         this.archiveService.loadArchive(archive);
         this.sourceFormat.set('mdz');
         this.workspaceBytes.set(bytes);

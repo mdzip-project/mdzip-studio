@@ -28,7 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (e.g. `weekly-report.md` created in the file manager) seeds a `# Weekly Report`
   heading so you don't start on a blank page. Studio's own default names and
   repo meta files (`README.md`, `index.md`, …) stay blank; the seeded heading
-  counts as an unsaved change until you save. (mdzip-studio#18)
+  counts as an unsaved change until you save. (mdzip-studio#18) The same applies
+  when a document-mode `.mdz` archive's entry-point document is still empty —
+  the heading is seeded from the archive's file name. (mdzip-studio#19)
 
 ### Changed
 
