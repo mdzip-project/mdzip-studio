@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.22] - 2026-09-09
+
 ### Added
 
 - **Linux packaging** — `electron-builder` now produces a `.deb` package and an
@@ -305,7 +307,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.21...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.22...HEAD
+[1.3.22]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.21...v1.3.22
 [1.3.21]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.20...v1.3.21
 [1.3.20]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.19...v1.3.20
 [1.3.19]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.18...v1.3.19
