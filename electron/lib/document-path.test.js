@@ -23,6 +23,11 @@ describe('documentPathFromArgs', () => {
       .toBe('/home/kyle/My Notes.mdz');
   });
 
+  it('converts a Windows drive-letter file:// URI to a backslash path', () => {
+    expect(documentPathFromArgs(['mdzip-studio', 'file:///C:/Users/kyle/My%20Notes.mdz']))
+      .toBe('C:\\Users\\kyle\\My Notes.mdz');
+  });
+
   it('returns null when no candidate is present', () => {
     expect(documentPathFromArgs(['electron.exe', '--dev'])).toBeNull();
   });
