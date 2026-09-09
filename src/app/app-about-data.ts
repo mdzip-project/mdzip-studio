@@ -12,19 +12,19 @@ export const APP_LICENSE_NAME = "Apache-2.0";
 export const FIRST_PARTY_LIBRARIES: LibraryInfo[] = [
   {
     "name": "@mdzip/core-js",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "license": "Apache-2.0",
     "homepage": "https://www.npmjs.com/package/@mdzip/core-js"
   },
   {
     "name": "@mdzip/editor",
-    "version": "1.3.21",
+    "version": "1.4.0",
     "license": "Apache-2.0",
     "homepage": "https://mdzip.org"
   },
   {
     "name": "@mdzip/editor-ng",
-    "version": "1.3.21",
+    "version": "1.4.0",
     "license": "Apache-2.0",
     "homepage": "https://mdzip.org"
   }

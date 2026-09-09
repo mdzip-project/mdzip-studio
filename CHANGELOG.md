@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `application/vnd.mdzip`, per the spec) so double-clicking an archive opens
   Studio; the Windows-only shell preview handler is excluded from non-Windows
   builds. (mdzip-studio#9)
+- **CI release pipeline** — pushing a `v*` tag now builds Windows **and** Linux
+  in GitHub Actions and uploads every artifact (`.exe`/`.deb`/`.AppImage` plus
+  the `latest*.yml` update feeds and blockmap) to a draft GitHub release for
+  review before publishing. See `RELEASE_CHECKLIST.md`. (mdzip-studio#9)
 - **Background update check** — Studio now checks for a newer release shortly
   after launch and every few hours after that. Nothing downloads or installs on
   its own; when an update is found the Help menu gets a "•" and its
@@ -38,6 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   welcome-screen buttons) create an untitled document immediately; the name and
   location are chosen at the first Save, via the existing Save As dialog — the
   way most editors handle "Untitled". (mdzip-studio#15)
+- The `@mdzip/core-js`, `@mdzip/editor`, and `@mdzip/editor-ng` dependencies are
+  now the published npm releases (`^1.5.0` / `^1.4.0`) instead of local `.tgz`
+  paths, so the project builds from a clean checkout. The About dialog now
+  reports the versions actually shipped.
+- Releasing no longer auto-increments the patch version on every `npm run build`.
+  The version changes only via `npm version <patch|minor|major>`, which also
+  tags the release; `prebuild` just syncs `src/app/app-version.ts` to whatever
+  is in `package.json`.
 
 ### Fixed
 
@@ -52,6 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Linux/macOS builds no longer crash on an OS theme change — the window icon is
   a PNG there instead of the Windows-only `.ico` (which Electron can't load
   outside Windows, throwing from the `nativeTheme` handler).
+- Removed an invalid `linux.syncDesktopName` key from the `electron-builder`
+  config that made `electron-builder` reject the whole configuration on any
+  Linux build (the option was dropped in electron-builder 25; desktop-file
+  naming is handled automatically now).
 
 ## [1.3.21] - 2026-07-08
 

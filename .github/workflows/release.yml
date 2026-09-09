@@ -1,0 +1,97 @@
+name: Release
+
+# Cut a release by bumping the version and pushing the tag:
+#
+#   npm version patch          # 1.3.21 -> 1.3.22, commits + creates v1.3.22
+#   git push --follow-tags
+#
+# This workflow then builds Windows + Linux and uploads the artifacts to a
+# DRAFT GitHub release named after the tag. Review the draft (assets + notes),
+# then publish it — electron-updater only sees published releases, so nothing
+# reaches users until you click Publish.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: '22'
+  DOTNET_VERSION: '10.0.x'
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches package.json version
+        shell: bash
+        run: |
+          pkg="v$(node -p "require('./package.json').version")"
+          if [ "$pkg" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json ($pkg). Run 'npm version' before tagging."
+            exit 1
+          fi
+
+      # The Windows shell preview handler (bundled into win.extraResources) is
+      # built from the sibling repo via `dotnet publish`; publish-preview-handler.cjs
+      # honours MDZIP_WIN_PREV_DIR.
+      - name: Check out mdzip-win-prev
+        uses: actions/checkout@v4
+        with:
+          repository: mdzip-project/mdzip-win-prev
+          ref: main
+          path: mdzip-win-prev
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build + publish (draft)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MDZIP_WIN_PREV_DIR: ${{ github.workspace }}/mdzip-win-prev
+          # Windows code signing (unset today -> unsigned installer). To sign,
+          # add CSC_LINK (base64 .pfx) + CSC_KEY_PASSWORD as repo secrets.
+          # CSC_LINK: ${{ secrets.CSC_LINK }}
+          # CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          npm run prebuild
+          npm run build:angular
+          npm run build:electron -- --win --publish always
+
+  linux:
+    runs-on: ubuntu-latest
+    needs: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install .deb packaging tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fakeroot
+
+      - run: npm ci
+
+      - name: Build + publish (draft)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm run prebuild
+          npm run build:angular
+          npm run build:electron -- --linux --publish always
