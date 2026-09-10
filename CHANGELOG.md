@@ -7,17 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.3.23] - 2026-09-09
+## [1.4.0] - 2026-09-10
 
-### Fixed
-
-- **Linux: first launch could open no window.** The window is created hidden and
-  shown on `ready-to-show`, which on Linux (X11/XWayland, software GPU) can fail
-  to fire for the first window — the app was running but invisible, so the first
-  launch looked like nothing happened and a second launch was needed. It now
-  also reveals on `did-finish-load` with a timeout backstop.
-
-## [1.3.22] - 2026-09-09
+The first published release since 1.3.21. Rolls up the Linux packaging and
+release-pipeline work that was tagged as 1.3.22 and 1.3.23 but never published.
 
 ### Added
 
@@ -65,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Linux: first launch could open no window.** The window is created hidden and
+  shown on `ready-to-show`, which on Linux (X11/XWayland, software GPU) can fail
+  to fire for the first window — the app was running but invisible, so the first
+  launch looked like nothing happened and a second launch was needed. It now
+  also reveals on `did-finish-load` with a timeout backstop.
 - **Closing a window or quitting no longer discards unsaved work silently.**
   Clicking a window's close button, or quitting the app, now runs the same
   Save / Don't Save / Cancel prompt as `File > Close` for each window that has
@@ -317,9 +315,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.23...HEAD
-[1.3.23]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.22...v1.3.23
-[1.3.22]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.21...v1.3.22
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.21...v1.4.0
 [1.3.21]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.20...v1.3.21
 [1.3.20]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.19...v1.3.20
 [1.3.19]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.18...v1.3.19
