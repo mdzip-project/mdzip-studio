@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.23] - 2026-09-09
+
+### Fixed
+
+- **Linux: first launch could open no window.** The window is created hidden and
+  shown on `ready-to-show`, which on Linux (X11/XWayland, software GPU) can fail
+  to fire for the first window — the app was running but invisible, so the first
+  launch looked like nothing happened and a second launch was needed. It now
+  also reveals on `did-finish-load` with a timeout backstop.
+
 ## [1.3.22] - 2026-09-09
 
 ### Added
@@ -307,7 +317,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.22...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.23...HEAD
+[1.3.23]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.22...v1.3.23
 [1.3.22]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.21...v1.3.22
 [1.3.21]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.20...v1.3.21
 [1.3.20]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.19...v1.3.20

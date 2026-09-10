@@ -592,13 +592,24 @@ function createWindow({ pendingOpenPath = null } = {}) {
     : `file://${path.join(__dirname, '../dist/mdzip-studio/index.html')}`;
 
   win.loadURL(startUrl);
-  win.once('ready-to-show', () => {
-    if (win.isDestroyed()) return;
+
+  // Reveal the window once it's painted (no white flash). `ready-to-show` is the
+  // clean signal, but on Linux (X11/XWayland, software GPU) it is unreliable and
+  // can simply never fire for the first window — which would leave the app
+  // running but invisible, so the first launch looks like nothing happened.
+  // `did-finish-load` always fires, and a timeout is the last resort; all three
+  // funnel through one idempotent reveal.
+  const revealWindow = () => {
+    if (win.isDestroyed() || win.isVisible()) return;
     win.show();
     if (windowState(win)?.pendingOpenPath) {
       win.webContents.send('mdzip:open-document-requested');
     }
-  });
+  };
+  win.once('ready-to-show', revealWindow);
+  win.webContents.once('did-finish-load', revealWindow);
+  const revealFallbackTimer = setTimeout(revealWindow, 4000);
+  win.once('show', () => clearTimeout(revealFallbackTimer));
 
   win.on('focus', () => {
     lastFocusedWindow = win;
