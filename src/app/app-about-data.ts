@@ -86,8 +86,38 @@ export const OPEN_SOURCE_LIBRARIES: LibraryInfo[] = [
     "homepage": "https://github.com/angular/angular/tree/main/packages/router"
   },
   {
+    "name": "@codemirror/commands",
+    "version": "6.11.1",
+    "license": "MIT",
+    "homepage": "https://www.npmjs.com/package/@codemirror/commands"
+  },
+  {
+    "name": "@codemirror/lang-markdown",
+    "version": "6.5.2",
+    "license": "MIT",
+    "homepage": "https://www.npmjs.com/package/@codemirror/lang-markdown"
+  },
+  {
+    "name": "@codemirror/language",
+    "version": "6.12.4",
+    "license": "MIT",
+    "homepage": "https://www.npmjs.com/package/@codemirror/language"
+  },
+  {
+    "name": "@codemirror/merge",
+    "version": "6.12.2",
+    "license": "MIT",
+    "homepage": "https://www.npmjs.com/package/@codemirror/merge"
+  },
+  {
+    "name": "@codemirror/search",
+    "version": "6.7.2",
+    "license": "MIT",
+    "homepage": "https://www.npmjs.com/package/@codemirror/search"
+  },
+  {
     "name": "@codemirror/state",
-    "version": "6.6.0",
+    "version": "6.7.5",
     "license": "MIT",
     "homepage": "https://www.npmjs.com/package/@codemirror/state"
   },
@@ -96,6 +126,12 @@ export const OPEN_SOURCE_LIBRARIES: LibraryInfo[] = [
     "version": "6.43.0",
     "license": "MIT",
     "homepage": "https://www.npmjs.com/package/@codemirror/view"
+  },
+  {
+    "name": "@lezer/highlight",
+    "version": "1.2.3",
+    "license": "MIT",
+    "homepage": "https://www.npmjs.com/package/@lezer/highlight"
   },
   {
     "name": "@ng-icons/core",
@@ -132,6 +168,30 @@ export const OPEN_SOURCE_LIBRARIES: LibraryInfo[] = [
     "version": "6.8.9",
     "license": "MIT",
     "homepage": "https://github.com/electron-userland/electron-builder"
+  },
+  {
+    "name": "highlight.js",
+    "version": "11.12.0",
+    "license": "BSD-3-Clause",
+    "homepage": "https://highlightjs.org/"
+  },
+  {
+    "name": "js-yaml",
+    "version": "4.3.2",
+    "license": "MIT",
+    "homepage": "https://www.npmjs.com/package/js-yaml"
+  },
+  {
+    "name": "lucide",
+    "version": "1.47.0",
+    "license": "ISC",
+    "homepage": "https://lucide.dev"
+  },
+  {
+    "name": "marked",
+    "version": "15.0.12",
+    "license": "MIT",
+    "homepage": "https://marked.js.org"
   },
   {
     "name": "mermaid",

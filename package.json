@@ -24,7 +24,17 @@
     "lint": "ng lint"
   },
   "dependencies": {
-    "electron-updater": "^6.3.9"
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/merge": "^6.12.2",
+    "@codemirror/search": "^6.7.2",
+    "@lezer/highlight": "^1.2.3",
+    "electron-updater": "^6.3.9",
+    "highlight.js": "^11.12.0",
+    "js-yaml": "^4.3.2",
+    "lucide": "^1.47.0",
+    "marked": "^15.0.12"
   },
   "build": {
     "appId": "org.mdzip.studio",

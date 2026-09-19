@@ -1,4 +1,4 @@
 Status: idle
-Last: Released v1.3.21 - find/replace search (editor 1.3.15), print with preview, manifest tabs
+Last: Released v1.4.0 - Linux .deb/AppImage packaging, background update check, status-bar doc stats, title-from-filename seeding; winget MDZip.Studio submission open at microsoft/winget-pkgs#432951
 
 <!-- Status: idle | in-progress | awaiting-test | ready-to-commit | blocked -->
