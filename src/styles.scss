@@ -7,6 +7,14 @@
 html,
 body {
   height: 100%;
+  // .app-shell is a fixed 100vh with overflow:hidden all the way down its own
+  // layout tree, so the document itself should never need to scroll. Without
+  // this, any transient internal content overflow (even by a sub-pixel, even
+  // for a single frame — a chunk re-render, a CodeMirror remeasure) makes the
+  // browser show a native document scrollbar, narrowing the whole app for
+  // that instant: a real, visible flash distinct from (and unfixed by) the
+  // internal .preview-pane/.cm-scroller scroll-jump work in mdzip-editor.
+  overflow: hidden;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
     Ubuntu, Cantarell, sans-serif;
 }

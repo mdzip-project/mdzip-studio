@@ -1,6 +1,10 @@
 :host {
   display: block;
   min-height: 100vh;
+  // Belt-and-suspenders alongside styles.scss's html/body overflow:hidden —
+  // .app-shell below is a fixed 100vh with overflow:hidden all the way down,
+  // so :host itself should never need to grow past the viewport either.
+  overflow: hidden;
 }
 
 .app-shell {

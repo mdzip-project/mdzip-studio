@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every keystroke causing a brief visible flash** (toolbar
+  disappearing/reappearing, scrollbar jumping to the title bar) while
+  editing. Studio's global `html`/`body` had `height: 100%` but no
+  `overflow: hidden`; since every layout ancestor down to `.app-shell` is
+  already a fixed `100vh` with `overflow: hidden`, the document itself
+  should never need to scroll — but without that constraint, any transient
+  internal content overflow (even for a single frame) made the browser
+  show a native document scrollbar, narrowing and reflowing the entire app
+  for that instant. Added `overflow: hidden` to `html`/`body` and to the
+  app's `:host`.
+
 ## [1.4.0] - 2026-09-10
 
 The first published release since 1.3.21. Rolls up the Linux packaging and
