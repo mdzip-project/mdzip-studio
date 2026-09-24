@@ -1,5 +1,5 @@
 Status: awaiting-test
-Last: Open Recent entries show the folder; added Copy File Path / Copy Folder Path (File menu, native menu) and a path tooltip on the title; earlier: Fixed #22 (Shift+Right-Click spell-check) and #23 (Open Document/Recent replacing the current window)
+Last: Linked .md images use the editor's Markdown/HTML dialog (#24; on published @mdzip/editor / editor-ng 1.4.6); earlier: Open Recent entries show the folder; added Copy File Path / Copy Folder Path (File menu, native menu) and a path tooltip on the title; earlier: Fixed #22 (Shift+Right-Click spell-check) and #23 (Open Document/Recent replacing the current window)
 
 ## Spell-check context menu (#22) and Open Document/Recent in a new window (#23)
 

@@ -712,6 +712,61 @@ describe('AppComponent', () => {
     component.cancelImageDestination();
   });
 
+  describe('linked Markdown images use the editor insert dialog', () => {
+    type LinkedImageApp = {
+      writeLinkedMarkdownImage(file: File, relativeDirectory: string): Promise<void>;
+    };
+
+    function setup(decision: unknown) {
+      const promptImageInsert = vi.fn().mockResolvedValue(decision);
+      const formatImageInsert = vi.fn().mockReturnValue('<FORMATTED>');
+      const insertMarkdown = vi.fn().mockResolvedValue(true);
+      const context = {
+        insertMarkdown,
+        convertToMdz: vi.fn(),
+        promptImageInsert,
+        formatImageInsert,
+      } as unknown as MdzipConversionContext;
+      const file = new File(['image'], 'team-photo.png', { type: 'image/png' });
+      component.handleConversionRequested({ kind: 'image-file', file }, context);
+      const writeMarkdownImage = vi.fn().mockResolvedValue({
+        filePath: 'C:/docs/project images/team-photo.png',
+        relativePath: 'project images/team-photo.png',
+      });
+      (window as any).mdzipStudio = { writeMarkdownImage };
+      openTestArchive('C:/docs/notes.md');
+      return { file, promptImageInsert, formatImageInsert, insertMarkdown, writeMarkdownImage };
+    }
+
+    afterEach(() => {
+      delete (window as any).mdzipStudio;
+      component.cancelImageDestination();
+    });
+
+    it('asks first, writes the file, then inserts the dialog\'s formatted text', async () => {
+      const decision = { mode: 'html', altText: 'Team', position: 'center' };
+      const t = setup(decision);
+
+      await (component as unknown as LinkedImageApp).writeLinkedMarkdownImage(t.file, 'project images');
+
+      expect(t.promptImageInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ fileName: 'team-photo.png', altText: 'team photo' })
+      );
+      expect(t.writeMarkdownImage).toHaveBeenCalledOnce();
+      expect(t.formatImageInsert).toHaveBeenCalledWith('project%20images/team-photo.png', decision);
+      expect(t.insertMarkdown).toHaveBeenCalledWith('<FORMATTED>');
+    });
+
+    it('writes nothing when the dialog is cancelled', async () => {
+      const t = setup(null);
+
+      await (component as unknown as LinkedImageApp).writeLinkedMarkdownImage(t.file, '');
+
+      expect(t.writeMarkdownImage).not.toHaveBeenCalled();
+      expect(t.insertMarkdown).not.toHaveBeenCalled();
+    });
+  });
+
   // ── Unsaved-state tracking (isDirty / needsSave) ──────────────────────────
 
   const setArchivePath = (path: string | undefined) =>

@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **File location actions**: File menu items **Copy File Path** and
   **Copy Folder Path**, and the full path as a tooltip on
   the title bar's document name.
+- **Linked images in `.md`** now open the same insert dialog a `.mdz` gets — Markdown or HTML, alt text, size and alignment. Cancelling writes nothing. Needs `@mdzip/editor` 1.4.6 (#24).
 - **Open Recent** entries now show the folder after the file name
   (`notes.mdz — F:\Docs`), shortened in the middle when long.
 

@@ -3752,14 +3752,27 @@ export class AppComponent implements OnDestroy {
       throw new Error('Save the Markdown file before adding a linked image.');
     }
 
+    // The same Markdown-vs-HTML / alt text / size / alignment choice a .mdz gets.
+    // Asked before writing, so cancelling leaves nothing on disk.
+    const context = this.pendingConversionContext;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const decision = await context?.promptImageInsert({
+      bytes,
+      fileName: file.name || 'image',
+      altText: this.markdownImageAlt(file.name),
+    });
+    if (!context || !decision) {
+      return;
+    }
+
     const result = await writeImage({
       documentPath,
       relativeDirectory,
       fileName: file.name || 'image',
-      bytes: Array.from(new Uint8Array(await file.arrayBuffer())),
+      bytes: Array.from(bytes),
     });
     if (!await this.insertPendingMarkdown(
-      this.markdownImageReference(file.name, result.relativePath)
+      context.formatImageInsert(this.markdownImageSrc(result.relativePath), decision)
     )) {
       throw new Error('The image was saved, but its Markdown link could not be inserted.');
     }
@@ -3826,18 +3839,22 @@ export class AppComponent implements OnDestroy {
     }
   }
 
-  private markdownImageReference(fileName: string, relativePath: string): string {
-    const alt = fileName
-      .replace(/\.[^.]+$/, '')
-      .replace(/[-_]+/g, ' ')
-      .replace(/[[\]\\]/g, '\\$&');
-    const encodedPath = relativePath
+  private markdownImageAlt(fileName: string): string {
+    return fileName.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ');
+  }
+
+  private markdownImageSrc(relativePath: string): string {
+    return relativePath
       .split('/')
       .map((segment) => encodeURIComponent(segment).replace(/[!'()*]/g, (character) =>
         `%${character.charCodeAt(0).toString(16).toUpperCase()}`
       ))
       .join('/');
-    return `![${alt || 'image'}](${encodedPath})`;
+  }
+
+  private markdownImageReference(fileName: string, relativePath: string): string {
+    const alt = this.markdownImageAlt(fileName).replace(/[[\]\\]/g, '\\$&');
+    return `![${alt || 'image'}](${this.markdownImageSrc(relativePath)})`;
   }
 
   private clearPendingMarkdownImage(): void {
