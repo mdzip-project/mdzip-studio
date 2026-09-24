@@ -1,16 +1,25 @@
+const path = require('path');
+
 // Pure builder for the application menu template. Electron-free: takes the
 // state that decides shape (documentOpen/isDev/platform) plus a bag of click
 // handlers, and returns a plain template array — no Menu/BrowserWindow/app
 // references, so it's unit-testable without a running main process.
-function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvailableVersion = null }) {
+function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvailableVersion = null, recentFiles = [] }) {
   // Electron's native Windows menu doesn't expose a styleable disabled state, so
   // the document-only items would look enabled until hovered. Instead of greying
   // them out, omit them entirely when no document is open — unambiguous, and they
   // reappear when one is. (The menu is rebuilt on the document-open IPC.)
+  const openRecentSubmenu = recentFiles.length
+    ? recentFiles
+        .slice(0, 10)
+        .map((filePath) => ({ label: path.basename(filePath), click: () => handlers.openRecentPath(filePath) }))
+    : [{ label: 'No Recent Documents', enabled: false }];
+
   const fileSubmenu = [
     { label: 'New Document', accelerator: 'CmdOrCtrl+N', click: handlers.newDocument },
     { label: 'New Window', accelerator: 'CmdOrCtrl+Shift+N', click: handlers.newWindow },
     { label: 'Open Document...', accelerator: 'CmdOrCtrl+O', click: handlers.openDocument },
+    { label: 'Open Recent', submenu: openRecentSubmenu },
     { label: 'Pack Folder to .mdz...', click: handlers.packFolder },
     { label: 'Unpack .mdz to Folder...', click: handlers.unpackMdz },
   ];

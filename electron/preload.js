@@ -12,6 +12,10 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
   isElectron: true,
   openDocument: () => ipcRenderer.invoke('mdzip:open-document'),
   openDocumentByPath: (filePath) => ipcRenderer.invoke('mdzip:open-document-path', { filePath }),
+  // Open in a new window instead of this one — used when this window already
+  // has a document open, so Open Document / Open Recent don't clobber it.
+  openDocumentInNewWindow: () => ipcRenderer.send('mdzip:open-document-in-new-window'),
+  openPathInNewWindow: (filePath) => ipcRenderer.send('mdzip:open-path-in-new-window', { filePath }),
   setRecentFiles: (paths) => ipcRenderer.send('mdzip:set-recent-files', { paths }),
   // Tell the main process whether a document is open so it can enable/disable
   // document-only menu items (Save, Save As, Close, Show in File Manager).
@@ -32,6 +36,10 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
     ipcRenderer.on('mdzip:open-document-requested', listener);
     return () => ipcRenderer.removeListener('mdzip:open-document-requested', listener);
   },
+  // What a window created for a specific purpose (open dialog, new document)
+  // should do once it's up: { kind: 'open-dialog' } | { kind: 'new-document',
+  // format } | null. Cleared on read.
+  takeStartupAction: () => ipcRenderer.invoke('mdzip:take-startup-action'),
   onDocumentChangedExternally: (callback) => {
     const listener = (_event, data) => callback(data);
     ipcRenderer.on('mdzip:document-changed-externally', listener);

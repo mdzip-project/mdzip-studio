@@ -1,5 +1,49 @@
 Status: ready-to-commit
-Last: Fixed the real per-keystroke flash — missing overflow:hidden on html/body let the outer document scroll
+Last: Fixed #22 (Shift+Right-Click spell-check) and #23 (Open Document/Recent replacing the current window)
+
+## Spell-check context menu (#22) and Open Document/Recent in a new window (#23)
+
+Both closed a real, previously-open bug rather than adding new scope:
+
+- **#22**: Electron never builds a context menu on its own. Added a
+  `context-menu` handler in `createWindow` (`electron/main.js`) that pops a
+  native menu from `params.dictionarySuggestions`/`misspelledWord` (plus
+  cut/copy/paste), only when there's something actionable. This alone did
+  nothing for the editor pane, though — `@mdzip/editor`'s own right-click
+  handler unconditionally called `preventDefault()`, with no `shiftKey`
+  escape hatch despite its own disabled "Spelling Suggestions" menu item
+  advertising "Shift+Right-Click" since a 1.3.13-era commit. Fixed there too
+  (see `../mdzip-editor/STATUS.md`), released in 1.4.5; this repo's pin is
+  now `^1.4.5` from the registry.
+- **#23**: `openFilePicker()`/`openRecent()` (`app.component.ts`) now open
+  in a new window via two new fire-and-forget IPC calls
+  (`openDocumentInNewWindow`, `openPathInNewWindow`) when the requesting
+  window already has a document open, reusing the same `pendingOpenPath`/
+  `openDialogOnReady` delivery a double-click or Jump List launch already
+  uses — an empty window still loads in place. Also added a native "Open
+  Recent" submenu (`electron/lib/menu.js`), rebuilt on every window
+  whenever the recent-files list changes, so recent files are reachable
+  without returning to the empty welcome screen. (The issue's third
+  concern — Jump List always focusing an existing window — was half true:
+  recent-file entries already open a new window via `openOrFocus`'s per-path
+  `findWindowForPath` check, but the app's own taskbar entry has no file and
+  just focuses. Added Jump List tasks (`jump-list.js`): New Markdown
+  Document (`--new-md`), New MDZip Document (`--new-mdz`) and New Window
+  (`--new-window`). The `second-instance` handler in `main.js` (and the first
+  launch, when Studio isn't running yet) opens a fresh window for them. New
+  windows get a `startupAction` the renderer *pulls* on init
+  (`mdzip:take-startup-action`) — this also replaced the earlier pushed
+  "open dialog" event, which could arrive before Angular had registered a
+  listener. Checked in real Electron: `setJumpList` returns `ok`, and each
+  flag reaches the running instance and parses to the right action. Not yet
+  seen end to end in the running app.)
+
+Verified: `menu.test.js` covers the new "Open Recent" submenu (placeholder
+when empty, base-name labels, 10-entry cap, wired to `openRecentPath`,
+available regardless of `documentOpen`); `app.component.test.ts` covers
+both `openFilePicker`/`openRecent` routing to a new window instead of
+prompting to discard. Full suite green: 86 `ng test` (+2) + 45 `vitest`
+electron (+4).
 
 Kyle reported every keystroke causing a visible flash — toolbar
 disappearing/reappearing, scrollbar briefly jumping to the title bar —
@@ -35,5 +79,11 @@ Studio's typical document sizes.
 
 Verified: Kyle confirmed live in Studio the flash is gone. Full suite (84
 `ng test` + 41 `vitest` electron) green throughout.
+
+`@mdzip/editor`/`@mdzip/editor-ng` were on a local dev symlink throughout
+this investigation. Pins are now `^1.4.5` (1.4.4 carried this fix plus
+#43/#45/#46; 1.4.5 adds the #22 Shift+Right-Click fix and the duplicated-tail
+fix), installed from the registry with no symlinks, `.angular/cache` cleared,
+and the full suite re-run clean (86 `ng test` + 45 `vitest` electron).
 
 <!-- Status: idle | in-progress | awaiting-test | ready-to-commit | blocked -->

@@ -18,13 +18,13 @@ export const FIRST_PARTY_LIBRARIES: LibraryInfo[] = [
   },
   {
     "name": "@mdzip/editor",
-    "version": "1.4.4",
+    "version": "1.4.5",
     "license": "Apache-2.0",
     "homepage": "https://mdzip.org"
   },
   {
     "name": "@mdzip/editor-ng",
-    "version": "1.4.4",
+    "version": "1.4.5",
     "license": "Apache-2.0",
     "homepage": "https://mdzip.org"
   }

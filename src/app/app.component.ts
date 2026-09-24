@@ -303,6 +303,8 @@ interface ElectronBridge {
   };
   openDocument?: () => Promise<ElectronDocumentOpenResult>;
   openDocumentByPath?: (filePath: string) => Promise<ElectronDocumentOpenResult>;
+  openDocumentInNewWindow?: () => void;
+  openPathInNewWindow?: (filePath: string) => void;
   setRecentFiles?: (paths: string[]) => void;
   setDocumentOpen?: (open: boolean) => void;
   setCurrentDocumentPath?: (filePath?: string) => void;
@@ -316,6 +318,9 @@ interface ElectronBridge {
   onPackFolderProgress?: (callback: (data: PackFolderProgress) => void) => () => void;
   takePendingOpenDocument?: () => Promise<ElectronDocumentOpenResult>;
   onOpenDocumentRequested?: (callback: () => void) => () => void;
+  takeStartupAction?: () => Promise<
+    { kind: 'open-dialog' } | { kind: 'new-document'; format: 'markdown' | 'mdz' } | null
+  >;
   onDocumentChangedExternally?: (callback: (data: { filePath: string }) => void) => () => void;
   onWindowCloseRequested?: (callback: (requestId: number) => void) => () => void;
   respondWindowClose?: (requestId: number, allow: boolean) => void;
@@ -1482,6 +1487,16 @@ export class AppComponent implements OnDestroy {
         }
       })
     ) ?? null;
+    // A window opened for a specific purpose (Open Document from a window that
+    // already has one, or a Jump List "New ... Document" task) starts with no
+    // document, so there's nothing to guard against losing.
+    void window.mdzipStudio?.takeStartupAction?.().then((action) => {
+      if (action?.kind === 'open-dialog') {
+        this.ngZone.run(() => this.launchFilePicker());
+      } else if (action?.kind === 'new-document') {
+        this.ngZone.run(() => void this.createNewDocument(action.format));
+      }
+    });
     this.removeDocumentChangedExternallyListener = window.mdzipStudio?.onDocumentChangedExternally?.(
       (data) => this.ngZone.run(() => {
         // Guard against a notification arriving for a document this window
@@ -1887,6 +1902,12 @@ export class AppComponent implements OnDestroy {
   }
 
   openRecent(path: string): void {
+    // A document is already open in this window — open alongside it in a new
+    // window instead of prompting to discard it (#23).
+    if (window.mdzipStudio?.openPathInNewWindow && this.currentArchive()) {
+      window.mdzipStudio.openPathInNewWindow(path);
+      return;
+    }
     this.confirmDiscardIfUnsaved(() => {
       // In the desktop shell a recent entry is a real filesystem path we can open
       // directly. In the web shell it's only a file name, so fall back to the picker.
@@ -1951,6 +1972,12 @@ export class AppComponent implements OnDestroy {
   }
 
   openFilePicker(): void {
+    // A document is already open in this window — open alongside it in a new
+    // window instead of prompting to discard it (#23).
+    if (window.mdzipStudio?.openDocumentInNewWindow && this.currentArchive()) {
+      window.mdzipStudio.openDocumentInNewWindow();
+      return;
+    }
     this.confirmDiscardIfUnsaved(() => this.launchFilePicker());
   }
 

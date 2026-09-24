@@ -1144,6 +1144,49 @@ describe('AppComponent', () => {
     }
   });
 
+  it('opens a new window instead of prompting to discard when a document is already open (#23)', () => {
+    component.isDesktopShell.set(true);
+    openTestArchive('C:/docs/current.md');
+
+    const originalBridge = (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio;
+    const openDocumentInNewWindow = vi.fn();
+    (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = { openDocumentInNewWindow };
+
+    try {
+      component.openFilePicker();
+
+      expect(openDocumentInNewWindow).toHaveBeenCalledTimes(1);
+      expect(component.unsavedDialogOpen()).toBe(false);
+      // Still the original document — nothing here was replaced.
+      expect(component.currentArchive()?.path).toBe('C:/docs/current.md');
+    } finally {
+      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
+    }
+  });
+
+  it('opens a recent file in a new window instead of replacing an already-open document (#23)', () => {
+    component.isDesktopShell.set(true);
+    openTestArchive('C:/docs/current.md');
+
+    const originalBridge = (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio;
+    const openPathInNewWindow = vi.fn();
+    const openDocumentByPath = vi.fn();
+    (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = {
+      openPathInNewWindow,
+      openDocumentByPath,
+    };
+
+    try {
+      component.openRecent('C:/docs/other.mdz');
+
+      expect(openPathInNewWindow).toHaveBeenCalledWith('C:/docs/other.mdz');
+      expect(openDocumentByPath).not.toHaveBeenCalled();
+      expect(component.currentArchive()?.path).toBe('C:/docs/current.md');
+    } finally {
+      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
+    }
+  });
+
   it('suggests the original Markdown folder when saving a converted MDZip', async () => {
     let payload: unknown;
     const originalBridge = (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio;

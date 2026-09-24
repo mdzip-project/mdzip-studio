@@ -20,6 +20,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for that instant. Added `overflow: hidden` to `html`/`body` and to the
   app's `:host`.
 
+- **Shift+Right-Click for spell-check suggestions did nothing.** Electron
+  builds no context menu on its own, and the embedded editor's own
+  right-click handler unconditionally suppressed the native one it would
+  otherwise fall through to (its own bug, fixed in `@mdzip/editor` 1.4.5 —
+  see its CHANGELOG; `@mdzip/editor`/`-ng` bumped to `^1.4.5`). Added a `context-menu` handler on
+  each window that builds a native menu from Chromium's own spelling
+  suggestions (plus cut/copy/paste) whenever something actionable is
+  actually there. Closes #22.
+
+- **File > Open Document... (and Open Recent) replaced the current
+  document instead of opening alongside it**, even though Studio already
+  supports multiple windows. Both now open in a new window when the
+  requesting window already has a document open; a "New" empty window still
+  loads in place, since there's nothing to lose. Also added a native "Open
+  Recent" submenu (previously only reachable from the empty welcome
+  screen), so recent files are reachable without closing what's open. The
+  Windows taskbar Jump List also gets "New Markdown Document", "New MDZip
+  Document" and "New Window" tasks, since clicking the app's own entry there
+  only focused the running window. Closes #23.
+
 ## [1.4.0] - 2026-09-10
 
 The first published release since 1.3.21. Rolls up the Linux packaging and

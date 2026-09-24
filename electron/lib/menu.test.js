@@ -1,7 +1,7 @@
 const { buildMenuTemplate } = require('./menu');
 
 const HANDLER_NAMES = [
-  'newDocument', 'newWindow', 'openDocument', 'packFolder', 'unpackMdz',
+  'newDocument', 'newWindow', 'openDocument', 'openRecentPath', 'packFolder', 'unpackMdz',
   'save', 'saveAs', 'print', 'showInFolder', 'insertAgentsGuide', 'insertReadme', 'closeDocument', 'quit',
   'reload', 'toggleLineNumbers', 'toggleDevTools',
   'setMdDefault', 'showKnownIssues', 'showChangelog', 'checkForUpdates', 'showAbout',
@@ -29,7 +29,7 @@ describe('buildMenuTemplate', () => {
     });
     const fileLabels = labelsOf(findMenu(template, 'File').submenu);
     expect(fileLabels).toEqual([
-      'New Document', 'New Window', 'Open Document...', 'Pack Folder to .mdz...', 'Unpack .mdz to Folder...',
+      'New Document', 'New Window', 'Open Document...', 'Open Recent', 'Pack Folder to .mdz...', 'Unpack .mdz to Folder...',
       '[separator]', 'Exit',
     ]);
   });
@@ -117,5 +117,45 @@ describe('buildMenuTemplate', () => {
     const open = buildMenuTemplate({ documentOpen: true, isDev: false, platform: 'win32', handlers: stubHandlers() });
     expect(labelsOf(findMenu(closed, 'File').submenu)).toContain('New Window');
     expect(labelsOf(findMenu(open, 'File').submenu)).toContain('New Window');
+  });
+
+  describe('Open Recent submenu', () => {
+    function openRecentSubmenu(template) {
+      return findMenu(template, 'File').submenu.find((item) => item.label === 'Open Recent').submenu;
+    }
+
+    it('shows a disabled placeholder when there are no recent files', () => {
+      const template = buildMenuTemplate({ documentOpen: false, isDev: false, platform: 'win32', handlers: stubHandlers() });
+      const submenu = openRecentSubmenu(template);
+      expect(submenu).toEqual([{ label: 'No Recent Documents', enabled: false }]);
+    });
+
+    it('lists each recent file by its base name and wires it to openRecentPath', () => {
+      const handlers = stubHandlers();
+      const template = buildMenuTemplate({
+        documentOpen: false, isDev: false, platform: 'win32', handlers,
+        recentFiles: ['C:/docs/one.md', 'C:/docs/nested/two.mdz'],
+      });
+      const submenu = openRecentSubmenu(template);
+      expect(labelsOf(submenu)).toEqual(['one.md', 'two.mdz']);
+
+      submenu[1].click();
+      expect(handlers.openRecentPath).toHaveBeenCalledWith('C:/docs/nested/two.mdz');
+    });
+
+    it('caps the submenu at 10 entries', () => {
+      const recentFiles = Array.from({ length: 15 }, (_, i) => `C:/docs/file-${i}.md`);
+      const template = buildMenuTemplate({
+        documentOpen: false, isDev: false, platform: 'win32', handlers: stubHandlers(), recentFiles,
+      });
+      expect(openRecentSubmenu(template)).toHaveLength(10);
+    });
+
+    it('is available whether or not a document is open', () => {
+      const closed = buildMenuTemplate({ documentOpen: false, isDev: false, platform: 'win32', handlers: stubHandlers(), recentFiles: ['C:/docs/one.md'] });
+      const open = buildMenuTemplate({ documentOpen: true, isDev: false, platform: 'win32', handlers: stubHandlers(), recentFiles: ['C:/docs/one.md'] });
+      expect(labelsOf(findMenu(closed, 'File').submenu)).toContain('Open Recent');
+      expect(labelsOf(findMenu(open, 'File').submenu)).toContain('Open Recent');
+    });
   });
 });

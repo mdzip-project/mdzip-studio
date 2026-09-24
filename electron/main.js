@@ -9,7 +9,7 @@ const { pathToFileURL } = require('url');
 const { documentPathFromArgs } = require('./lib/document-path');
 const { saveDialogFilters } = require('./lib/save-dialog');
 const { resolveInsidePackFolder } = require('./lib/pack-folder');
-const { buildJumpList } = require('./lib/jump-list');
+const { buildJumpList, wantsNewWindow, startupActionFromArgs } = require('./lib/jump-list');
 const { statsDiffer } = require('./lib/file-watch');
 const {
   updateAvailableDialog,
@@ -39,10 +39,13 @@ const windowIconForTheme = () => {
 
 // Multi-window: each open BrowserWindow gets its own document/menu state —
 // there is no single "the" window once more than one can be open at once.
-// state shape: { documentPath, documentOpen, pendingOpenPath, lastPackFolder }
+// state shape: { documentPath, documentOpen, pendingOpenPath, startupAction, lastPackFolder }
 const windows = new Map();
 let lastFocusedWindow = null;
 const isDev = !app.isPackaged;
+// Mirrors the renderer's recent-files list (see mdzip:set-recent-files) so the
+// native "Open Recent" submenu can be built without round-tripping to a window.
+let latestRecentFiles = [];
 
 function windowState(win) {
   return win ? windows.get(win) : undefined;
@@ -558,7 +561,11 @@ function dispatchAppEvent(win, name) {
   );
 }
 
-function createWindow({ pendingOpenPath = null } = {}) {
+// startupAction: something the new window's renderer should do as soon as it
+// has initialized — { kind: 'open-dialog' } or { kind: 'new-document', format }.
+// Pulled by the renderer (mdzip:take-startup-action) rather than pushed, so it
+// can't arrive before Angular has registered anything to receive it.
+function createWindow({ pendingOpenPath = null, startupAction = null } = {}) {
   const win = new BrowserWindow({
     show: false,
     width: 1200,
@@ -568,6 +575,9 @@ function createWindow({ pendingOpenPath = null } = {}) {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      // Electron's default; explicit because the context-menu handler below
+      // depends on it for misspelling suggestions (#22).
+      spellcheck: true,
       preload: path.join(__dirname, 'preload.js'),
     },
   });
@@ -576,6 +586,7 @@ function createWindow({ pendingOpenPath = null } = {}) {
     documentPath: null,
     documentOpen: false,
     pendingOpenPath,
+    startupAction,
     lastPackFolder: null,
     documentStat: null,
     externalChangeNotifiedFor: null,
@@ -652,6 +663,34 @@ function createWindow({ pendingOpenPath = null } = {}) {
     return { action: 'deny' };
   });
 
+  // Electron never shows a context menu on its own (unlike a regular browser) —
+  // the app has to build one from the platform's own suggestions. The embedded
+  // editor's own context-menu handler calls preventDefault() for its formatting
+  // menu, which suppresses this event entirely; Shift+right-click skips that
+  // handler so spelling suggestions (and cut/copy/paste elsewhere in the app,
+  // e.g. the Pack Folder filters textarea) reach here instead (#22).
+  win.webContents.on('context-menu', (_event, params) => {
+    const menuItems = [];
+    if (params.misspelledWord) {
+      for (const suggestion of params.dictionarySuggestions) {
+        menuItems.push({ label: suggestion, click: () => win.webContents.replaceMisspelling(suggestion) });
+      }
+      if (params.dictionarySuggestions.length > 0) menuItems.push({ type: 'separator' });
+      menuItems.push({
+        label: 'Add to Dictionary',
+        click: () => win.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord),
+      });
+      menuItems.push({ type: 'separator' });
+    }
+    if (params.isEditable) {
+      menuItems.push({ role: 'cut' }, { role: 'copy' }, { role: 'paste' });
+    } else if (params.selectionText) {
+      menuItems.push({ role: 'copy' });
+    }
+    if (menuItems.length === 0) return;
+    Menu.buildFromTemplate(menuItems).popup({ window: win });
+  });
+
   return win;
 }
 
@@ -662,11 +701,20 @@ if (!hasSingleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', (_event, commandLine) => {
-    openOrFocus(documentPathFromArgs(commandLine.slice(1)));
+    const args = commandLine.slice(1);
+    const startupAction = startupActionFromArgs(args);
+    if (startupAction || wantsNewWindow(args)) {
+      createWindow({ startupAction });
+      return;
+    }
+    openOrFocus(documentPathFromArgs(args));
   });
 
   app.on('ready', () => {
-    createWindow({ pendingOpenPath: initialDocumentPath });
+    createWindow({
+      pendingOpenPath: initialDocumentPath,
+      startupAction: startupActionFromArgs(process.argv.slice(1)),
+    });
   });
 }
 
@@ -729,7 +777,30 @@ ipcMain.handle('mdzip:open-document-path', async (event, payload) => {
 });
 
 ipcMain.on('mdzip:set-recent-files', (_event, payload) => {
+  latestRecentFiles = Array.isArray(payload?.paths) ? payload.paths : [];
   updateJumpList(payload?.paths);
+  refreshAllWindowMenus();
+});
+
+// Open Document / a recent file "alongside" the current one instead of
+// replacing it — used when the requesting window already has a document open
+// (see openFilePicker/openRecent in app.component.ts and the native "Open
+// Recent" submenu below). A brand-new window has nothing to lose, so those
+// same call sites skip this and load in place instead.
+ipcMain.on('mdzip:open-document-in-new-window', () => {
+  createWindow({ startupAction: { kind: 'open-dialog' } });
+});
+
+ipcMain.handle('mdzip:take-startup-action', (event) => {
+  const state = windowState(BrowserWindow.fromWebContents(event.sender));
+  const action = state?.startupAction ?? null;
+  if (state) state.startupAction = null;
+  return action;
+});
+
+ipcMain.on('mdzip:open-path-in-new-window', (_event, payload) => {
+  const filePath = payload?.filePath;
+  if (filePath) createWindow({ pendingOpenPath: filePath });
 });
 
 ipcMain.on('mdzip:set-document-open', (event, open) => {
@@ -1322,6 +1393,19 @@ function menuHandlersFor(win) {
     newDocument: () => dispatchAppEvent(win, 'mdzip-studio:new-archive'),
     newWindow: () => createWindow(),
     openDocument: () => dispatchAppEvent(win, 'mdzip-studio:open-archive'),
+    // Reuses the same pendingOpenPath delivery a double-click / "Open with" /
+    // Jump List launch already uses (see openOrFocus) — the only difference is
+    // whether that lands in this window (empty) or a fresh one (this window
+    // already has a document open, so don't clobber it).
+    openRecentPath: (filePath) => {
+      const state = windowState(win);
+      if (!state || state.documentOpen) {
+        createWindow({ pendingOpenPath: filePath });
+        return;
+      }
+      state.pendingOpenPath = filePath;
+      win?.webContents.send('mdzip:open-document-requested');
+    },
     packFolder: () => dispatchAppEvent(win, 'mdzip-studio:pack-folder'),
     unpackMdz: () => dispatchAppEvent(win, 'mdzip-studio:unpack-mdz'),
     save: () => dispatchAppEvent(win, 'mdzip-studio:save-archive'),
@@ -1354,8 +1438,18 @@ function refreshWindowMenu(win) {
     platform: process.platform,
     handlers: menuHandlersFor(win),
     updateAvailableVersion: availableUpdateInfo?.version ?? null,
+    recentFiles: latestRecentFiles,
   });
   win.setMenu(Menu.buildFromTemplate(template));
+}
+
+// The recent-files list is global (one renderer-side store shared across
+// windows), so every open window's "Open Recent" submenu needs rebuilding
+// whenever it changes — not just the window that reported it.
+function refreshAllWindowMenus() {
+  for (const win of windows.keys()) {
+    refreshWindowMenu(win);
+  }
 }
 
 // App-level fallback menu — macOS only. That's the one platform where the app
@@ -1373,6 +1467,7 @@ if (process.platform === 'darwin') {
       platform: process.platform,
       handlers: menuHandlersFor(null),
       updateAvailableVersion: availableUpdateInfo?.version ?? null,
+      recentFiles: latestRecentFiles,
     });
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
   });
