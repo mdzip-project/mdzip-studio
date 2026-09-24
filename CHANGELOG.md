@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **File location actions**: File menu items **Copy File Path** and
+  **Copy Folder Path**, and the full path as a tooltip on
+  the title bar's document name.
+- **Open Recent** entries now show the folder after the file name
+  (`notes.mdz — F:\Docs`), shortened in the middle when long.
+
 ### Fixed
 
 - **Every keystroke causing a brief visible flash** (toolbar

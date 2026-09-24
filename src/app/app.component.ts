@@ -344,6 +344,7 @@ interface ElectronBridge {
     relativePath: string;
   }) => Promise<{ dataUri?: string; error?: string }>;
   showInFolder?: (filePath: string) => Promise<{ ok?: boolean; error?: string }>;
+  pathAction?: (filePath: string, action: 'copy-path' | 'copy-folder') => Promise<{ ok?: boolean; text?: string; error?: string }>;
   printPreview?: (payload: { html: string; title: string }) => Promise<{ ok?: boolean; error?: string }>;
   getMarkdownDefaultStatus?: () => Promise<MarkdownDefaultStatus>;
   promptMarkdownDefault?: () => Promise<MarkdownDefaultStatus>;
@@ -426,7 +427,7 @@ interface ArchiveTreeData {
               <source srcset="assets/mdzip-mark/mdzip-mark-square-dark.svg" media="(prefers-color-scheme: dark)" />
               <img class="brand-icon" src="assets/mdzip-mark/mdzip-mark-square.svg" alt="" />
             </picture>
-            <span class="doc-title">{{ documentTitleDisplay() || 'MDZip Studio' }}</span>
+            <span class="doc-title" [title]="currentArchive()?.path ?? ''">{{ documentTitleDisplay() || 'MDZip Studio' }}</span>
           </div>
           <nav class="menu-nav">
             <div class="menu-root" (click)="$event.stopPropagation(); toggleMenu('file')" (mouseenter)="hoverMenu('file')">
@@ -446,6 +447,8 @@ interface ArchiveTreeData {
                   @if (isDesktopShell()) {
                     <li class="menu-sep" role="separator"></li>
                     <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!hasFileOnDisk()" (click)="showInFileManager()"><ng-icon name="lucideFolderOpen" size="13" /><span>Show in File Manager</span></button></li>
+                    <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!hasFileOnDisk()" (click)="runPathAction('copy-path')"><ng-icon name="lucideCopy" size="13" /><span>Copy File Path</span></button></li>
+                    <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!hasFileOnDisk()" (click)="runPathAction('copy-folder')"><ng-icon name="lucideCopy" size="13" /><span>Copy Folder Path</span></button></li>
                   }
                   <li class="menu-sep" role="separator"></li>
                   <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!canInsertTemplateFile()" (click)="insertAgentsGuide(); closeMenu()"><ng-icon name="lucideBot" size="13" /><span>Insert AGENTS.md</span></button></li>
@@ -1411,6 +1414,8 @@ export class AppComponent implements OnDestroy {
   private readonly handleInsertReadmeCommand = () => this.insertReadme();
   private readonly handleUnpackMdzCommand = () => void this.unpackMdzToFolder();
   private readonly handleShowInFolderCommand = () => void this.showInFileManager();
+  private readonly handleCopyPathCommand = () => void this.runPathAction('copy-path');
+  private readonly handleCopyFolderPathCommand = () => void this.runPathAction('copy-folder');
   private readonly handleReloadDocumentCommand = () => void this.reloadDocumentFromDisk();
   private readonly handleToggleLineNumbersCommand = () => this.toggleLineNumbers();
   private readonly handlePrintCommand = () => void this.printDocument();
@@ -1470,6 +1475,8 @@ export class AppComponent implements OnDestroy {
     window.addEventListener('mdzip-studio:insert-readme', this.handleInsertReadmeCommand);
     window.addEventListener('mdzip-studio:unpack-mdz', this.handleUnpackMdzCommand);
     window.addEventListener('mdzip-studio:show-in-folder', this.handleShowInFolderCommand);
+    window.addEventListener('mdzip-studio:copy-path', this.handleCopyPathCommand);
+    window.addEventListener('mdzip-studio:copy-folder-path', this.handleCopyFolderPathCommand);
     window.addEventListener('mdzip-studio:reload-document', this.handleReloadDocumentCommand);
     window.addEventListener('mdzip-studio:toggle-line-numbers', this.handleToggleLineNumbersCommand);
     window.addEventListener('mdzip-studio:print', this.handlePrintCommand);
@@ -1547,6 +1554,8 @@ export class AppComponent implements OnDestroy {
     window.removeEventListener('mdzip-studio:insert-readme', this.handleInsertReadmeCommand);
     window.removeEventListener('mdzip-studio:unpack-mdz', this.handleUnpackMdzCommand);
     window.removeEventListener('mdzip-studio:show-in-folder', this.handleShowInFolderCommand);
+    window.removeEventListener('mdzip-studio:copy-path', this.handleCopyPathCommand);
+    window.removeEventListener('mdzip-studio:copy-folder-path', this.handleCopyFolderPathCommand);
     window.removeEventListener('mdzip-studio:reload-document', this.handleReloadDocumentCommand);
     window.removeEventListener('mdzip-studio:toggle-line-numbers', this.handleToggleLineNumbersCommand);
     window.removeEventListener('mdzip-studio:print', this.handlePrintCommand);
@@ -1794,6 +1803,24 @@ export class AppComponent implements OnDestroy {
       this.statusMessage.set(result.error === 'not-found'
         ? 'File not found on disk — save it again'
         : 'Could not open the file manager');
+    }
+  }
+
+  async runPathAction(action: 'copy-path' | 'copy-folder'): Promise<void> {
+    this.closeMenu();
+    const filePath = this.currentArchive()?.path;
+    const run = window.mdzipStudio?.pathAction;
+    if (!filePath || !run) {
+      this.statusMessage.set('Save the document first to use its file location');
+      return;
+    }
+    const result = await run(filePath, action);
+    if (result?.error) {
+      this.statusMessage.set(result.error === 'not-found'
+        ? 'File not found on disk — save it again'
+        : 'Could not complete that action');
+    } else {
+      this.statusMessage.set(`Copied ${result?.text ?? 'path'}`);
     }
   }
 

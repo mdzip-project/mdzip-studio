@@ -1,4 +1,4 @@
-const { buildMenuTemplate } = require('./menu');
+const { buildMenuTemplate, recentLabel, shortenFolder } = require('./menu');
 
 const HANDLER_NAMES = [
   'newDocument', 'newWindow', 'openDocument', 'openRecentPath', 'packFolder', 'unpackMdz',
@@ -43,6 +43,8 @@ describe('buildMenuTemplate', () => {
     expect(fileLabels).toContain('Save As...');
     expect(fileLabels).toContain('Print...');
     expect(fileLabels).toContain('Show in File Manager');
+    expect(fileLabels).toContain('Copy File Path');
+    expect(fileLabels).toContain('Copy Folder Path');
     expect(fileLabels).toContain('Insert AGENTS.md');
     expect(fileLabels).toContain('Insert README.md');
     expect(fileLabels).toContain('Close Document');
@@ -130,14 +132,14 @@ describe('buildMenuTemplate', () => {
       expect(submenu).toEqual([{ label: 'No Recent Documents', enabled: false }]);
     });
 
-    it('lists each recent file by its base name and wires it to openRecentPath', () => {
+    it('labels each recent file with its name and folder, and wires it to openRecentPath', () => {
       const handlers = stubHandlers();
       const template = buildMenuTemplate({
         documentOpen: false, isDev: false, platform: 'win32', handlers,
         recentFiles: ['C:/docs/one.md', 'C:/docs/nested/two.mdz'],
       });
       const submenu = openRecentSubmenu(template);
-      expect(labelsOf(submenu)).toEqual(['one.md', 'two.mdz']);
+      expect(labelsOf(submenu)).toEqual(['one.md — C:/docs', 'two.mdz — C:/docs/nested']);
 
       submenu[1].click();
       expect(handlers.openRecentPath).toHaveBeenCalledWith('C:/docs/nested/two.mdz');
@@ -157,5 +159,20 @@ describe('buildMenuTemplate', () => {
       expect(labelsOf(findMenu(closed, 'File').submenu)).toContain('Open Recent');
       expect(labelsOf(findMenu(open, 'File').submenu)).toContain('Open Recent');
     });
+  });
+});
+
+describe('recent file labels', () => {
+  it('keeps short folders whole and shortens long ones in the middle', () => {
+    expect(shortenFolder('F:\\Exports')).toBe('F:\\Exports');
+    const long = 'F:\\Code\\1 Projects\\mdzip-project\\TestFiles\\link-navigation-test\\subfolder';
+    const short = shortenFolder(long);
+    expect(short.startsWith('F:\\…\\')).toBe(true);
+    expect(short.endsWith('subfolder')).toBe(true);
+    expect(short.length).toBeLessThanOrEqual(40);
+  });
+
+  it('doubles ampersands so they are not read as menu mnemonics', () => {
+    expect(recentLabel('C:\\Q&A\\notes & more.md')).toBe('notes && more.md — C:\\Q&&A');
   });
 });

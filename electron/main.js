@@ -1,4 +1,5 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, shell } = require('electron');
+const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeTheme, shell } = require('electron');
+const { runPathAction } = require('./lib/path-actions');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs/promises');
 const { constants: fsConstants, readdirSync, unlinkSync, watch: watchFs } = require('fs');
@@ -1136,6 +1137,13 @@ ipcMain.handle('mdzip:show-in-folder', async (_event, payload) => {
   return { ok: true };
 });
 
+// Copy the document's path or containing folder path to the clipboard.
+ipcMain.handle('mdzip:path-action', (_event, payload) =>
+  runPathAction(
+    { filePath: payload?.filePath, action: payload?.action },
+    { clipboard, access: (p) => fs.access(p) },
+  ));
+
 // --- Print preview -----------------------------------------------------------
 // The renderer builds a standalone HTML document (print CSS + inlined images)
 // from the open document and sends it here. A hidden window renders it to PDF,
@@ -1412,6 +1420,8 @@ function menuHandlersFor(win) {
     saveAs: () => dispatchAppEvent(win, 'mdzip-studio:save-archive-as'),
     print: () => dispatchAppEvent(win, 'mdzip-studio:print'),
     showInFolder: () => dispatchAppEvent(win, 'mdzip-studio:show-in-folder'),
+    copyFilePath: () => dispatchAppEvent(win, 'mdzip-studio:copy-path'),
+    copyFolderPath: () => dispatchAppEvent(win, 'mdzip-studio:copy-folder-path'),
     insertAgentsGuide: () => dispatchAppEvent(win, 'mdzip-studio:insert-agents'),
     insertReadme: () => dispatchAppEvent(win, 'mdzip-studio:insert-readme'),
     closeDocument: () => dispatchAppEvent(win, 'mdzip-studio:close-archive'),

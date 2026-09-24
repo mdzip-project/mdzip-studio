@@ -894,6 +894,30 @@ describe('AppComponent', () => {
     expect(component.needsSave()).toBe(false);
   });
 
+  it('runPathAction sends the open document path to the bridge and reports the copy', async () => {
+    const pathAction = vi.fn().mockResolvedValue({ ok: true, text: 'C:/docs/sample.mdz' });
+    (window as any).mdzipStudio = { pathAction };
+    openTestArchive('C:/docs/sample.mdz');
+
+    await component.runPathAction('copy-path');
+
+    expect(pathAction).toHaveBeenCalledWith('C:/docs/sample.mdz', 'copy-path');
+    expect(component.statusMessage()).toBe('Copied C:/docs/sample.mdz');
+    delete (window as any).mdzipStudio;
+  });
+
+  it('runPathAction asks to save first when the document has no path', async () => {
+    const pathAction = vi.fn();
+    (window as any).mdzipStudio = { pathAction };
+    openTestArchive();
+
+    await component.runPathAction('copy-folder');
+
+    expect(pathAction).not.toHaveBeenCalled();
+    expect(component.statusMessage()).toContain('Save the document first');
+    delete (window as any).mdzipStudio;
+  });
+
   it('needsSave is true for an in-memory document not yet on disk (desktop)', () => {
     component.isDesktopShell.set(true);
     openTestArchive(); // new/converted/packed: in memory, no path

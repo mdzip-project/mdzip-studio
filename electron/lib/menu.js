@@ -1,5 +1,29 @@
 const path = require('path');
 
+// Native menus can't show a tooltip or style part of a label, so the folder
+// goes in the label itself, middle-shortened when long. '&' marks a mnemonic in
+// Windows menu labels, so a literal one must be doubled.
+function shortenFolder(dir, max = 40) {
+  if (dir.length <= max) return dir;
+  const sep = dir.includes('\\') ? '\\' : '/';
+  const parts = dir.split(/[\\/]+/).filter((part, i) => part || i === 0);
+  const head = parts[0];
+  let tail = parts.slice(1);
+  let kept = [];
+  while (tail.length) {
+    const next = [tail.at(-1), ...kept];
+    if ((head + sep + '…' + sep + next.join(sep)).length > max && kept.length) break;
+    kept = next;
+    tail = tail.slice(0, -1);
+  }
+  return head + sep + '…' + sep + kept.join(sep);
+}
+
+function recentLabel(filePath) {
+  const label = `${path.basename(filePath)} — ${shortenFolder(path.dirname(filePath))}`;
+  return label.replace(/&/g, '&&');
+}
+
 // Pure builder for the application menu template. Electron-free: takes the
 // state that decides shape (documentOpen/isDev/platform) plus a bag of click
 // handlers, and returns a plain template array — no Menu/BrowserWindow/app
@@ -12,7 +36,7 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvai
   const openRecentSubmenu = recentFiles.length
     ? recentFiles
         .slice(0, 10)
-        .map((filePath) => ({ label: path.basename(filePath), click: () => handlers.openRecentPath(filePath) }))
+        .map((filePath) => ({ label: recentLabel(filePath), click: () => handlers.openRecentPath(filePath) }))
     : [{ label: 'No Recent Documents', enabled: false }];
 
   const fileSubmenu = [
@@ -32,6 +56,8 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvai
       { label: 'Print...', accelerator: 'CmdOrCtrl+P', click: handlers.print },
       { type: 'separator' },
       { label: 'Show in File Manager', click: handlers.showInFolder },
+      { label: 'Copy File Path', click: handlers.copyFilePath },
+      { label: 'Copy Folder Path', click: handlers.copyFolderPath },
       { type: 'separator' },
       { label: 'Insert AGENTS.md', click: handlers.insertAgentsGuide },
       { label: 'Insert README.md', click: handlers.insertReadme },
@@ -121,4 +147,4 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvai
   return template;
 }
 
-module.exports = { buildMenuTemplate };
+module.exports = { buildMenuTemplate, recentLabel, shortenFolder };
