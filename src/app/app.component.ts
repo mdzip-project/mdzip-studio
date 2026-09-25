@@ -597,6 +597,7 @@ interface ArchiveTreeData {
                 initialLayout="split"
                 [navigationButtonActive]="navigationActive()"
                 (changed)="onWorkspaceChanged($event)"
+                (selectionChanged)="onWorkspaceSelectionChanged($event)"
                 (manifestChanged)="onWorkspaceManifestChanged($event)"
                 (dirtyChanged)="onWorkspaceDirtyChanged($event)"
                 (snapshotChanged)="onWorkspaceSnapshotChanged($event)"
@@ -4036,8 +4037,20 @@ export class AppComponent implements OnDestroy {
       this.postConvertStatus = null;
       return;
     }
-    const displayName = this.documentStatusLabel(event.snapshot.currentPath);
-    this.statusMessage.set(event.snapshot.dirty ? `Editing ${displayName}` : `Viewing ${displayName}`);
+    this.setViewingStatus(event.snapshot);
+  }
+
+  // Opening another file in the archive. Since @mdzip/editor 1.4.8, (changed)
+  // no longer fires for navigation (no archive bytes changed), so the
+  // "Viewing <file>" label follows the selection from here instead.
+  onWorkspaceSelectionChanged(snapshot: MdzipWorkspaceSnapshot): void {
+    if (this.postConvertStatus !== null) return;
+    this.setViewingStatus(snapshot);
+  }
+
+  private setViewingStatus(snapshot: MdzipWorkspaceSnapshot): void {
+    const displayName = this.documentStatusLabel(snapshot.currentPath);
+    this.statusMessage.set(snapshot.dirty ? `Editing ${displayName}` : `Viewing ${displayName}`);
   }
 
   onWorkspacePreviewRendered(snapshot: MdzipWorkspaceSnapshot): void {

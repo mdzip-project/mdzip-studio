@@ -440,6 +440,65 @@ describe('AppComponent', () => {
     }
   });
 
+  it('renders a percent-encoded relative image after reopening a Markdown file', async () => {
+    // Inserting `pasted 2.png` writes `images/pasted%202.png`. Reopening the
+    // saved file must still read the sibling at its decoded on-disk name.
+    const originalBridge = window.mdzipStudio;
+    const originalCreateObjectUrl = URL.createObjectURL;
+    const readMarkdownAsset = vi.fn().mockResolvedValue({
+      dataUri: 'data:image/png;base64,aW1hZ2U=',
+    });
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn().mockReturnValue('blob:studio/pasted-2'),
+    });
+    window.mdzipStudio = { ...originalBridge, readMarkdownAsset };
+
+    const app = component as unknown as {
+      openDocumentBytes(
+        bytes: Uint8Array,
+        name: string,
+        filePath?: string,
+        readOnly?: boolean,
+        recordRecent?: boolean
+      ): Promise<void>;
+    };
+    const markdown = '![pasted 2](images/pasted%202.png)';
+    const context = {
+      currentPath: 'index.md',
+      sourceFormat: 'markdown' as const,
+      colorScheme: 'light' as const,
+      mode: 'editable' as const,
+      manifest: null,
+      signal: new AbortController().signal,
+    };
+
+    try {
+      await app.openDocumentBytes(new TextEncoder().encode(markdown), 'index.md', 'C:/docs/index.md', false, false);
+      const relativeImages = component.markdownExtensions.find((extension) =>
+        extension.name === 'studio-relative-images-mounted'
+      );
+      const renderer = new MdzipRenderingService(undefined, relativeImages ? [relativeImages] : []);
+      const html = await renderer.renderMarkdown(markdown, context);
+      const container = document.createElement('div');
+      container.innerHTML = html;
+      container.querySelector('img')?.removeAttribute('src');
+      await relativeImages?.mount?.(container, context);
+
+      expect(readMarkdownAsset).toHaveBeenCalledWith({
+        documentPath: 'C:/docs/index.md',
+        relativePath: 'images/pasted 2.png',
+      });
+      expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:studio/pasted-2');
+    } finally {
+      window.mdzipStudio = originalBridge;
+      Object.defineProperty(URL, 'createObjectURL', {
+        configurable: true,
+        value: originalCreateObjectUrl,
+      });
+    }
+  });
+
   it('honors raw HTML image height and alignment attributes in preview', async () => {
     const imageLayout = component.markdownExtensions.find((extension) =>
       extension.name === 'studio-html-image-layout'
