@@ -7,16 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-07
+
 ### Added
 
 - **File location actions**: File menu items **Copy File Path** and
   **Copy Folder Path**, and the full path as a tooltip on
   the title bar's document name.
-- **Linked images in `.md`** now open the same insert dialog a `.mdz` gets — Markdown or HTML, alt text, size and alignment. Cancelling writes nothing. Needs `@mdzip/editor` 1.4.6 (#24).
+- **Linked images in `.md`** now open the same insert dialog a `.mdz` gets — Markdown or HTML, alt text, size and alignment. Cancelling writes nothing (#24).
 - **Open Recent** entries now show the folder after the file name
   (`notes.mdz — F:\Docs`), shortened in the middle when long.
+- **Front matter** — a leading `---` YAML block now renders as front matter
+  in the preview instead of a stray rule plus heading.
+- **Heading links** — every heading gets a GitHub-style anchor, so
+  `[text](#some-heading)` links (and `other.md#heading`) scroll the preview
+  to the target, and it stays on target while images or diagrams above it
+  are still loading.
+
+### Changed
+
+- **`@mdzip/editor` / `@mdzip/editor-ng` updated from 1.4.0 to 1.5.0.** Most
+  of the entries above and below come from it. Editing is lighter: Mermaid
+  diagrams and images no longer re-render on every keystroke in short
+  documents, and fenced code in an uncommon language renders unhighlighted
+  rather than loading every highlighter.
 
 ### Fixed
+
+- **Saving a `.mdz` jumped back to the entry-point document** when you were
+  editing another `.md` file inside it. Save now leaves you where you were.
+- **Editor and preview jumping scroll position** when starting to edit a
+  document with images or a Mermaid diagram.
+- **A Mermaid diagram failing to render** ("Cannot read properties of null")
+  after an edit that re-rendered the preview twice in quick succession, such
+  as adding an image.
+- **The status bar keeps showing "Viewing <file>" for the file you're on**
+  when you open another file in a `.mdz`. The updated editor no longer
+  reports plain navigation as an archive change, so the status bar now
+  follows the selection instead.
+- **Clicking a preview link with malformed percent-encoding** (e.g.
+  `bad%E0%A4%A.md`) threw an error. It's now treated as an unresolved link.
 
 - **Every keystroke causing a brief visible flash** (toolbar
   disappearing/reappearing, scrollbar jumping to the title bar) while
@@ -357,7 +387,8 @@ release-pipeline work that was tagged as 1.3.22 and 1.3.23 but never published.
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/mdzip-project/mdzip-studio/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.21...v1.4.0
 [1.3.21]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.20...v1.3.21
 [1.3.20]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.19...v1.3.20

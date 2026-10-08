@@ -2953,8 +2953,15 @@ export class AppComponent implements OnDestroy {
       // Same reasoning as the markdown path above: `updateArchivePath` changes
       // `fileName` on a rename (Save As), which makes the editor reopen from
       // `bytes` — keep it pointed at what was just saved, not stale content.
-      this.workspaceBytes.set(bytes);
+      // But only then: any `bytes` change also reopens the workspace, which
+      // resets the view to the entry point. An in-place save leaves the editor
+      // already holding exactly these contents, so pushing them back would just
+      // yank the user off whichever non-entry document they were editing.
+      const previousFileName = this.workspaceFileName();
       this.updateArchivePath(result.filePath, result.name);
+      if (this.workspaceFileName() !== previousFileName) {
+        this.workspaceBytes.set(bytes);
+      }
       this.workspaceEditor?.markPersisted();
       this.isDirty.set(false);
       this.readOnly.set(false);

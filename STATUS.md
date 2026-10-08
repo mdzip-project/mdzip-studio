@@ -1,5 +1,5 @@
-Status: awaiting-test
-Last: On published @mdzip/editor / editor-ng 1.4.8, tests green; status bar follows navigation via (selectionChanged) since (changed) now skips navigation; earlier: Bumped to published @mdzip/editor / editor-ng 1.4.7 (Mermaid render fix), tests green; added a %20 linked-image reopen test; earlier: Linked .md images use the editor's Markdown/HTML dialog (#24); earlier: Open Recent entries show the folder; added Copy File Path / Copy Folder Path (File menu, native menu) and a path tooltip on the title; earlier: Fixed #22 (Shift+Right-Click spell-check) and #23 (Open Document/Recent replacing the current window)
+Status: ready-to-commit
+Last: 1.5.0 release prepared: published @mdzip/editor + editor-ng 1.5.0, CHANGELOG [1.5.0] + compare links, 92+54 tests green — ready to commit, then npm version minor + push tag (CI builds the draft)
 
 ## Spell-check context menu (#22) and Open Document/Recent in a new window (#23)
 

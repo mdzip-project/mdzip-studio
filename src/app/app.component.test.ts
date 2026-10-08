@@ -1410,4 +1410,43 @@ describe('AppComponent', () => {
       (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
     }
   });
+
+  it('leaves the workspace bytes untouched on an in-place .mdz save, so the editor stays on the open document', async () => {
+    const originalBridge = (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio;
+    (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = {
+      saveDocument: vi.fn().mockResolvedValue({
+        canceled: false, filePath: 'C:/jobs/patio/Patio.mdz', name: 'Patio.mdz', format: 'mdz',
+      }),
+    };
+
+    try {
+      await (component as unknown as {
+        openDocumentBytes(
+          bytes: Uint8Array,
+          name: string,
+          filePath?: string,
+          readOnly?: boolean,
+          recordRecent?: boolean,
+        ): Promise<void>;
+      }).openDocumentBytes(
+        new TextEncoder().encode('# Patio\n'),
+        'Patio.md',
+        'C:/jobs/patio/Patio.md',
+        false,
+        false,
+      );
+      component.sourceFormat.set('mdz');
+      const before = component.workspaceBytes();
+
+      // Any `[bytes]` change makes <mdzip-workspace> reopen the archive, which
+      // resets the view to the entry point — so a save that keeps the same
+      // file name must not push new bytes in.
+      await component.saveArchive();
+
+      expect(component.currentArchive()?.name).toBe('Patio');
+      expect(component.workspaceBytes()).toBe(before);
+    } finally {
+      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
+    }
+  });
 });
