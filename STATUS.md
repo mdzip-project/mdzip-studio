@@ -1,5 +1,31 @@
-Status: ready-to-commit
-Last: 1.5.0 release prepared: published @mdzip/editor + editor-ng 1.5.0, CHANGELOG [1.5.0] + compare links, 92+54 tests green — ready to commit, then npm version minor + push tag (CI builds the draft)
+Status: awaiting-test
+Last: #27 nested-list indent fixed (styles.scss), CHANGELOG [1.5.1], winget/MDZip.Studio/1.5.1 drafted — test, then commit + npm version patch
+
+## 1.5.1 — #27 nested list indent (prepared 2026-10-08, not committed)
+
+- **Fix:** `src/styles.scss` restores the list padding/margins the global
+  `*` reset strips, scoped to `.mdzip-root .preview-content` (40px per level,
+  1em around top-level lists, none around nested; `dd` too). Measured in the
+  Angular UI in Chromium: top-level, nested and third-level items step 40px
+  each for bullets, numbered and task lists. `ng test` 92 + `test:electron`
+  54 green. Not yet seen in a packaged build or print.
+- **Found along the way:** task-list checkboxes are stripped by the editor
+  itself (also on the mdzip.org demo) — filed mdzip-editor#54, not a Studio bug.
+- **CHANGELOG:** `[1.5.1] - 2026-10-08` + compare links. Adjust the date if
+  it ships later.
+- **WinGet:** `winget/MDZip.Studio/1.5.1/` copied from 1.4.0 with version, URL
+  and release-notes URL bumped. `InstallerSha256` is a placeholder until CI
+  builds the installer.
+
+Remaining release steps (owner):
+1. Commit, then `npm version patch` (→ 1.5.1 + tag) and `git push --follow-tags`.
+2. CI draft → mandatory smoke test (RELEASE_CHECKLIST.md §4) → publish.
+3. Fill the hash: `(Get-FileHash MDZip-Studio-Setup-1.5.1.exe -Algorithm SHA256).Hash`,
+   `winget validate --manifest winget/MDZip.Studio/1.5.1`, then
+   `wingetcreate submit --prtitle "New version: MDZip.Studio version 1.5.1" winget/MDZip.Studio/1.5.1`.
+   Wait for 1.4.0 to finish publishing in WinGet first.
+
+Previous Last: 1.5.0 release prepared: published @mdzip/editor + editor-ng 1.5.0, CHANGELOG [1.5.0] + compare links, 92+54 tests green — ready to commit, then npm version minor + push tag (CI builds the draft)
 
 ## Spell-check context menu (#22) and Open Document/Recent in a new window (#23)
 

@@ -103,6 +103,27 @@ button {
   max-width: none !important;
 }
 
+/* Restore list indentation in the preview (#27). The `*` reset at the top of
+   this file strips the browser's default list padding and margins, and
+   @mdzip/editor's preview CSS relies on those defaults instead of setting its
+   own, so nested lists rendered flush with their parent. These are the
+   browser defaults the reset removed: 40px indent per level, 1em around a
+   top-level list and none around a nested one. */
+.mdzip-root .preview-content ul,
+.mdzip-root .preview-content ol {
+  padding-left: 40px;
+  margin: 1em 0;
+}
+
+.mdzip-root .preview-content li > ul,
+.mdzip-root .preview-content li > ol {
+  margin: 0;
+}
+
+.mdzip-root .preview-content dd {
+  margin-left: 40px;
+}
+
 /* Compact the editor chrome. @mdzip/editor uses two toolbar icon classes:
    - .toggle-icon for the main view/save/zoom/theme controls
    - .format-icon for markdown formatting controls

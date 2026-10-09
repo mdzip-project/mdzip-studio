@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-10-08
+
+### Fixed
+
+- **Nested lists weren't indented in the preview.** Second- and third-level
+  bullets and numbered items sat flush with their parent (they only changed
+  marker), and top-level bullets hung at the pane's edge. Lists now indent
+  per level as in VS Code and on GitHub (#27).
+
 ## [1.5.0] - 2026-10-07
 
 ### Added
@@ -387,7 +396,8 @@ release-pipeline work that was tagged as 1.3.22 and 1.3.23 but never published.
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/mdzip-project/mdzip-studio/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/mdzip-project/mdzip-studio/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.21...v1.4.0
 [1.3.21]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.20...v1.3.21
