@@ -1,5 +1,5 @@
-Status: awaiting-test
-Last: #27 nested-list indent fixed (styles.scss), CHANGELOG [1.5.1], winget/MDZip.Studio/1.5.1 drafted — test, then commit + npm version patch
+Status: ready-to-commit
+Last: 1.5.1 published (GitHub, Latest); winget/MDZip.Studio/1.5.1 hash filled + winget validate passed — commit, then wingetcreate submit
 
 ## 1.5.1 — #27 nested list indent (prepared 2026-10-08, not committed)
 

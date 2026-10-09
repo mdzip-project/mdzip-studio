@@ -6,14 +6,14 @@ Installers:
 - Architecture: x64
   Scope: user                     # default: app only, no Explorer previewer
   InstallerUrl: https://github.com/mdzip-project/mdzip-studio/releases/download/v1.5.1/MDZip-Studio-Setup-1.5.1.exe
-  InstallerSha256: <SHA256 of MDZip-Studio-Setup-1.5.1.exe>
+  InstallerSha256: D0F7F99A60DD015ADF142A0AF90EEE53D689372A5FE17D35440E185513FFBF3F
   InstallerSwitches:
     Silent: /S /currentuser
     SilentWithProgress: /S /currentuser
 - Architecture: x64
   Scope: machine                  # adds the Explorer preview handler (HKLM)
   InstallerUrl: https://github.com/mdzip-project/mdzip-studio/releases/download/v1.5.1/MDZip-Studio-Setup-1.5.1.exe
-  InstallerSha256: <SHA256 of MDZip-Studio-Setup-1.5.1.exe>
+  InstallerSha256: D0F7F99A60DD015ADF142A0AF90EEE53D689372A5FE17D35440E185513FFBF3F
   InstallerSwitches:
     Silent: /S /allusers /mdzipExplorerIntegration
     SilentWithProgress: /S /allusers /mdzipExplorerIntegration
