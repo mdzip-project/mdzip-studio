@@ -1,5 +1,5 @@
 Status: ready-to-commit
-Last: 1.5.1 published (GitHub, Latest); winget/MDZip.Studio/1.5.1 hash filled + winget validate passed — commit, then wingetcreate submit
+Last: Filed #28 (Insert AGENTS.md leaves .mdz not marked unsaved) — 1.5.1 still pending: commit, then wingetcreate submit
 
 ## 1.5.1 — #27 nested list indent (prepared 2026-10-08, not committed)
 
