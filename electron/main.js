@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeTheme, shell } = require('electron');
+const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeTheme, session, shell } = require('electron');
 const { runPathAction } = require('./lib/path-actions');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs/promises');
@@ -19,6 +19,7 @@ const {
   updateErrorDialog,
 } = require('./lib/updater');
 const { buildMenuTemplate } = require('./lib/menu');
+const { allowImageRequest, loadSettings, saveSettings } = require('./lib/remote-images');
 
 // ProgID the installer registers for .md (see build/installer.nsh). Used to
 // detect whether Studio is already the default Markdown editor.
@@ -366,6 +367,41 @@ function checkForUpdatesInBackground() {
   updateDialogParent = anyWindow();
   wireAutoUpdater();
   autoUpdater.checkForUpdates().catch(() => {});
+}
+
+// Studio settings that the main process needs (studio#13 will grow this):
+// userData/settings.json, read once and written when a setting changes.
+let studioSettings = null;
+const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
+function getSettings() {
+  if (!studioSettings) studioSettings = loadSettings(settingsFile());
+  return studioSettings;
+}
+
+// Remote images in documents (spec §9.2): https only, and only while
+// View > Load Remote Images is on. Filtered here rather than with a page CSP so
+// the UI's own resources (and the dev server) are untouched. data:/blob:/file:
+// images from the archive never make a network request, so they aren't affected.
+app.on('ready', () => {
+  const appOrigin = isDev ? 'http://localhost:4300' : null;
+  session.defaultSession.webRequest.onBeforeRequest(
+    { urls: ['http://*/*', 'https://*/*'] },
+    (details, callback) => {
+      if (details.resourceType !== 'image') return callback({});
+      callback({ cancel: !allowImageRequest(details.url, { remoteImages: getSettings().remoteImages, appOrigin }) });
+    },
+  );
+});
+
+function toggleRemoteImages() {
+  const settings = { ...getSettings(), remoteImages: !getSettings().remoteImages };
+  studioSettings = settings;
+  try {
+    saveSettings(settingsFile(), settings);
+  } catch (error) {
+    console.error('Could not save settings:', error);
+  }
+  refreshAllWindowMenus();
 }
 
 app.on('ready', () => {
@@ -1428,6 +1464,7 @@ function menuHandlersFor(win) {
     quit: () => app.quit(),
     reload: () => dispatchAppEvent(win, 'mdzip-studio:reload-document'),
     toggleLineNumbers: () => dispatchAppEvent(win, 'mdzip-studio:toggle-line-numbers'),
+    toggleRemoteImages: () => toggleRemoteImages(),
     toggleDevTools: () => win?.webContents.toggleDevTools(),
     setMdDefault: () => dispatchAppEvent(win, 'mdzip-studio:set-md-default'),
     showKnownIssues: () => dispatchAppEvent(win, 'mdzip-studio:show-known-issues'),
@@ -1449,6 +1486,7 @@ function refreshWindowMenu(win) {
     handlers: menuHandlersFor(win),
     updateAvailableVersion: availableUpdateInfo?.version ?? null,
     recentFiles: latestRecentFiles,
+    remoteImages: getSettings().remoteImages,
   });
   win.setMenu(Menu.buildFromTemplate(template));
 }
@@ -1478,6 +1516,7 @@ if (process.platform === 'darwin') {
       handlers: menuHandlersFor(null),
       updateAvailableVersion: availableUpdateInfo?.version ?? null,
       recentFiles: latestRecentFiles,
+      remoteImages: getSettings().remoteImages,
     });
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
   });

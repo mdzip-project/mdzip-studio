@@ -1,5 +1,5 @@
-Status: ready-to-commit
-Last: Filed #28 (Insert AGENTS.md leaves .mdz not marked unsaved) — 1.5.1 still pending: commit, then wingetcreate submit
+Status: awaiting-test
+Last: Branch feat/remote-images: View > Load Remote Images (on by default, saved in userData/settings.json), http: images always blocked — verified in dev; not committed (1.5.1 release still pending on main)
 
 ## 1.5.1 — #27 nested list indent (prepared 2026-10-08, not committed)
 

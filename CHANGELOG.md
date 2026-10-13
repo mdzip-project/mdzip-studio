@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **View → Load Remote Images** (on by default). Images from `https://` URLs in documents load only while it's checked; turning it off stops documents from telling remote servers they were opened. The choice is saved in `settings.json` in Studio's user-data folder (studio#13).
+
+### Fixed
+
+- **Plain `http://` images are no longer loaded** in documents, following MDZip spec 1.2.0 §9.2. Images inside an archive (and `data:` images) are unaffected.
+
 ## [1.5.1] - 2026-10-08
 
 ### Fixed
