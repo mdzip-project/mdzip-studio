@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeTheme, shell } = require('electron');
+const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeTheme, session, shell } = require('electron');
 const { runPathAction } = require('./lib/path-actions');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs/promises');
@@ -13,12 +13,29 @@ const { resolveInsidePackFolder } = require('./lib/pack-folder');
 const { buildJumpList, wantsNewWindow, startupActionFromArgs } = require('./lib/jump-list');
 const { statsDiffer } = require('./lib/file-watch');
 const {
+  PORTABLE_DOWNLOAD_URL,
+  portableUpdateAvailableDialog,
   updateAvailableDialog,
   updateNotAvailableDialog,
   updateDownloadedDialog,
   updateErrorDialog,
 } = require('./lib/updater');
 const { buildMenuTemplate } = require('./lib/menu');
+const { allowImageRequest, isValidViewSetting, loadSettings, saveSettings } = require('./lib/remote-images');
+
+// The portable .exe (electron-builder's "portable" target) unpacks itself to a
+// temp folder on each start and sets PORTABLE_EXECUTABLE_DIR to the folder the
+// .exe is in. It keeps its data (settings, recent files, window state) in a
+// folder beside the .exe, so a copy on a USB stick carries its settings, and
+// skips what only the installer sets up: file associations and "default
+// Markdown editor", the taskbar Jump List (its paths would point at the temp
+// copy), and installing updates. Set before anything reads userData,
+// including the single-instance lock below.
+const portableDir = process.platform === 'win32' ? process.env.PORTABLE_EXECUTABLE_DIR : undefined;
+const isPortable = Boolean(portableDir);
+if (isPortable) {
+  app.setPath('userData', path.join(portableDir, 'MDZip Studio Data'));
+}
 
 // ProgID the installer registers for .md (see build/installer.nsh). Used to
 // detect whether Studio is already the default Markdown editor.
@@ -309,6 +326,13 @@ function wireAutoUpdater() {
     refreshAllWindowMenus();
     // Background check: just the menu marker, no interruption.
     if (!updateCheckIsUserInitiated) return;
+    if (isPortable) {
+      showAppDialog(updateDialogParent, portableUpdateAvailableDialog(info, app.getVersion()))
+        .then(({ response }) => {
+          if (response === 0) void shell.openExternal(PORTABLE_DOWNLOAD_URL);
+        });
+      return;
+    }
     showAppDialog(updateDialogParent, updateAvailableDialog(info, app.getVersion()))
       .then(({ response }) => {
         if (response === 0) autoUpdater.downloadUpdate().catch(() => {});
@@ -366,6 +390,60 @@ function checkForUpdatesInBackground() {
   updateDialogParent = anyWindow();
   wireAutoUpdater();
   autoUpdater.checkForUpdates().catch(() => {});
+}
+
+// Studio settings that the main process needs (studio#13 will grow this):
+// userData/settings.json, read once and written when a setting changes.
+let studioSettings = null;
+const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
+function getSettings() {
+  if (!studioSettings) studioSettings = loadSettings(settingsFile());
+  return studioSettings;
+}
+
+// Remote images in documents (spec §9.2): https only, and only while
+// View > Load Remote Images is on. Filtered here rather than with a page CSP so
+// the UI's own resources (and the dev server) are untouched. data:/blob:/file:
+// images from the archive never make a network request, so they aren't affected.
+app.on('ready', () => {
+  const appOrigin = isDev ? 'http://localhost:4300' : null;
+  session.defaultSession.webRequest.onBeforeRequest(
+    { urls: ['http://*/*', 'https://*/*'] },
+    (details, callback) => {
+      if (details.resourceType !== 'image') return callback({});
+      callback({ cancel: !allowImageRequest(details.url, { remoteImages: getSettings().remoteImages, appOrigin }) });
+    },
+  );
+});
+
+// The editor's color scheme and page width choices: each window reads them
+// synchronously as it starts (preload), so its editor is created with them,
+// and saves a new choice here. Windows already open keep their own until
+// they're next opened.
+ipcMain.on('mdzip:get-view-settings', (event) => {
+  const { colorScheme, previewWidth } = getSettings();
+  event.returnValue = { colorScheme, previewWidth };
+});
+ipcMain.on('mdzip:set-view-setting', (_event, payload) => {
+  const { key, value } = payload ?? {};
+  if (!isValidViewSetting(key, value) || getSettings()[key] === value) return;
+  studioSettings = { ...getSettings(), [key]: value };
+  try {
+    saveSettings(settingsFile(), studioSettings);
+  } catch (error) {
+    console.error('Could not save settings:', error);
+  }
+});
+
+function toggleRemoteImages() {
+  const settings = { ...getSettings(), remoteImages: !getSettings().remoteImages };
+  studioSettings = settings;
+  try {
+    saveSettings(settingsFile(), settings);
+  } catch (error) {
+    console.error('Could not save settings:', error);
+  }
+  refreshAllWindowMenus();
 }
 
 app.on('ready', () => {
@@ -541,7 +619,7 @@ const FILE_ICONS_DIR = app.isPackaged
 
 // Mirror the renderer's recent-files list into the Windows taskbar Jump List.
 function updateJumpList(recentPaths) {
-  if (process.platform !== 'win32') return;
+  if (process.platform !== 'win32' || isPortable) return;
   try {
     app.setJumpList(
       buildJumpList(recentPaths, {
@@ -1045,7 +1123,8 @@ ipcMain.handle('mdzip:write-unpacked-folder', async (event, payload) => {
 });
 
 ipcMain.handle('mdzip:get-md-default-status', async () => {
-  if (process.platform !== 'win32') {
+  // The portable .exe registers no file types, so it can't be the default.
+  if (process.platform !== 'win32' || isPortable) {
     return { supported: false, isDefault: false };
   }
   const progId = await getMarkdownDefaultProgId();
@@ -1053,7 +1132,7 @@ ipcMain.handle('mdzip:get-md-default-status', async () => {
 });
 
 ipcMain.handle('mdzip:prompt-md-default', async (event) => {
-  if (process.platform !== 'win32') {
+  if (process.platform !== 'win32' || isPortable) {
     return { supported: false, isDefault: false };
   }
 
@@ -1428,6 +1507,7 @@ function menuHandlersFor(win) {
     quit: () => app.quit(),
     reload: () => dispatchAppEvent(win, 'mdzip-studio:reload-document'),
     toggleLineNumbers: () => dispatchAppEvent(win, 'mdzip-studio:toggle-line-numbers'),
+    toggleRemoteImages: () => toggleRemoteImages(),
     toggleDevTools: () => win?.webContents.toggleDevTools(),
     setMdDefault: () => dispatchAppEvent(win, 'mdzip-studio:set-md-default'),
     showKnownIssues: () => dispatchAppEvent(win, 'mdzip-studio:show-known-issues'),
@@ -1449,6 +1529,7 @@ function refreshWindowMenu(win) {
     handlers: menuHandlersFor(win),
     updateAvailableVersion: availableUpdateInfo?.version ?? null,
     recentFiles: latestRecentFiles,
+    remoteImages: getSettings().remoteImages,
   });
   win.setMenu(Menu.buildFromTemplate(template));
 }
@@ -1478,6 +1559,7 @@ if (process.platform === 'darwin') {
       handlers: menuHandlersFor(null),
       updateAvailableVersion: availableUpdateInfo?.version ?? null,
       recentFiles: latestRecentFiles,
+      remoteImages: getSettings().remoteImages,
     });
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
   });

@@ -1,5 +1,7 @@
 Status: ready-to-commit
-Last: Filed #28 (Insert AGENTS.md leaves .mdz not marked unsaved) — 1.5.1 still pending: commit, then wingetcreate submit
+Last: Release v1.6.0 committed and tagged locally (editor 2.2.0 + Mermaid 12, saved color scheme/page width, portable .exe, remote images, core-js 2.0.1); push, CI draft, smoke test and publish pending (Kyle)
+Before that: Branch chore/core-js-2: @mdzip/core-js + editor 2.0.1 (spec 1.2.0, case-sensitive paths); tests + prod build pass — please try it (npm start)
+Earlier: Filed #28 (Insert AGENTS.md leaves .mdz not marked unsaved) — 1.5.1 still pending: commit, then wingetcreate submit
 
 ## 1.5.1 — #27 nested list indent (prepared 2026-10-08, not committed)
 

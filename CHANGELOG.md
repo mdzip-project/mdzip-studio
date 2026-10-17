@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-16
+
+### Added
+- **Portable version**: `MDZip-Studio-<version>-portable.exe`, a single `.exe` that runs without installing and keeps its settings in a **MDZip Studio Data** folder beside it. It doesn't register file types or the Explorer preview, and **Check for Updates** offers the download page instead of installing.
+- **View → Load Remote Images** (on by default). Images from `https://` URLs in documents load only while it's checked; turning it off stops documents from telling remote servers they were opened. The choice is saved in `settings.json` in Studio's user-data folder (studio#13).
+- The editor toolbar's **color scheme** menu (Light, Dark, System) and new **page width** menu (Narrow, Default, Wide, Full Width). Studio remembers both choices in the same `settings.json`; each window opens with them. System, the default, follows Windows' light/dark setting live.
+- The preview's right-click menu has **Copy** and **Copy All** submenus by format (Plain Text, Formatted Text, HTML, and Markdown for the whole document) and **Select All**. Ctrl+A selects the rendered document; Ctrl+A, Ctrl+C copies all of it as formatted text with images embedded, for Word or email.
+
+### Fixed
+- **Plain `http://` images are no longer loaded** in documents, following MDZip spec 1.2.0 §9.2. Images inside an archive (and `data:` images) are unaffected.
+
+### Changed
+- Uses `@mdzip/editor` 2.2.0 and Mermaid 12: ER diagrams and flowcharts use the ELK layout (right-angle lines), switching light/dark keeps the preview in place, and footnotes and task list checkboxes render (see the editor's 2.1.0 and 2.2.0 changelogs). Studio's own code that pushed Windows' light/dark changes into the editor is gone: the editor follows Windows itself, and no longer overrides a Light or Dark choice when Windows changes.
+- Uses `@mdzip/core-js` 2.0.1 (MDZip spec 1.2.0). Saved archives always contain a `manifest.json` with `spec.version`, `title`, `entryPoint` and `mode`, and keep unknown manifest fields and untouched files byte-for-byte. Paths inside an archive are case-sensitive: `![](Images/Logo.png)` no longer shows `images/logo.png`, and the orphaned-image markers follow the same rule. Renaming a file to a different case of its own name now works.
+
 ## [1.5.1] - 2026-10-08
 
 ### Fixed
@@ -396,7 +411,8 @@ release-pipeline work that was tagged as 1.3.22 and 1.3.23 but never published.
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/mdzip-project/mdzip-studio/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/mdzip-project/mdzip-studio/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/mdzip-project/mdzip-studio/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.21...v1.4.0

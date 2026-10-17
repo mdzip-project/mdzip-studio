@@ -9,11 +9,12 @@ import { DialogModule } from 'primeng/dialog';
 import { TabsModule } from 'primeng/tabs';
 import { TreeModule } from 'primeng/tree';
 import { TreeNode } from 'primeng/api';
-import { MdzArchiveCore, MdzManifest, MdzPackagerCore } from '@mdzip/core-js';
+import { MdzArchiveCore, MdzManifest, MdzPackagerCore, nfc } from '@mdzip/core-js';
 import {
   computeDocumentStats,
   MDZIP_DEFAULT_READING_WORDS_PER_MINUTE,
-  MdzipColorScheme,
+  MdzipColorSchemePreference,
+  MdzipPreviewWidthChoice,
   MdzipControlPolicy,
   MdzipConversionAction,
   MdzipConversionContext,
@@ -348,6 +349,8 @@ interface ElectronBridge {
   printPreview?: (payload: { html: string; title: string }) => Promise<{ ok?: boolean; error?: string }>;
   getMarkdownDefaultStatus?: () => Promise<MarkdownDefaultStatus>;
   promptMarkdownDefault?: () => Promise<MarkdownDefaultStatus>;
+  viewSettings?: { colorScheme?: MdzipColorSchemePreference; previewWidth?: MdzipPreviewWidthChoice };
+  setViewSetting?: (key: 'colorScheme' | 'previewWidth', value: string) => void;
 }
 
 declare global {
@@ -596,6 +599,10 @@ interface ArchiveTreeData {
                 [onConversionRequested]="handleConversionRequested"
                 initialLayout="split"
                 [navigationButtonActive]="navigationActive()"
+                [initialColorScheme]="initialColorScheme"
+                [previewMaxWidth]="previewWidth()"
+                (colorSchemePreferenceChanged)="onColorSchemePreferenceChanged($event)"
+                (previewWidthChanged)="onPreviewWidthChanged($event)"
                 (changed)="onWorkspaceChanged($event)"
                 (selectionChanged)="onWorkspaceSelectionChanged($event)"
                 (manifestChanged)="onWorkspaceManifestChanged($event)"
@@ -1380,14 +1387,13 @@ export class AppComponent implements OnDestroy {
     this.openMenu.set(null);
   };
 
-  // The editor reads the OS color scheme once when its view is created but does
-  // not track later OS changes. Follow live OS changes here and push them into
-  // the open editor; the user can still flip the editor's own toggle afterward
-  // (until the next OS change). The app chrome follows the OS via CSS media query.
-  private readonly osColorSchemeQuery = window.matchMedia?.('(prefers-color-scheme: dark)');
-  private readonly handleOsColorSchemeChange = (event: MediaQueryListEvent) => {
-    this.ngZone.run(() => this.applyOsColorSchemeToEditor(event.matches ? 'dark' : 'light'));
-  };
+  // The editor's color scheme and page width, as last chosen in its toolbar
+  // menus (saved in Studio's settings file; see electron/main.js). The color
+  // scheme is read once: it's constructor-only in the editor, so changing the
+  // binding would recreate it. Its default, System, follows Windows live; the
+  // app chrome follows Windows via CSS media query.
+  readonly initialColorScheme: MdzipColorSchemePreference = window.mdzipStudio?.viewSettings?.colorScheme ?? 'system';
+  readonly previewWidth = signal<MdzipPreviewWidthChoice>(window.mdzipStudio?.viewSettings?.previewWidth ?? 'default');
 
   private readonly handleLinkMouseOver = (e: MouseEvent) => {
     if (!this.isDesktopShell()) return;
@@ -1485,7 +1491,6 @@ export class AppComponent implements OnDestroy {
     document.addEventListener('click', this.closeMenuOnDocumentClick);
     document.addEventListener('mouseover', this.handleLinkMouseOver);
     document.addEventListener('mouseout', this.handleLinkMouseOut);
-    this.osColorSchemeQuery?.addEventListener('change', this.handleOsColorSchemeChange);
     this.removeOpenDocumentRequestedListener = window.mdzipStudio?.onOpenDocumentRequested?.(
       () => this.ngZone.run(() => {
         if (this.pendingElectronOpen) {
@@ -1564,7 +1569,6 @@ export class AppComponent implements OnDestroy {
     document.removeEventListener('click', this.closeMenuOnDocumentClick);
     document.removeEventListener('mouseover', this.handleLinkMouseOver);
     document.removeEventListener('mouseout', this.handleLinkMouseOut);
-    this.osColorSchemeQuery?.removeEventListener('change', this.handleOsColorSchemeChange);
     this.removeOpenDocumentRequestedListener?.();
     this.removeDocumentChangedExternallyListener?.();
     this.removeWindowCloseRequestedListener?.();
@@ -3243,7 +3247,8 @@ export class AppComponent implements OnDestroy {
         : '';
       for (const ref of this.extractMarkdownImageRefs(text)) {
         const resolved = this.resolveArchiveAssetRef(ref, baseDir);
-        if (resolved) into.add(resolved.toLowerCase());
+        // Paths match case-sensitively after NFC (spec 1.2.0 §5.4.1), as in the editor.
+        if (resolved) into.add(nfc(resolved));
       }
     };
 
@@ -3258,13 +3263,13 @@ export class AppComponent implements OnDestroy {
     for (const entry of snapshot.content.paths) {
       if (entry.isImage || !/\.(?:md|markdown)$/i.test(entry.path)) continue;
       if (entry.path === snapshot.currentPath) continue;
-      let cached = this.orphanRefsByPath.get(entry.path.toLowerCase());
+      let cached = this.orphanRefsByPath.get(entry.path);
       if (!cached) {
         const bytes = await workspace.readPathBytes?.(entry.path);
         if (this.orphanCorrectionRun !== run) return; // superseded by a newer pass
         cached = new Set<string>();
         if (bytes) collectRefs(new TextDecoder().decode(bytes), entry.path, cached);
-        this.orphanRefsByPath.set(entry.path.toLowerCase(), cached);
+        this.orphanRefsByPath.set(entry.path, cached);
       }
       for (const ref of cached) refs.add(ref);
     }
@@ -3272,11 +3277,11 @@ export class AppComponent implements OnDestroy {
     const cover = (snapshot.workspace.manifest as { cover?: unknown } | null | undefined)?.cover;
     if (typeof cover === 'string') {
       const resolved = this.resolveArchiveAssetRef(cover, '');
-      if (resolved) refs.add(resolved.toLowerCase());
+      if (resolved) refs.add(nfc(resolved));
     }
 
     const nextOrphans = snapshot.content.paths
-      .filter((entry) => entry.isImage && !refs.has(entry.path.toLowerCase()))
+      .filter((entry) => entry.isImage && !refs.has(nfc(entry.path)))
       .map((entry) => entry.path);
 
     // Host-side bridge until @mdzip/core-js/@mdzip/editor include raw HTML
@@ -4093,15 +4098,13 @@ export class AppComponent implements OnDestroy {
     this.isDirty.set(snapshot.dirty);
   }
 
-  // The Angular workspace wrapper doesn't expose setColorScheme, but the
-  // underlying MdzipWorkspaceView (held privately) does. Reach it to retheme the
-  // live editor without recreating the view — recreation would drop unsaved
-  // edits, cursor, and scroll. No-ops safely if no document is open.
-  private applyOsColorSchemeToEditor(scheme: MdzipColorScheme): void {
-    const view = (this.workspaceEditor as unknown as {
-      view?: { setColorScheme?: (scheme: MdzipColorScheme) => void } | null;
-    } | undefined)?.view;
-    view?.setColorScheme?.(scheme);
+  onColorSchemePreferenceChanged(preference: MdzipColorSchemePreference): void {
+    window.mdzipStudio?.setViewSetting?.('colorScheme', preference);
+  }
+
+  onPreviewWidthChanged(width: MdzipPreviewWidthChoice): void {
+    this.previewWidth.set(width);
+    window.mdzipStudio?.setViewSetting?.('previewWidth', width);
   }
 
   onWorkspaceManifestChanged(event: MdzipDocumentChangeEvent): void {

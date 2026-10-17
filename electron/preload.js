@@ -10,6 +10,9 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
     v8: process.versions.v8,
   },
   isElectron: true,
+  // The editor's saved color scheme and page width, read once as the window starts.
+  viewSettings: ipcRenderer.sendSync('mdzip:get-view-settings'),
+  setViewSetting: (key, value) => ipcRenderer.send('mdzip:set-view-setting', { key, value }),
   openDocument: () => ipcRenderer.invoke('mdzip:open-document'),
   openDocumentByPath: (filePath) => ipcRenderer.invoke('mdzip:open-document-path', { filePath }),
   // Open in a new window instead of this one — used when this window already

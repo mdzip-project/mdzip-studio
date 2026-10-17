@@ -45,7 +45,10 @@ workflow fails the build if the tag and `package.json` version disagree.
 Artifacts that must end up on the release (electron-builder produces all of
 these — do not add or rename any by hand):
 
-- **(Windows)** `MDZip-Studio-Setup-<version>.exe`, `.exe.blockmap`, `latest.yml`
+- **(Windows)** `MDZip-Studio-Setup-<version>.exe`, `.exe.blockmap`, `latest.yml`,
+  and `MDZip-Studio-<version>-portable.exe` (the portable version, since 1.6.0;
+  smoke-test it too: it should start from any folder and create a
+  **MDZip Studio Data** folder beside itself)
 - **(Linux)** `MDZip-Studio-<version>.deb`, `MDZip-Studio-<version>.AppImage`,
   `latest-linux.yml` (the AppImage's blockmap is embedded — no separate file)
 

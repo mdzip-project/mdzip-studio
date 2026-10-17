@@ -14,6 +14,22 @@ function updateAvailableDialog(info, currentVersion) {
   };
 }
 
+// The portable .exe can't install an update (electron-updater installs the
+// setup build); it offers the download page instead.
+function portableUpdateAvailableDialog(info, currentVersion) {
+  return {
+    type: 'info',
+    buttons: ['Open Download Page', 'Not now'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Update available',
+    message: `MDZip Studio ${info.version} is available (you have ${currentVersion}).`,
+    detail: 'This is the portable version, which doesn’t update itself. Download the new portable .exe and replace this one; your settings stay in the "MDZip Studio Data" folder beside it.',
+  };
+}
+
+const PORTABLE_DOWNLOAD_URL = 'https://github.com/mdzip-project/mdzip-studio/releases/latest';
+
 function updateNotAvailableDialog(currentVersion) {
   return {
     type: 'info',
@@ -45,6 +61,8 @@ function updateErrorDialog(error) {
 }
 
 module.exports = {
+  PORTABLE_DOWNLOAD_URL,
+  portableUpdateAvailableDialog,
   updateAvailableDialog,
   updateNotAvailableDialog,
   updateDownloadedDialog,

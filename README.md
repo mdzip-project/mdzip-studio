@@ -4,7 +4,7 @@ Reference desktop application for the MDZip ecosystem.
 
 ## Installing (Windows)
 
-Download the latest `MDZip Studio Setup <version>.exe` from the
+Download the latest `MDZip-Studio-Setup-<version>.exe` from the
 [Releases page](https://github.com/mdzip-project/mdzip-studio/releases/latest)
 and run it.
 
@@ -17,6 +17,18 @@ and run it.
 Updates are **manual** — MDZip Studio never checks for or installs updates on
 its own. Use **Help → Check for Updates…**; if a newer release is found you
 confirm the download, then choose when to restart and install it.
+
+### Portable version (no install)
+
+`MDZip-Studio-<version>-portable.exe` on the same Releases page runs without
+installing: put it anywhere (a USB stick, a folder you can write to) and run it.
+It keeps its settings in a **MDZip Studio Data** folder beside the `.exe`, so
+the folder travels with it. It takes a few seconds longer to start, because it
+unpacks itself each time, and it skips what only the installer sets up:
+double-clicking `.mdz` files, the Explorer preview, making Studio the default
+Markdown editor, the taskbar recent-files list, and installing updates (**Check
+for Updates** offers the download page instead; replace the `.exe` with the new
+one).
 
 ## Getting Started
 

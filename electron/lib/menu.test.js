@@ -3,7 +3,7 @@ const { buildMenuTemplate, recentLabel, shortenFolder } = require('./menu');
 const HANDLER_NAMES = [
   'newDocument', 'newWindow', 'openDocument', 'openRecentPath', 'packFolder', 'unpackMdz',
   'save', 'saveAs', 'print', 'showInFolder', 'insertAgentsGuide', 'insertReadme', 'closeDocument', 'quit',
-  'reload', 'toggleLineNumbers', 'toggleDevTools',
+  'reload', 'toggleLineNumbers', 'toggleRemoteImages', 'toggleDevTools',
   'setMdDefault', 'showKnownIssues', 'showChangelog', 'checkForUpdates', 'showAbout',
   'exportDraft',
 ];
@@ -174,5 +174,24 @@ describe('recent file labels', () => {
 
   it('doubles ampersands so they are not read as menu mnemonics', () => {
     expect(recentLabel('C:\\Q&A\\notes & more.md')).toBe('notes && more.md — C:\\Q&&A');
+  });
+});
+
+describe('View > Load Remote Images', () => {
+  const item = (remoteImages) => {
+    const handlers = stubHandlers();
+    const template = buildMenuTemplate({ documentOpen: false, isDev: false, platform: 'win32', handlers, remoteImages });
+    return { handlers, entry: findMenu(template, 'View').submenu.find((i) => i.label === 'Load Remote Images') };
+  };
+
+  it('is a checkbox reflecting the setting, on by default', () => {
+    expect(item(undefined).entry).toMatchObject({ type: 'checkbox', checked: true });
+    expect(item(false).entry.checked).toBe(false);
+  });
+
+  it('calls the toggle handler', () => {
+    const { handlers, entry } = item(true);
+    entry.click();
+    expect(handlers.toggleRemoteImages).toHaveBeenCalled();
   });
 });

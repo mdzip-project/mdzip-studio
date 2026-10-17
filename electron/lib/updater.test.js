@@ -1,4 +1,6 @@
 const {
+  PORTABLE_DOWNLOAD_URL,
+  portableUpdateAvailableDialog,
   updateAvailableDialog,
   updateNotAvailableDialog,
   updateDownloadedDialog,
@@ -41,5 +43,18 @@ describe('updateErrorDialog', () => {
   it('falls back to a generic message when there is no error message', () => {
     const options = updateErrorDialog(undefined);
     expect(options.detail).toBe('Could not reach the update server. Check your connection and try again.');
+  });
+});
+
+describe('portableUpdateAvailableDialog', () => {
+  it('offers the download page, since the portable .exe cannot install an update', () => {
+    const options = portableUpdateAvailableDialog({ version: '2.0.0' }, '1.9.0');
+    expect(options.buttons).toEqual(['Open Download Page', 'Not now']);
+    expect(options.defaultId).toBe(0);
+    expect(options.cancelId).toBe(1);
+    expect(options.message).toContain('2.0.0');
+    expect(options.message).toContain('1.9.0');
+    expect(options.detail).toContain('MDZip Studio Data');
+    expect(PORTABLE_DOWNLOAD_URL).toBe('https://github.com/mdzip-project/mdzip-studio/releases/latest');
   });
 });
