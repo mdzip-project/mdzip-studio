@@ -599,6 +599,7 @@ interface ArchiveTreeData {
                 [onConversionRequested]="handleConversionRequested"
                 initialLayout="split"
                 [navigationButtonActive]="navigationActive()"
+                [progressiveTextRendering]="true"
                 [initialColorScheme]="initialColorScheme"
                 [previewMaxWidth]="previewWidth()"
                 (colorSchemePreferenceChanged)="onColorSchemePreferenceChanged($event)"

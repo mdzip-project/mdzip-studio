@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The preview's right-click menu has **Copy** and **Copy All** submenus by format (Plain Text, Formatted Text, HTML, and Markdown for the whole document) and **Select All**. Ctrl+A selects the rendered document; Ctrl+A, Ctrl+C copies all of it as formatted text with images embedded, for Word or email.
 
 ### Fixed
+- **Large documents show their images within seconds.** The preview now renders in chunks near what's on screen, as in VS Code. Before, Studio built the whole document first; on a large chat export (a Google Voice archive with about 15,000 images) the text appeared quickly but images stayed blank for minutes.
 - **Plain `http://` images are no longer loaded** in documents, following MDZip spec 1.2.0 §9.2. Images inside an archive (and `data:` images) are unaffected.
 
 ### Changed
