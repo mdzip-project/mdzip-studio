@@ -1,5 +1,5 @@
-Status: ready-to-commit
-Last: Release v1.6.0 committed and tagged locally (editor 2.2.0 + Mermaid 12, saved color scheme/page width, portable .exe, remote images, core-js 2.0.1); push, CI draft, smoke test and publish pending (Kyle)
+Status: idle
+Last: Released v1.6.0 (GitHub release published 2026-10-17; winget PR microsoft/winget-pkgs#454927 open): editor 2.2.0 + Mermaid 12, chunked preview, saved view settings, portable .exe, remote images
 Before that: Branch chore/core-js-2: @mdzip/core-js + editor 2.0.1 (spec 1.2.0, case-sensitive paths); tests + prod build pass — please try it (npm start)
 Earlier: Filed #28 (Insert AGENTS.md leaves .mdz not marked unsaved) — 1.5.1 still pending: commit, then wingetcreate submit
 
