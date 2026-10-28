@@ -1,0 +1,42 @@
+name: Publish to Chocolatey
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, e.g. v1.6.0
+        required: true
+
+jobs:
+  chocolatey:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fill in version and checksum
+        shell: pwsh
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          $version = $env:TAG.TrimStart('v')
+          $year = (Get-Date).Year
+          $url = "https://github.com/mdzip-project/mdzip-studio/releases/download/$env:TAG/MDZip-Studio-Setup-$version.exe"
+          Invoke-WebRequest $url -OutFile setup.exe
+          $hash = (Get-FileHash setup.exe -Algorithm SHA256).Hash.ToLower()
+          $dir = 'packaging/chocolatey'
+          (Get-Content "$dir/mdzip-studio.nuspec" -Raw) `
+            -replace '<version>[^<]+</version>', "<version>$version</version>" `
+            -replace '<copyright>[^<]+</copyright>', "<copyright>Copyright (c) $year MDZip Project</copyright>" `
+            -replace 'mdzip-studio@[^/]+/build/icon\.png', "mdzip-studio@$env:TAG/build/icon.png" `
+            -replace 'releases/tag/v[^<]+', "releases/tag/$env:TAG" |
+            Set-Content "$dir/mdzip-studio.nuspec" -NoNewline
+          (Get-Content "$dir/tools/chocolateyinstall.ps1" -Raw) `
+            -replace "url64bit\s*=\s*'[^']+'", "url64bit       = '$url'" `
+            -replace "checksum64\s*=\s*'[^']+'", "checksum64     = '$hash'" |
+            Set-Content "$dir/tools/chocolateyinstall.ps1" -NoNewline
+      - name: Pack and push
+        shell: pwsh
+        working-directory: packaging/chocolatey
+        run: |
+          choco pack
+          choco push (Get-ChildItem *.nupkg).Name --source https://push.chocolatey.org/ --api-key "${{ secrets.CHOCOLATEY_API_KEY }}"

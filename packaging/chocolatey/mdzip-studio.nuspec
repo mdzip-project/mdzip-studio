@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>mdzip-studio</id>
+    <version>1.6.0</version>
+    <title>MDZip Studio</title>
+    <authors>MDZip Project</authors>
+    <copyright>Copyright (c) 2026 MDZip Project</copyright>
+    <owners>MDZip Project</owners>
+    <projectUrl>https://mdzip.org/studio.html</projectUrl>
+    <iconUrl>https://cdn.jsdelivr.net/gh/mdzip-project/mdzip-studio@v1.6.0/build/icon.png</iconUrl>
+    <licenseUrl>https://github.com/mdzip-project/mdzip-studio/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <projectSourceUrl>https://github.com/mdzip-project/mdzip-studio</projectSourceUrl>
+    <packageSourceUrl>https://github.com/mdzip-project/mdzip-studio/tree/main/packaging/chocolatey</packageSourceUrl>
+    <docsUrl>https://mdzip.org/studio.html</docsUrl>
+    <bugTrackerUrl>https://github.com/mdzip-project/mdzip-studio/issues</bugTrackerUrl>
+    <releaseNotes>https://github.com/mdzip-project/mdzip-studio/releases/tag/v1.6.0</releaseNotes>
+    <tags>markdown markdown-editor mdz mdzip mermaid editor foss cross-platform</tags>
+    <summary>A Markdown editor that saves a document and its images together in one MDZip (.mdz) file.</summary>
+    <description><![CDATA[MDZip Studio is a free, open-source Markdown editor, and the reference app for the MDZip format. It saves a document together with its images in one file, so you can email, upload or archive it without the pictures going missing. Plain Markdown files open too.
+
+An MDZip (`.mdz`) file is a standard ZIP archive with a defined structure: your Markdown and its images, an entry point that tells every app which document to open, and images linked by their place in the archive.
+
+## Features
+
+- Source, split and preview views, with a live preview as you type
+- Pasted and dragged-in images are stored inside the document
+- Mermaid diagrams, highlighted code, footnotes and task lists
+- Print or save to PDF, or copy as formatted text for Word or email
+- `.mdz` files open with a double-click and preview in File Explorer
+
+## Package parameters
+
+- `/NoExplorerIntegration` - install the app only: no `.mdz` double-click, no File Explorer preview, and no .NET Desktop Runtime needed at run time.
+- `/MakeMdDefault` - also make MDZip Studio the default app for `.md` files. Windows keeps an existing `.md` default, so this only applies when there is none.
+
+Example: `choco install mdzip-studio --params "/NoExplorerIntegration"`
+
+The package installs for all users.
+]]></description>
+    <dependencies>
+      <dependency id="dotnet-10.0-desktopruntime" version="10.0.0" />
+    </dependencies>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>
