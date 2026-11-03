@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-11-02
+
+### Fixed
+- **Right-aligned text stays right-aligned in the preview.** Content inside an HTML wrapper such as `<div align="right">` could show on the left in a long document, because the preview drew it in chunks and split the wrapper. The "Me" messages in Google Voice exports, for example, now sit on the right (`@mdzip/editor` 2.4.1).
+- **Inserting `AGENTS.md` or `README.md` marks the document unsaved** (#28). The new file could be lost by closing the document or opening another one without a prompt. Converting a Markdown file to MDZip now marks it unsaved too, and an undo no longer clears the unsaved mark after either.
+- **File Explorer previews show SVG images**, such as the letter avatars in Google Voice exports. Scripts in a previewed document now run in an isolated frame.
+- **The installer no longer looks stuck while it sets up File Explorer previews** (#21). Its header says when it is downloading and installing the .NET 10 Desktop Runtime and that the install can take several minutes. It shows download progress in its details, retries a stalled download, and waits for another installation that's still running (for example one left behind by a closed installer) instead of failing. If the download or the install fails, it offers **Retry**.
+
+### Changed
+- Uses `@mdzip/editor` 2.4.1 and `@mdzip/core-js` 2.2.0. Links in SVG diagrams, such as draw.io `.drawio.svg` files, can be clicked, and a `.drawio` image shows a card that explains how to display the diagram instead of a broken image.
+
 ## [1.6.0] - 2026-10-16
 
 ### Added

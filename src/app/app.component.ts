@@ -1356,6 +1356,12 @@ export class AppComponent implements OnDestroy {
   private pendingConversionContext: MdzipConversionContext | null = null;
   // One-shot status held across the conversion's own re-render (see onWorkspaceChanged).
   private postConvertStatus: string | null = null;
+  // Set when Studio itself changes the archive and reloads it (Insert
+  // AGENTS.md/README.md, Convert to MDZip). The editor reports a freshly loaded
+  // archive as clean, and an undo can bring it back to that load, so its dirty
+  // flag alone would lose these unsaved changes (#28). Cleared on save, open
+  // and close.
+  private unsavedAfterReload = false;
   private readonly htmlTagHighlightAppliedEditors = new WeakSet<EditorView>();
   private pendingMarkdownImageDestination: 'same' | 'subfolder' | 'mdz' | null = null;
   private removeOpenDocumentRequestedListener: (() => void) | null = null;
@@ -1846,7 +1852,7 @@ export class AppComponent implements OnDestroy {
     this.headingAutoInserted.set(false);
     // The editor is torn down with the document, so it won't emit dirtyChanged;
     // clear the flag here.
-    this.isDirty.set(false);
+    this.markClean();
     this.sourceFormat.set('markdown');
     this.workspaceBytes.set(new TextEncoder().encode(''));
     this.currentMarkdownPath = null;
@@ -2659,7 +2665,7 @@ export class AppComponent implements OnDestroy {
     this.headingAutoInserted.set(false);
     // Clear any dirty state carried over from a previously open document; the
     // freshly loaded one is clean until the editor reports otherwise.
-    this.isDirty.set(false);
+    this.markClean();
     this.validationIssues.set([]);
     this.saveValidationState.set('unchecked');
     this.externalChangeBannerVisible.set(false);
@@ -2893,7 +2899,7 @@ export class AppComponent implements OnDestroy {
         this.recordSavedRecent(result.filePath, result.format === 'mdz', archive.name);
         this.updateArchivePath(result.filePath, result.name);
         this.workspaceEditor?.markPersisted();
-        this.isDirty.set(false);
+        this.markClean();
         this.readOnly.set(false);
         // A markdown source only becomes .mdz via Save As, so mdzBytes was built above.
         if (result.format === 'mdz' && mdzBytes) {
@@ -2920,7 +2926,7 @@ export class AppComponent implements OnDestroy {
 
       this.downloadBlob(this.bytesToBlob(bytes, 'text/markdown'), defaultName, 'text/markdown');
       this.workspaceEditor?.markPersisted();
-      this.isDirty.set(false);
+      this.markClean();
       this.headingAutoInserted.set(false);
       this.statusMessage.set(`Saved ${archive.name}.md`);
       return;
@@ -2968,7 +2974,7 @@ export class AppComponent implements OnDestroy {
         this.workspaceBytes.set(bytes);
       }
       this.workspaceEditor?.markPersisted();
-      this.isDirty.set(false);
+      this.markClean();
       this.readOnly.set(false);
       const savedTarget = result.filePath ?? result.name ?? archive.name;
       this.statusMessage.set(validation.valid ? `Saved ${savedTarget}` : `Saved ${savedTarget} with technical issues`);
@@ -2977,7 +2983,7 @@ export class AppComponent implements OnDestroy {
 
     this.downloadBlob(this.bytesToBlob(bytes, 'application/vnd.mdzip'), defaultName, 'application/vnd.mdzip');
     this.workspaceEditor?.markPersisted();
-    this.isDirty.set(false);
+    this.markClean();
     this.headingAutoInserted.set(false);
     this.statusMessage.set(validation.valid ? `Saved ${archive.name}.mdz` : `Saved ${archive.name}.mdz with technical issues`);
   }
@@ -3599,7 +3605,7 @@ export class AppComponent implements OnDestroy {
       this.sourceFormat.set('mdz');
       this.workspaceBytes.set(bytes);
       this.latestWorkspaceBytes.set(bytes);
-      this.isDirty.set(true);
+      this.markUnsavedAfterReload();
       return true;
     } catch (error) {
       this.statusMessage.set(`Could not convert to MDZip: ${error instanceof Error ? error.message : 'unknown error'}`);
@@ -3642,7 +3648,7 @@ export class AppComponent implements OnDestroy {
       this.isLoading.set(true);
       await this.yieldForPaint();
       await this.openDocumentBytes(nextBytes, name, archive.path, false, false, this.navigationActive());
-      this.isDirty.set(true);
+      this.markUnsavedAfterReload();
       this.statusMessage.set(
         converted
           ? `Converted to MDZip and added ${path} — not saved yet`
@@ -3833,6 +3839,7 @@ export class AppComponent implements OnDestroy {
         this.workspaceBytes.set(bytes);
         this.latestWorkspaceBytes.set(bytes);
         this.latestWorkspaceSnapshot.set(null);
+        this.markUnsavedAfterReload();
         // Reveal the file tree when the conversion was triggered by the nav button.
         if (revealNav) this.navigationActive.set(true);
       }
@@ -4041,7 +4048,7 @@ export class AppComponent implements OnDestroy {
     // snapshot, so keep isDirty in sync here too. (dirtyChanged only fires on
     // transitions, so on a clean load it wouldn't clear a stale value left over
     // from the previously open document — which showed a false unsaved dot.)
-    this.isDirty.set(event.snapshot.dirty);
+    this.isDirty.set(event.snapshot.dirty || this.unsavedAfterReload);
     this.saveValidationState.set('unchecked');
     // Preserve a just-set conversion message through the conversion's own
     // re-render (one-shot); normal "Viewing/Editing" resumes afterward.
@@ -4096,7 +4103,17 @@ export class AppComponent implements OnDestroy {
   // single source of truth for the Save button emphasis and the discard guard.
   onWorkspaceDirtyChanged(snapshot: MdzipWorkspaceSnapshot): void {
     this.scheduleStudioHtmlTagHighlight();
-    this.isDirty.set(snapshot.dirty);
+    this.isDirty.set(snapshot.dirty || this.unsavedAfterReload);
+  }
+
+  private markClean(): void {
+    this.unsavedAfterReload = false;
+    this.isDirty.set(false);
+  }
+
+  private markUnsavedAfterReload(): void {
+    this.unsavedAfterReload = true;
+    this.isDirty.set(true);
   }
 
   onColorSchemePreferenceChanged(preference: MdzipColorSchemePreference): void {

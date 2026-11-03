@@ -12,19 +12,19 @@ export const APP_LICENSE_NAME = "Apache-2.0";
 export const FIRST_PARTY_LIBRARIES: LibraryInfo[] = [
   {
     "name": "@mdzip/core-js",
-    "version": "1.5.0",
+    "version": "2.2.1",
     "license": "Apache-2.0",
     "homepage": "https://www.npmjs.com/package/@mdzip/core-js"
   },
   {
     "name": "@mdzip/editor",
-    "version": "1.5.0",
+    "version": "2.4.2",
     "license": "Apache-2.0",
     "homepage": "https://mdzip.org"
   },
   {
     "name": "@mdzip/editor-ng",
-    "version": "1.5.0",
+    "version": "2.4.2",
     "license": "Apache-2.0",
     "homepage": "https://mdzip.org"
   }
@@ -195,7 +195,7 @@ export const OPEN_SOURCE_LIBRARIES: LibraryInfo[] = [
   },
   {
     "name": "mermaid",
-    "version": "11.15.0",
+    "version": "12.2.0",
     "license": "MIT",
     "homepage": "https://www.npmjs.com/package/mermaid"
   },

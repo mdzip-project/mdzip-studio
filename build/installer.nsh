@@ -36,27 +36,71 @@ FunctionEnd
 
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW CustomizeInstallScopePage
 
+; Sets the installer's header (title and subtitle), which is always visible,
+; unlike the details list. MUI's own MUI_HEADER_TEXT isn't defined yet when
+; this file is included; 1037 and 1038 are the header's title and subtitle.
+!macro MdzipHeaderText TITLE SUBTITLE
+  Push $R0
+  GetDlgItem $R0 $HWNDPARENT 1037
+  SendMessage $R0 ${WM_SETTEXT} 0 "STR:${TITLE}"
+  GetDlgItem $R0 $HWNDPARENT 1038
+  SendMessage $R0 ${WM_SETTEXT} 0 "STR:${SUBTITLE}"
+  Pop $R0
+!macroend
+
+; File Explorer previews need the .NET 10 Desktop Runtime (a COM component
+; can't bundle its own runtime). The download (~60 MB) and install can take
+; minutes, so say so, show progress, and recover instead of hanging (#21):
+; mdzip-get-runtime.ps1 retries a stalled download, a busy Windows Installer
+; (1618, e.g. left over from a killed attempt) is waited out, and failures
+; offer Retry. /SD IDCANCEL keeps a silent install from waiting on a dialog.
 Function EnsureDotNetDesktopRuntime
   IfFileExists "$PROGRAMFILES64\dotnet\shared\Microsoft.WindowsDesktop.App\10.*\WindowsBase.dll" runtime_ready
 
-  DetailPrint "Downloading the Microsoft .NET 10 Desktop Runtime..."
+  Push $0
+  Push $1
+  SetDetailsView show
+  File "/oname=$PLUGINSDIR\mdzip-get-runtime.ps1" "${BUILD_RESOURCES_DIR}\mdzip-get-runtime.ps1"
+
+runtime_download:
+  ; The header is always visible; the details list may not be scrolled down.
+  !insertmacro MdzipHeaderText "Downloading the .NET 10 Desktop Runtime"     "File Explorer previews need it. The download is about 60 MB."
+  DetailPrint "Downloading the Microsoft .NET 10 Desktop Runtime for File Explorer previews (about 60 MB)..."
   nsExec::ExecToLog \
-    '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$ProgressPreference = $\'SilentlyContinue$\'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri $\'${MDZIP_RUNTIME_URL}$\' -OutFile $\'$PLUGINSDIR\windowsdesktop-runtime.exe$\'"'
+    '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\mdzip-get-runtime.ps1" -Uri "${MDZIP_RUNTIME_URL}" -OutFile "$PLUGINSDIR\windowsdesktop-runtime.exe"'
   Pop $0
   ${If} $0 != 0
-    MessageBox MB_ICONSTOP|MB_OK \
-      "MDZip Studio could not download the Microsoft .NET 10 Desktop Runtime.$\r$\n$\r$\nDownload result: $0"
+    MessageBox MB_ICONEXCLAMATION|MB_RETRYCANCEL \
+      "MDZip Studio couldn't download the Microsoft .NET 10 Desktop Runtime, which File Explorer previews need.$\r$\n$\r$\nCheck your internet connection, then choose Retry. Cancel stops the installation." \
+      /SD IDCANCEL IDRETRY runtime_download
     Abort
   ${EndIf}
 
-  DetailPrint "Installing the Microsoft .NET 10 Desktop Runtime..."
+  StrCpy $1 0
+runtime_install:
+  !insertmacro MdzipHeaderText "Installing the .NET 10 Desktop Runtime"     "This can take several minutes. Please don't close Setup."
+  DetailPrint "Installing the Microsoft .NET 10 Desktop Runtime. This can take several minutes..."
   ExecWait '"$PLUGINSDIR\windowsdesktop-runtime.exe" /install /quiet /norestart' $0
+  ; 1618: another installation is running. Wait up to 5 minutes for it.
+  ${If} $0 == 1618
+  ${AndIf} $1 < 10
+    IntOp $1 $1 + 1
+    !insertmacro MdzipHeaderText "Waiting for another installation"       "Another installation is still running. Trying again in 30 seconds ($1 of 10)..."
+    DetailPrint "Another installation is in progress. Trying again in 30 seconds ($1 of 10)..."
+    Sleep 30000
+    Goto runtime_install
+  ${EndIf}
   ${If} $0 != 0
   ${AndIf} $0 != 3010
-    MessageBox MB_ICONSTOP|MB_OK \
-      "The Microsoft .NET 10 Desktop Runtime installer failed with exit code $0."
+    MessageBox MB_ICONEXCLAMATION|MB_RETRYCANCEL \
+      "The Microsoft .NET 10 Desktop Runtime installer stopped with error $0.$\r$\n$\r$\nIf another installation or Windows Update is running, wait for it to finish, then choose Retry. Cancel stops the installation." \
+      /SD IDCANCEL IDRETRY runtime_install
     Abort
   ${EndIf}
+  DetailPrint "The Microsoft .NET 10 Desktop Runtime is installed."
+  !insertmacro MdzipHeaderText "$(MUI_TEXT_INSTALLING_TITLE)" "$(MUI_TEXT_INSTALLING_SUBTITLE)"
+  Pop $1
+  Pop $0
 
 runtime_ready:
 FunctionEnd

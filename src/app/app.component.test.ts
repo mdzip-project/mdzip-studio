@@ -705,6 +705,42 @@ describe('AppComponent', () => {
     expect(opened.listPaths()).toContain('AGENTS.md');
   });
 
+  it('keeps an inserted AGENTS.md unsaved through the editor reload, an undo and a new open (#28)', async () => {
+    const built = await MdzPackagerCore.buildArchive(
+      [{ path: 'index.md', text: '# Demo\n' }],
+      'demo',
+      { createIndex: false, mapFiles: false, filters: ['**/*'], title: 'Demo', mode: 'document', entryPoint: 'index.md' }
+    );
+    const bytes = new Uint8Array(await built.blob.arrayBuffer());
+    const app = component as unknown as {
+      openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly?: boolean, recordRecent?: boolean): Promise<void>;
+      insertTemplateFile(kind: 'agents' | 'readme'): Promise<void>;
+    };
+    await app.openDocumentBytes(bytes, 'demo.mdz', 'C:/docs/demo.mdz', false, false);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, text: async () => '# AGENTS\n' }));
+
+    await app.insertTemplateFile('agents');
+    // The editor loads the new bytes and reports them as clean.
+    component.onWorkspaceChanged({
+      bytes: component.workspaceBytes() ?? new Uint8Array(),
+      snapshot: { dirty: false, currentPath: 'index.md' },
+    } as never);
+    expect(component.isDirty()).toBe(true);
+
+    // Typing and then undoing brings the editor back to "clean".
+    component.onWorkspaceDirtyChanged({ dirty: true } as never);
+    component.onWorkspaceDirtyChanged({ dirty: false } as never);
+    expect(component.isDirty()).toBe(true);
+
+    // Opening another document starts clean again.
+    await app.openDocumentBytes(bytes, 'other.mdz', 'C:/docs/other.mdz', false, false);
+    component.onWorkspaceChanged({
+      bytes,
+      snapshot: { dirty: false, currentPath: 'index.md' },
+    } as never);
+    expect(component.isDirty()).toBe(false);
+  });
+
   it('prompts instead of silently overwriting an existing AGENTS.md, and replaces it on confirm', async () => {
     const built = await MdzPackagerCore.buildArchive(
       [
