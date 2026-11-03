@@ -37,6 +37,10 @@ jobs:
       - name: Pack and push
         shell: pwsh
         working-directory: packaging/chocolatey
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
           choco pack
-          choco push (Get-ChildItem *.nupkg).Name --source https://push.chocolatey.org/ --api-key "${{ secrets.CHOCOLATEY_API_KEY }}"
+          # Push this release's package only, not any other .nupkg in the folder.
+          $package = "mdzip-studio.$($env:TAG.TrimStart('v')).nupkg"
+          choco push $package --source https://push.chocolatey.org/ --api-key "${{ secrets.CHOCOLATEY_API_KEY }}"

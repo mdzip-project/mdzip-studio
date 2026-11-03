@@ -36,3 +36,6 @@ Thumbs.db
 
 # Local AI scratchpad notes (not for distribution)
 notes.mdz
+
+# Chocolatey packages built by choco pack (CI builds its own on release)
+packaging/chocolatey/*.nupkg
