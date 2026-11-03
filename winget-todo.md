@@ -93,6 +93,20 @@ wingetcreate submit --prtitle "New package: MDZip.Studio version <ver>" winget/M
 For later releases, copy the folder, bump `PackageVersion` / `InstallerUrl` /
 `InstallerSha256` (re-edit switches/dependency only if they change), validate, submit.
 
+## Which releases need a WinGet update
+
+Not every release. Installed copies update themselves from the published GitHub
+release (`electron-updater`), however they were installed, so a lagging WinGet
+version only means `winget install` starts a little old and `winget upgrade`
+doesn't offer the latest. (Chocolatey updates automatically on publish, so it
+never lags.)
+
+- **Update WinGet** for minor and major releases (1.7.0, 2.0.0), and for any
+  release that changes the installer: its switches, scopes, the .NET runtime
+  dependency, or what it installs.
+- **Skip it** for patch releases (1.6.1) that don't touch the installer's
+  interface.
+
 ## Notes
 - **Default `winget install MDZip.Studio` is user scope = app only.** The Explorer
   previewer needs `winget install MDZip.Studio --scope machine` (HKLM + elevation) —

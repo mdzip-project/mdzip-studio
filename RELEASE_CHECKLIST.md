@@ -93,6 +93,13 @@ failed a smoke test.
 - **Publish** the release (not a draft — `electron-updater` ignores drafts).
 - Record the released version for your own tracking.
 
+### Package managers
+
+- **Chocolatey** — automatic: publishing the release runs
+  `.github/workflows/chocolatey.yml`.
+- **WinGet** — manual, and only for minor/major releases or installer changes.
+  See "Which releases need a WinGet update" in [winget-todo.md](winget-todo.md).
+
 ## 6. Auto-updates
 
 `electron-updater` is wired into the main process. A quiet background check runs
