@@ -6,7 +6,7 @@
     <title>MDZip Studio</title>
     <authors>MDZip Project</authors>
     <copyright>Copyright (c) 2026 MDZip Project</copyright>
-    <owners>MDZip Project</owners>
+    <owners>mdzip-project</owners>
     <projectUrl>https://mdzip.org/studio.html</projectUrl>
     <iconUrl>https://cdn.jsdelivr.net/gh/mdzip-project/mdzip-studio@v1.6.0/build/icon.png</iconUrl>
     <licenseUrl>https://github.com/mdzip-project/mdzip-studio/blob/main/LICENSE</licenseUrl>
