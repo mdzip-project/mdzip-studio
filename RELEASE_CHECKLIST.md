@@ -84,6 +84,8 @@ failed a smoke test.
 
 ## 5. Publish
 
+- Title the release `MDZip Studio <version>` (electron-builder names the draft
+  just `<version>`): `gh release edit v<version> --title "MDZip Studio <version>"`.
 - Edit the draft release notes from the matching `CHANGELOG.md` section so the
   release and changelog agree.
 - Confirm the asset list is complete (step 3) and the asset names are
