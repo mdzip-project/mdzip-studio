@@ -12,7 +12,7 @@ jobs:
   chocolatey:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Fill in version and checksum
         shell: pwsh
         env:
