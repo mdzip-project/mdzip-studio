@@ -22,6 +22,24 @@ changes limited to this repository.
 - `design/UX.mdz` — UX designs and interaction specs (open in MDZip Studio to view)
 - `design/Enhancements.mdz` — proposed enhancements and feature ideas (open in MDZip Studio to view)
 
+## Platforms and releases
+
+MDZip Studio ships for **Windows** (NSIS installer + portable), **Linux**
+(`.deb` + AppImage) and **macOS** (universal `.dmg` + `.zip`). Tag pushes
+(`v*`) run `.github/workflows/release.yml`, which builds each platform on its
+own runner into one draft GitHub release; see `RELEASE_CHECKLIST.md`.
+
+- `electron-builder` only builds for the host OS. The macOS target can only be
+  built on a Mac (CI uses `macos-15`); Windows and Linux outputs must not change
+  when editing the `build.mac` section of `package.json`.
+- macOS builds are **ad-hoc signed and not notarized** (`mac.identity: "-"`);
+  there is no Apple Developer account. Document types (`.mdz` exported as
+  `org.mdzip.mdz`, `.md` imported as an alternate handler) live in
+  `mac.extendInfo`. Icons are `build/icon.icns` and `build/mdz.icns`, wrapped
+  from the PNGs by `scripts/make-icns.cjs`.
+- Windows-only features (Explorer preview handler, default Markdown editor
+  button, portable mode) are not available on macOS or Linux.
+
 ## Architecture
 
 ### Dependency Stack

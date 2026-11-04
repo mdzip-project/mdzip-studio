@@ -118,6 +118,111 @@
     },
     "portable": {
       "artifactName": "MDZip-Studio-${version}-portable.${ext}"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "artifactName": "MDZip-Studio-${version}-universal.${ext}",
+      "icon": "icon.icns",
+      "category": "public.app-category.productivity",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "notarize": false,
+      "extraResources": [
+        {
+          "from": "build/mdz.icns",
+          "to": "mdz.icns"
+        }
+      ],
+      "extendInfo": {
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "MDZip Document",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Owner",
+            "LSItemContentTypes": [
+              "org.mdzip.mdz"
+            ],
+            "CFBundleTypeIconFile": "mdz.icns"
+          },
+          {
+            "CFBundleTypeName": "Markdown Document",
+            "CFBundleTypeRole": "Editor",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": [
+              "net.daringfireball.markdown"
+            ]
+          }
+        ],
+        "UTExportedTypeDeclarations": [
+          {
+            "UTTypeIdentifier": "org.mdzip.mdz",
+            "UTTypeDescription": "MDZip Document",
+            "UTTypeConformsTo": [
+              "public.zip-archive",
+              "public.data"
+            ],
+            "UTTypeIconFile": "mdz.icns",
+            "UTTypeTagSpecification": {
+              "public.filename-extension": [
+                "mdz"
+              ],
+              "public.mime-type": [
+                "application/vnd.mdzip"
+              ]
+            }
+          }
+        ],
+        "UTImportedTypeDeclarations": [
+          {
+            "UTTypeIdentifier": "net.daringfireball.markdown",
+            "UTTypeDescription": "Markdown Document",
+            "UTTypeConformsTo": [
+              "public.plain-text"
+            ],
+            "UTTypeTagSpecification": {
+              "public.filename-extension": [
+                "md",
+                "markdown"
+              ],
+              "public.mime-type": [
+                "text/markdown"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      }
     }
   },
   "devDependencies": {

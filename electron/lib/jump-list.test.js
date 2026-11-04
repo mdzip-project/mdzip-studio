@@ -48,14 +48,14 @@ describe('startupActionFromArgs', () => {
 describe('jumpListIconFor', () => {
   it('picks md.ico for a .md path', () => {
     expect(jumpListIconFor('notes.md', 'C:\\icons')).toEqual({
-      iconPath: path.join('C:\\icons', 'md.ico'),
+      iconPath: path.win32.join('C:\\icons', 'md.ico'),
       iconIndex: 0,
     });
   });
 
   it('picks mdz.ico for anything else', () => {
     expect(jumpListIconFor('archive.mdz', 'C:\\icons')).toEqual({
-      iconPath: path.join('C:\\icons', 'mdz.ico'),
+      iconPath: path.win32.join('C:\\icons', 'mdz.ico'),
       iconIndex: 0,
     });
   });
@@ -73,7 +73,7 @@ describe('buildJumpList', () => {
         args: '--new-md',
         title: 'New Markdown Document',
         description: 'Create a new Markdown (.md) document in a new window',
-        iconPath: path.join('C:\\icons', 'md.ico'),
+        iconPath: path.win32.join('C:\\icons', 'md.ico'),
         iconIndex: 0,
       },
       {
@@ -82,7 +82,7 @@ describe('buildJumpList', () => {
         args: '--new-mdz',
         title: 'New MDZip Document',
         description: 'Create a new MDZip (.mdz) document in a new window',
-        iconPath: path.join('C:\\icons', 'mdz.ico'),
+        iconPath: path.win32.join('C:\\icons', 'mdz.ico'),
         iconIndex: 0,
       },
       {
@@ -91,7 +91,7 @@ describe('buildJumpList', () => {
         args: '--new-window',
         title: 'New Window',
         description: 'Open a new MDZip Studio window',
-        iconPath: path.join('C:\\icons', 'mdz.ico'),
+        iconPath: path.win32.join('C:\\icons', 'mdz.ico'),
         iconIndex: 0,
       },
     ],
@@ -116,7 +116,7 @@ describe('buildJumpList', () => {
             args: '"a.md"',
             title: 'a.md',
             description: 'a.md',
-            iconPath: path.join('C:\\icons', 'md.ico'),
+            iconPath: path.win32.join('C:\\icons', 'md.ico'),
             iconIndex: 0,
           },
           {
@@ -125,7 +125,7 @@ describe('buildJumpList', () => {
             args: '"c.mdz"',
             title: 'c.mdz',
             description: 'c.mdz',
-            iconPath: path.join('C:\\icons', 'mdz.ico'),
+            iconPath: path.win32.join('C:\\icons', 'mdz.ico'),
             iconIndex: 0,
           },
         ],
@@ -138,5 +138,19 @@ describe('buildJumpList', () => {
     const paths = Array.from({ length: 15 }, (_, i) => `file-${i}.md`);
     const result = buildJumpList(paths, opts);
     expect(result[0].items).toHaveLength(10);
+  });
+});
+
+describe('recentDocumentsForMac', () => {
+  const { recentDocumentsForMac } = require('./jump-list');
+  it('keeps .md/.mdz, caps at ten, and reverses so the newest is added last', () => {
+    expect(recentDocumentsForMac(['/a/1.mdz', '/a/x.txt', '/a/2.md', 7])).toEqual(['/a/2.md', '/a/1.mdz']);
+    const many = Array.from({ length: 12 }, (_, i) => `/a/${i}.md`);
+    const out = recentDocumentsForMac(many);
+    expect(out).toHaveLength(10);
+    expect(out.at(-1)).toBe('/a/0.md');
+  });
+  it('returns [] for non-arrays', () => {
+    expect(recentDocumentsForMac(undefined)).toEqual([]);
   });
 });

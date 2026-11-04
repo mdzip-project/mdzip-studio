@@ -437,15 +437,15 @@ interface ArchiveTreeData {
               <button class="menu-root-btn" type="button" [class.active]="openMenu() === 'file'">File</button>
               @if (openMenu() === 'file') {
                 <ul class="menu-popup" role="menu" (click)="$event.stopPropagation()">
-                  <li role="none"><button class="menu-item" type="button" role="menuitem" (click)="newArchive(); closeMenu()"><ng-icon name="lucidePlus" size="13" /><span>New</span><kbd>Ctrl+N</kbd></button></li>
-                  <li role="none"><button class="menu-item" type="button" role="menuitem" (click)="openFilePicker(); closeMenu()"><ng-icon name="lucideFolderOpen" size="13" /><span>Open...</span><kbd>Ctrl+O</kbd></button></li>
+                  <li role="none"><button class="menu-item" type="button" role="menuitem" (click)="newArchive(); closeMenu()"><ng-icon name="lucidePlus" size="13" /><span>New</span><kbd>{{ shortcut('N') }}</kbd></button></li>
+                  <li role="none"><button class="menu-item" type="button" role="menuitem" (click)="openFilePicker(); closeMenu()"><ng-icon name="lucideFolderOpen" size="13" /><span>Open...</span><kbd>{{ shortcut('O') }}</kbd></button></li>
                   <li role="none"><button class="menu-item" type="button" role="menuitem" (click)="packFolder(); closeMenu()"><ng-icon name="lucideFolder" size="13" /><span>Pack Folder to .mdz...</span></button></li>
                   <li class="menu-sep" role="separator"></li>
                   @if (isDesktopShell()) {
-                    <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="saveArchive(); closeMenu()"><ng-icon name="lucideSave" size="13" /><span>Save</span><kbd>Ctrl+S</kbd></button></li>
-                    <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="saveArchive(true); closeMenu()"><ng-icon name="lucideSaveAll" size="13" /><span>Save As...</span><kbd>Ctrl+Shift+S</kbd></button></li>
+                    <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="saveArchive(); closeMenu()"><ng-icon name="lucideSave" size="13" /><span>Save</span><kbd>{{ shortcut('S') }}</kbd></button></li>
+                    <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="saveArchive(true); closeMenu()"><ng-icon name="lucideSaveAll" size="13" /><span>Save As...</span><kbd>{{ shortcut('S', true) }}</kbd></button></li>
                   } @else {
-                    <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="saveArchive(); closeMenu()"><ng-icon name="lucideDownload" size="13" /><span>Download</span><kbd>Ctrl+S</kbd></button></li>
+                    <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="saveArchive(); closeMenu()"><ng-icon name="lucideDownload" size="13" /><span>Download</span><kbd>{{ shortcut('S') }}</kbd></button></li>
                   }
                   @if (isDesktopShell()) {
                     <li class="menu-sep" role="separator"></li>
@@ -457,7 +457,7 @@ interface ArchiveTreeData {
                   <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!canInsertTemplateFile()" (click)="insertAgentsGuide(); closeMenu()"><ng-icon name="lucideBot" size="13" /><span>Insert AGENTS.md</span></button></li>
                   <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!canInsertTemplateFile()" (click)="insertReadme(); closeMenu()"><ng-icon name="lucideFileText" size="13" /><span>Insert README.md</span></button></li>
                   <li class="menu-sep" role="separator"></li>
-                  <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="closeDocument(); closeMenu()"><ng-icon name="lucideX" size="13" /><span>Close Document</span><kbd>Ctrl+W</kbd></button></li>
+                  <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="closeDocument(); closeMenu()"><ng-icon name="lucideX" size="13" /><span>Close Document</span><kbd>{{ shortcut('W') }}</kbd></button></li>
                   <li class="menu-sep" role="separator"></li>
                   <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="exportDraft(); closeMenu()"><span></span><span>Export Draft...</span></button></li>
                 </ul>
@@ -502,12 +502,12 @@ interface ArchiveTreeData {
         </div>
         }
         <div class="toolbar">
-          <button class="tb-btn" type="button" title="New (Ctrl+N)" (click)="newArchive()"><ng-icon name="lucidePlus" size="15" /></button>
-          <button class="tb-btn" type="button" title="Open (Ctrl+O)" (click)="openFilePicker()"><ng-icon name="lucideFolderOpen" size="15" /></button>
+          <button class="tb-btn" type="button" [title]="'New (' + shortcut('N') + ')'" (click)="newArchive()"><ng-icon name="lucidePlus" size="15" /></button>
+          <button class="tb-btn" type="button" [title]="'Open (' + shortcut('O') + ')'" (click)="openFilePicker()"><ng-icon name="lucideFolderOpen" size="15" /></button>
           @if (isDesktopShell()) {
-            <button class="tb-btn" type="button" [title]="readOnly() ? readOnlyHint : (needsSave() ? 'Save — you have unsaved changes (Ctrl+S)' : 'Saved (Ctrl+S)')" [disabled]="!currentArchive() || readOnly() || !needsSave()" (click)="saveArchive()"><ng-icon name="lucideSave" size="15" />@if (needsSave()) {<span class="tb-dot"></span>}</button>
+            <button class="tb-btn" type="button" [title]="readOnly() ? readOnlyHint : (needsSave() ? 'Save — you have unsaved changes (' + shortcut('S') + ')' : 'Saved (' + shortcut('S') + ')')" [disabled]="!currentArchive() || readOnly() || !needsSave()" (click)="saveArchive()"><ng-icon name="lucideSave" size="15" />@if (needsSave()) {<span class="tb-dot"></span>}</button>
           } @else {
-            <button class="tb-btn" type="button" [title]="needsSave() ? 'Download — you have unsaved changes (Ctrl+S)' : 'Saved (Ctrl+S)'" [disabled]="!currentArchive() || !needsSave()" (click)="saveArchive()"><ng-icon name="lucideDownload" size="15" />@if (needsSave()) {<span class="tb-dot"></span>}</button>
+            <button class="tb-btn" type="button" [title]="needsSave() ? 'Download — you have unsaved changes (' + shortcut('S') + ')' : 'Saved (' + shortcut('S') + ')'" [disabled]="!currentArchive() || !needsSave()" (click)="saveArchive()"><ng-icon name="lucideDownload" size="15" />@if (needsSave()) {<span class="tb-dot"></span>}</button>
           }
         </div>
         <input #fileInput class="file-input" type="file" accept=".md,.mdz,.json,text/markdown,application/json" (change)="openArchive($event)" />
@@ -1103,6 +1103,14 @@ export class AppComponent implements OnDestroy {
   // True when the opened file carries the OS read-only attribute. The app does
   // not clear it; the user must do so in the OS and reopen to edit/save.
   readonly readOnly = signal(false);
+  // Shortcut labels for tooltips and menus: ⌘/⇧ on macOS, Ctrl+/Shift+ elsewhere.
+  isMac(): boolean {
+    const platform = window.mdzipStudio?.platform;
+    return platform ? platform === 'darwin' : /^Mac/i.test(navigator.platform ?? '');
+  }
+  shortcut(key: string, shift = false): string {
+    return this.isMac() ? `${shift ? '⇧' : ''}⌘${key}` : `Ctrl+${shift ? 'Shift+' : ''}${key}`;
+  }
   readonly readOnlyHint = 'This file is read-only. Use "Save As" to save your changes to a new file, or clear the read-only attribute in your operating system and reopen it to edit in place.';
   readonly documentTitleDisplay = computed(() => {
     const name = this.documentTitle();
@@ -1435,8 +1443,9 @@ export class AppComponent implements OnDestroy {
   private readonly handlePrintCommand = () => void this.printDocument();
 
   private readonly handleKeyDown = (e: KeyboardEvent): void => {
-    const ctrl = e.ctrlKey || e.metaKey;
-    if (!ctrl) return;
+    // Cmd on macOS, Ctrl elsewhere.
+    const modifier = this.isMac() ? e.metaKey : e.ctrlKey;
+    if (!modifier) return;
     switch (e.key) {
       case 'n':
         e.preventDefault();

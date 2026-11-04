@@ -30,6 +30,56 @@ Markdown editor, the taskbar recent-files list, and installing updates (**Check
 for Updates** offers the download page instead; replace the `.exe` with the new
 one).
 
+## Installing (macOS)
+
+Download `MDZip-Studio-<version>-universal.dmg` from the
+[Releases page](https://github.com/mdzip-project/mdzip-studio/releases/latest),
+open it, and drag **MDZip Studio** onto the **Applications** folder. One build
+runs natively on both Apple Silicon and Intel Macs (macOS 12 or later).
+
+> **First launch: "Apple could not verify…"** — MDZip Studio is not signed or
+> notarized by Apple, because the project does not pay for an Apple Developer
+> account. macOS therefore blocks the first launch. This is expected and does
+> not indicate a problem with the file. To proceed:
+>
+> 1. Open **MDZip Studio** from Applications. When macOS says it could not
+>    verify the app, click **Done**.
+> 2. Open **System Settings → Privacy & Security** and scroll down to the
+>    message about "MDZip Studio" being blocked.
+> 3. Click **Open Anyway**, then confirm (Touch ID or your password).
+>
+> You only do this once; later launches open normally. If you prefer
+> Terminal, this clears the quarantine flag instead:
+>
+> ```bash
+> xattr -dr com.apple.quarantine "/Applications/MDZip Studio.app"
+> ```
+
+### Homebrew
+
+```bash
+brew install --cask mdzip-project/tap/mdzip-studio
+brew upgrade --cask mdzip-studio
+```
+
+The same first-launch steps apply, since the app is the same unsigned build.
+
+### Updates on Mac
+
+Updates are manual, as on Windows. Use **MDZip Studio → Check for Updates…**
+(or **Help → Check for Updates…**); if a newer release is found, Studio
+downloads the new `.dmg` for you to open and drag to Applications over the old
+copy. Homebrew users can run `brew upgrade --cask mdzip-studio` instead.
+
+### What is different on Mac
+
+The Windows-only extras are not available on Mac: the Explorer preview pane
+(there is no Quick Look preview for `.mdz` yet) and the **Make default
+Markdown editor** button in Settings. `.mdz` files open in Studio by
+double-click, and Studio is offered under **Open With** for `.md` files;
+to make it the default for `.md`, use Finder's **Get Info → Open with →
+Change All…**.
+
 ## Getting Started
 
 ### Prerequisites

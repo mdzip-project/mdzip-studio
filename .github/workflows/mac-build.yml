@@ -1,0 +1,48 @@
+name: Mac build (test)
+
+# Builds and verifies the macOS app without publishing, so the mac target can be
+# tested without cutting a release. Artifacts are attached to the run.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - macOS
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build (no publish)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm run prebuild
+          npm run build:angular
+          npm run build:electron -- --mac --universal --publish never
+
+      - name: Verify universal binary and ad-hoc signature
+        run: bash scripts/verify-mac-build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MDZip-Studio-mac
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          retention-days: 14

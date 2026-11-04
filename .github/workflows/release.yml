@@ -95,3 +95,36 @@ jobs:
           npm run prebuild
           npm run build:angular
           npm run build:electron -- --linux --publish always
+
+  # Runs after linux (not just windows) so the three jobs never race to create
+  # the draft release. Needs neither dotnet nor mdzip-win-prev: build:preview-handler
+  # auto-skips off Windows.
+  macos:
+    runs-on: macos-15
+    needs: linux
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build + publish (draft)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No Apple Developer account: the app is ad-hoc signed (build.mac.identity "-").
+          # Never let electron-builder go looking for a certificate in the keychain.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm run prebuild
+          npm run build:angular
+          npm run build:electron -- --mac --universal --publish always
+
+      - name: Verify universal binary and ad-hoc signature
+        run: bash scripts/verify-mac-build.sh

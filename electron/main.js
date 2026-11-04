@@ -1,8 +1,8 @@
-const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeTheme, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeTheme, net, session, shell } = require('electron');
 const { runPathAction } = require('./lib/path-actions');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs/promises');
-const { constants: fsConstants, readdirSync, unlinkSync, watch: watchFs } = require('fs');
+const { constants: fsConstants, createWriteStream, existsSync, readdirSync, unlinkSync, watch: watchFs } = require('fs');
 const { execFile } = require('child_process');
 const os = require('os');
 const path = require('path');
@@ -10,17 +10,27 @@ const { pathToFileURL } = require('url');
 const { documentPathFromArgs } = require('./lib/document-path');
 const { saveDialogFilters } = require('./lib/save-dialog');
 const { resolveInsidePackFolder } = require('./lib/pack-folder');
-const { buildJumpList, wantsNewWindow, startupActionFromArgs } = require('./lib/jump-list');
+const { buildJumpList, wantsNewWindow, startupActionFromArgs, recentDocumentsForMac } = require('./lib/jump-list');
+const { createOpenFileQueue } = require('./lib/open-file-queue');
 const { statsDiffer } = require('./lib/file-watch');
 const {
   PORTABLE_DOWNLOAD_URL,
+  HOMEBREW_UPGRADE_COMMAND,
+  MAC_RELEASE_API_URL,
+  isHomebrewInstall,
+  macDownloadPath,
+  macUpdateAvailableDialog,
+  macUpdateDownloadedDialog,
+  macUpdateErrorDialog,
+  macUpdateFromRelease,
+  homebrewUpdateDialog,
   portableUpdateAvailableDialog,
   updateAvailableDialog,
   updateNotAvailableDialog,
   updateDownloadedDialog,
   updateErrorDialog,
 } = require('./lib/updater');
-const { buildMenuTemplate } = require('./lib/menu');
+const { buildMenuTemplate, buildPreviewMenuTemplate, buildDockMenuTemplate } = require('./lib/menu');
 const { allowImageRequest, isValidViewSetting, loadSettings, saveSettings } = require('./lib/remote-images');
 
 // The portable .exe (electron-builder's "portable" target) unpacks itself to a
@@ -54,6 +64,18 @@ const windowIconForTheme = () => {
   if (process.platform !== 'win32') return PNG_WINDOW_ICON;
   return nativeTheme.shouldUseDarkColors ? DARK_WINDOW_ICON : LIGHT_WINDOW_ICON;
 };
+
+// macOS delivers Finder double-clicks, Dock drops and "Open With" through the
+// 'open-file' event, which can fire before the app is ready (a launch by
+// double-click). Queue them until the first window can open documents.
+// Registered at module load, before 'ready', as macOS requires.
+const openFileQueue = createOpenFileQueue();
+if (process.platform === 'darwin') {
+  app.on('open-file', (event, filePath) => {
+    event.preventDefault();
+    openFileQueue.push(filePath);
+  });
+}
 
 // Multi-window: each open BrowserWindow gets its own document/menu state —
 // there is no single "the" window once more than one can be open at once.
@@ -170,9 +192,29 @@ function openOrFocus(filePath) {
     focusWindow(existing);
     return;
   }
+  // macOS (Finder): a window that's still empty (e.g. the one launch created)
+  // takes the file instead of leaving a blank window behind a new one.
+  if (process.platform === 'darwin') {
+    const emptyWin = emptyWindow();
+    if (emptyWin) {
+      windowState(emptyWin).pendingOpenPath = filePath;
+      emptyWin.webContents.send('mdzip:open-document-requested');
+      focusWindow(emptyWin);
+      return;
+    }
+  }
   // Don't focus a brand-new window here — it's created hidden and shows
   // itself via 'ready-to-show' once loaded, avoiding a blank-window flash.
   createWindow({ pendingOpenPath: filePath });
+}
+
+// A window with no document, nothing queued for it and no startup action.
+function emptyWindow() {
+  for (const [win, state] of windows) {
+    if (win.isDestroyed()) continue;
+    if (!state.documentOpen && !state.documentPath && !state.pendingOpenPath && !state.startupAction) return win;
+  }
+  return null;
 }
 
 function showAppDialog(win, options) {
@@ -366,6 +408,116 @@ function wireAutoUpdater() {
   });
 }
 
+// --- macOS updates ---
+// Builds are ad-hoc signed, so electron-updater can't install in place (and we
+// never call downloadUpdate/quitAndInstall there). The check reads the GitHub
+// latest-release JSON directly (not latest-mac.yml): one request gives the
+// version, the .dmg asset and the release page. The user downloads the .dmg and
+// drags the app over the old one; Homebrew installs get the upgrade command.
+let macDownloadRunning = false;
+
+async function fetchMacUpdateInfo() {
+  const response = await net.fetch(MAC_RELEASE_API_URL, {
+    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'MDZip-Studio' },
+  });
+  if (!response.ok) throw new Error(`GitHub returned ${response.status}.`);
+  return macUpdateFromRelease(await response.json(), app.getVersion());
+}
+
+async function checkForUpdatesMac(userInitiated) {
+  updateCheckIsUserInitiated = userInitiated;
+  const parent = updateDialogParent;
+  let found;
+  try {
+    found = await fetchMacUpdateInfo();
+  } catch (error) {
+    if (userInitiated) showAppDialog(parent, updateErrorDialog(error));
+    return;
+  }
+  if (!found?.newer) {
+    if (availableUpdateInfo) {
+      availableUpdateInfo = null;
+      refreshAllWindowMenus();
+    }
+    if (userInitiated) showAppDialog(parent, updateNotAvailableDialog(app.getVersion()));
+    return;
+  }
+  availableUpdateInfo = { version: found.version };
+  refreshAllWindowMenus();
+  if (!userInitiated) return; // background: just the menu marker
+  const info = { version: found.version };
+  if (isHomebrewInstall(existsSync)) {
+    const { response } = await showAppDialog(parent, homebrewUpdateDialog(info, app.getVersion()));
+    if (response === 0) clipboard.writeText(HOMEBREW_UPGRADE_COMMAND);
+    else if (response === 1) void shell.openExternal(found.releaseUrl);
+    return;
+  }
+  const { response } = await showAppDialog(parent, macUpdateAvailableDialog(info, app.getVersion()));
+  if (response === 0) void downloadMacUpdate(found, parent);
+  else if (response === 1) void shell.openExternal(found.releaseUrl);
+}
+
+// Download the release .dmg to ~/Downloads, showing progress on the Dock icon
+// (setProgressBar). There is no cancel button; quitting the app abandons it and
+// the half-written ".part" file is removed on the next failure only.
+// UNVERIFIED on a Mac: net.fetch streaming + redirects from GitHub, Dock progress,
+// whether the saved .dmg gets the quarantine flag, and quit-after-openPath.
+async function downloadMacUpdate(found, parent) {
+  if (macDownloadRunning) return;
+  const dmgPath = found.asset ? macDownloadPath(app.getPath('downloads'), found.asset.name) : null;
+  if (!dmgPath) {
+    // No .dmg on the release (or an odd name): send them to the release page.
+    const { response } = await showAppDialog(parent, macUpdateErrorDialog(new Error('This release has no installer to download.')));
+    if (response === 0) void shell.openExternal(found.releaseUrl);
+    return;
+  }
+  macDownloadRunning = true;
+  const partPath = `${dmgPath}.part`;
+  const target = parent && !parent.isDestroyed() ? parent : anyWindow();
+  const setProgress = (value) => { if (target && !target.isDestroyed()) target.setProgressBar(value); };
+  try {
+    setProgress(2); // indeterminate until the response says how big it is
+    const response = await net.fetch(found.asset.url);
+    if (!response.ok || !response.body) throw new Error(`The download server returned ${response.status}.`);
+    const total = Number(response.headers.get('content-length')) || 0;
+    const out = createWriteStream(partPath);
+    let received = 0;
+    const reader = response.body.getReader();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        received += value.length;
+        if (!out.write(value)) await new Promise((resolve) => out.once('drain', resolve));
+        if (total) setProgress(received / total);
+      }
+      await new Promise((resolve, reject) => { out.once('error', reject); out.end(resolve); });
+    } catch (error) {
+      out.destroy();
+      throw error;
+    }
+    await fs.rename(partPath, dmgPath);
+  } catch (error) {
+    setProgress(-1);
+    macDownloadRunning = false;
+    fs.unlink(partPath).catch(() => {});
+    const { response } = await showAppDialog(parent, macUpdateErrorDialog(error));
+    if (response === 0) void shell.openExternal(found.releaseUrl);
+    return;
+  }
+  setProgress(-1);
+  macDownloadRunning = false;
+  const { response } = await showAppDialog(parent, macUpdateDownloadedDialog({ version: found.version }));
+  if (response === 0) {
+    // Open the .dmg first, then quit through the normal path so unsaved-changes
+    // prompts still run (a Cancel there simply leaves the app open).
+    await shell.openPath(dmgPath);
+    app.quit();
+  } else if (response === 1) {
+    shell.showItemInFolder(dmgPath);
+  }
+}
+
 function checkForUpdates(win) {
   updateDialogParent = win ?? null;
   updateCheckIsUserInitiated = true;
@@ -378,6 +530,10 @@ function checkForUpdates(win) {
     });
     return;
   }
+  if (process.platform === 'darwin') {
+    void checkForUpdatesMac(true);
+    return;
+  }
   wireAutoUpdater();
   // The 'error' event handles user-facing messaging; swallow the rejection so
   // an unreachable feed never produces an unhandled promise rejection.
@@ -388,6 +544,10 @@ function checkForUpdatesInBackground() {
   if (!app.isPackaged) return;
   updateCheckIsUserInitiated = false;
   updateDialogParent = anyWindow();
+  if (process.platform === 'darwin') {
+    void checkForUpdatesMac(false);
+    return;
+  }
   wireAutoUpdater();
   autoUpdater.checkForUpdates().catch(() => {});
 }
@@ -619,6 +779,13 @@ const FILE_ICONS_DIR = app.isPackaged
 
 // Mirror the renderer's recent-files list into the Windows taskbar Jump List.
 function updateJumpList(recentPaths) {
+  if (process.platform === 'darwin') {
+    // Dock icon / Apple menu recents. Rebuild rather than append: clear, then
+    // add oldest-first (this also handles the renderer's Clear button).
+    app.clearRecentDocuments();
+    for (const p of recentDocumentsForMac(recentPaths)) app.addRecentDocument(p);
+    return;
+  }
   if (process.platform !== 'win32' || isPortable) return;
   try {
     app.setJumpList(
@@ -671,6 +838,7 @@ function createWindow({ pendingOpenPath = null, startupAction = null } = {}) {
     externalChangeNotifiedFor: null,
     fileWatcher: null,
     externalChangeTimer: null,
+    afterReady: [],
     // Set once the renderer has approved this window closing (X button or the
     // quit flow), so the 'close' handler below lets the next attempt through.
     closeApproved: false,
@@ -692,6 +860,8 @@ function createWindow({ pendingOpenPath = null, startupAction = null } = {}) {
   const revealWindow = () => {
     if (win.isDestroyed() || win.isVisible()) return;
     win.show();
+    // Backup for the 'focus' event, which may not fire for the very first window.
+    if (win.isFocused()) applyDarwinMenu(win);
     if (windowState(win)?.pendingOpenPath) {
       win.webContents.send('mdzip:open-document-requested');
     }
@@ -703,6 +873,7 @@ function createWindow({ pendingOpenPath = null, startupAction = null } = {}) {
 
   win.on('focus', () => {
     lastFocusedWindow = win;
+    applyDarwinMenu(win);
   });
 
   // Ask the renderer before closing so unsaved work isn't lost to the X button.
@@ -722,6 +893,8 @@ function createWindow({ pendingOpenPath = null, startupAction = null } = {}) {
     unwatchDocument(win);
     windows.delete(win);
     if (lastFocusedWindow === win) lastFocusedWindow = null;
+    // Last window gone: back to the no-window menu (darwin only; no-op elsewhere).
+    if (windows.size === 0) applyDarwinMenu(null);
   });
 
   const appOrigin = isDev
@@ -790,10 +963,23 @@ if (!hasSingleInstanceLock) {
   });
 
   app.on('ready', () => {
+    if (process.platform === 'darwin') {
+      // A launch by double-click delivers the file via 'open-file' (queued), not
+      // argv: open it in place of an empty window.
+      if (initialDocumentPath) openFileQueue.push(initialDocumentPath);
+      if (openFileQueue.pendingCount() > 0) {
+        openFileQueue.drain(openOrFocus);
+        return;
+      }
+    }
     createWindow({
       pendingOpenPath: initialDocumentPath,
       startupAction: startupActionFromArgs(process.argv.slice(1)),
     });
+    // From now on 'open-file' goes straight to openOrFocus (which reuses this
+    // window while it is still empty). UNVERIFIED on a Mac: a file arriving a
+    // moment after ready, while this window is still loading.
+    if (process.platform === 'darwin') openFileQueue.drain(openOrFocus);
   });
 }
 
@@ -814,7 +1000,8 @@ app.on('before-quit', (event) => {
 });
 
 app.on('activate', () => {
-  if (windows.size === 0) {
+  // A queued Finder open will create its own window; don't add an empty one.
+  if (windows.size === 0 && openFileQueue.pendingCount() === 0) {
     createWindow();
   }
 });
@@ -874,6 +1061,12 @@ ipcMain.handle('mdzip:take-startup-action', (event) => {
   const state = windowState(BrowserWindow.fromWebContents(event.sender));
   const action = state?.startupAction ?? null;
   if (state) state.startupAction = null;
+  // The renderer has initialized (its event listeners exist): run anything
+  // queued by menu items that had to create a window first (darwin, no-window menu).
+  if (state?.afterReady?.length) {
+    const queued = state.afterReady.splice(0);
+    setTimeout(() => queued.forEach((fn) => fn()), 250);
+  }
   return action;
 });
 
@@ -1296,7 +1489,16 @@ function showPdfPreview(pdfPath, title) {
   // A window-specific menu (replacing the app menu, whose document accelerators
   // don't belong here) that makes Quick Print discoverable. The PDF viewer's
   // toolbar print button remains the route with printer/settings choices.
-  printPreviewWindow.setMenu(Menu.buildFromTemplate([
+  if (process.platform === 'darwin') {
+    // setMenu is a no-op on macOS; the preview gets its own application menu
+    // while it is focused (see applyDarwinMenu).
+    const previewWin = printPreviewWindow;
+    previewWin.on('focus', () => applyDarwinMenu(previewWin));
+    previewWin.on('closed', () => {
+      if (darwinMenuWin === previewWin || !darwinMenuWin) applyDarwinMenu(anyWindow());
+    });
+    applyDarwinMenu(previewWin);
+  } else printPreviewWindow.setMenu(Menu.buildFromTemplate([
     {
       label: 'Print',
       submenu: [
@@ -1475,11 +1677,25 @@ ipcMain.handle('mdzip:write-markdown-image', async (event, payload) => {
 // fallback menu, shown before any window exists / after the last one closes
 // on platforms that don't quit on window-all-closed) — dispatchAppEvent and
 // the devtools toggle no-op gracefully in that case.
+// With no window (macOS keeps the app alive after the last window closes),
+// items that need a renderer open one first: New/Open via a startup action,
+// the rest by dispatching once the new window's renderer has initialized.
+function dispatchOrOpenWindow(win, name) {
+  if (win) return dispatchAppEvent(win, name);
+  const fresh = createWindow();
+  windowState(fresh).afterReady.push(() => dispatchAppEvent(fresh, name));
+  return undefined;
+}
+
 function menuHandlersFor(win) {
   return {
-    newDocument: () => dispatchAppEvent(win, 'mdzip-studio:new-archive'),
+    newDocument: () => (win
+      ? dispatchAppEvent(win, 'mdzip-studio:new-archive')
+      : createWindow({ startupAction: { kind: 'new-document', format: 'markdown' } })),
     newWindow: () => createWindow(),
-    openDocument: () => dispatchAppEvent(win, 'mdzip-studio:open-archive'),
+    openDocument: () => (win
+      ? dispatchAppEvent(win, 'mdzip-studio:open-archive')
+      : createWindow({ startupAction: { kind: 'open-dialog' } })),
     // Reuses the same pendingOpenPath delivery a double-click / "Open with" /
     // Jump List launch already uses (see openOrFocus) — the only difference is
     // whether that lands in this window (empty) or a fresh one (this window
@@ -1493,8 +1709,8 @@ function menuHandlersFor(win) {
       state.pendingOpenPath = filePath;
       win?.webContents.send('mdzip:open-document-requested');
     },
-    packFolder: () => dispatchAppEvent(win, 'mdzip-studio:pack-folder'),
-    unpackMdz: () => dispatchAppEvent(win, 'mdzip-studio:unpack-mdz'),
+    packFolder: () => dispatchOrOpenWindow(win, 'mdzip-studio:pack-folder'),
+    unpackMdz: () => dispatchOrOpenWindow(win, 'mdzip-studio:unpack-mdz'),
     save: () => dispatchAppEvent(win, 'mdzip-studio:save-archive'),
     saveAs: () => dispatchAppEvent(win, 'mdzip-studio:save-archive-as'),
     print: () => dispatchAppEvent(win, 'mdzip-studio:print'),
@@ -1510,10 +1726,10 @@ function menuHandlersFor(win) {
     toggleRemoteImages: () => toggleRemoteImages(),
     toggleDevTools: () => win?.webContents.toggleDevTools(),
     setMdDefault: () => dispatchAppEvent(win, 'mdzip-studio:set-md-default'),
-    showKnownIssues: () => dispatchAppEvent(win, 'mdzip-studio:show-known-issues'),
-    showChangelog: () => dispatchAppEvent(win, 'mdzip-studio:show-changelog'),
+    showKnownIssues: () => dispatchOrOpenWindow(win, 'mdzip-studio:show-known-issues'),
+    showChangelog: () => dispatchOrOpenWindow(win, 'mdzip-studio:show-changelog'),
     checkForUpdates: () => checkForUpdates(win),
-    showAbout: () => dispatchAppEvent(win, 'mdzip-studio:show-about'),
+    showAbout: () => dispatchOrOpenWindow(win, 'mdzip-studio:show-about'),
     exportDraft: () => dispatchAppEvent(win, 'mdzip-studio:export-draft'),
   };
 }
@@ -1521,6 +1737,12 @@ function menuHandlersFor(win) {
 // Each window carries its own menu (Save/Print/etc. reflect that window's own
 // document-open state) via win.setMenu, rather than one shared app menu.
 function refreshWindowMenu(win) {
+  if (process.platform === 'darwin') {
+    // setMenu is a no-op on macOS: only the window the application menu is
+    // currently built for needs a rebuild.
+    if (win === darwinMenuWin) applyDarwinMenu(win);
+    return;
+  }
   const state = windowState(win);
   const template = buildMenuTemplate({
     documentOpen: state?.documentOpen ?? false,
@@ -1541,6 +1763,45 @@ function refreshAllWindowMenus() {
   for (const win of windows.keys()) {
     refreshWindowMenu(win);
   }
+  // No window currently owns the menu (e.g. app idle after the last close):
+  // still refresh the no-window menu so the update marker / recents show.
+  if (process.platform === 'darwin' && (!darwinMenuWin || darwinMenuWin.isDestroyed())) applyDarwinMenu(null);
+}
+
+// macOS: the application menu is global, so it is rebuilt for whichever window
+// is focused (focus event, document open/close, recents, update state), bound to
+// that window's handlers. null = no window (handlers open one when needed).
+// The print-preview window gets its own small menu. UNVERIFIED on a Mac: that
+// replacing the application menu inside a 'focus' handler doesn't flicker or
+// drop a menu that's currently being tracked.
+let darwinMenuWin = null;
+function applyDarwinMenu(win) {
+  if (process.platform !== 'darwin') return;
+  const target = win && !win.isDestroyed() ? win : null;
+  darwinMenuWin = target;
+  const updateAvailableVersion = availableUpdateInfo?.version ?? null;
+  let template;
+  if (target && target === printPreviewWindow) {
+    template = buildPreviewMenuTemplate({
+      updateAvailableVersion,
+      handlers: {
+        ...menuHandlersFor(anyWindow()),
+        quickPrint: () => quickPrintPreviewPdf(),
+        closePreview: () => { if (!target.isDestroyed()) target.close(); },
+      },
+    });
+  } else {
+    template = buildMenuTemplate({
+      documentOpen: windowState(target)?.documentOpen ?? false,
+      isDev,
+      platform: process.platform,
+      handlers: menuHandlersFor(target),
+      updateAvailableVersion,
+      recentFiles: latestRecentFiles,
+      remoteImages: getSettings().remoteImages,
+    });
+  }
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 // App-level fallback menu — macOS only. That's the one platform where the app
@@ -1552,16 +1813,15 @@ function refreshAllWindowMenus() {
 // (Pack Folder, Print, Show in File Manager, etc.) silently did nothing.
 if (process.platform === 'darwin') {
   app.on('ready', () => {
-    const template = buildMenuTemplate({
-      documentOpen: false,
-      isDev,
-      platform: process.platform,
-      handlers: menuHandlersFor(null),
-      updateAvailableVersion: availableUpdateInfo?.version ?? null,
-      recentFiles: latestRecentFiles,
-      remoteImages: getSettings().remoteImages,
-    });
-    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+    applyDarwinMenu(null);
+    // Dock icon menu: the same actions as the Windows Jump List tasks.
+    app.dock?.setMenu(Menu.buildFromTemplate(buildDockMenuTemplate({
+      handlers: {
+        newMarkdown: () => createWindow({ startupAction: { kind: 'new-document', format: 'markdown' } }),
+        newMdz: () => createWindow({ startupAction: { kind: 'new-document', format: 'mdz' } }),
+        newWindow: () => createWindow(),
+      },
+    })));
   });
 }
 

@@ -2,7 +2,8 @@ const path = require('path');
 
 // Native menus can't show a tooltip or style part of a label, so the folder
 // goes in the label itself, middle-shortened when long. '&' marks a mnemonic in
-// Windows menu labels, so a literal one must be doubled.
+// Windows (and Linux) menu labels, so a literal one must be doubled; macOS menus
+// have no mnemonics.
 function shortenFolder(dir, max = 40) {
   if (dir.length <= max) return dir;
   const sep = dir.includes('\\') ? '\\' : '/';
@@ -19,9 +20,16 @@ function shortenFolder(dir, max = 40) {
   return head + sep + '…' + sep + kept.join(sep);
 }
 
-function recentLabel(filePath) {
-  const label = `${path.basename(filePath)} — ${shortenFolder(path.dirname(filePath))}`;
-  return label.replace(/&/g, '&&');
+// A recent path may be a Windows one (drive letter or backslashes) even when this code
+// runs elsewhere, so pick the matching path flavour from the path itself.
+function pathFlavourFor(filePath) {
+  return /^[a-zA-Z]:[\\/]|\\/.test(filePath) ? path.win32 : path.posix;
+}
+
+function recentLabel(filePath, platform = process.platform) {
+  const flavour = pathFlavourFor(filePath);
+  const label = `${flavour.basename(filePath)} — ${shortenFolder(flavour.dirname(filePath))}`;
+  return platform === 'darwin' ? label : label.replace(/&/g, '&&');
 }
 
 // Pure builder for the application menu template. Electron-free: takes the
@@ -33,10 +41,11 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvai
   // the document-only items would look enabled until hovered. Instead of greying
   // them out, omit them entirely when no document is open — unambiguous, and they
   // reappear when one is. (The menu is rebuilt on the document-open IPC.)
+  const isMac = platform === 'darwin';
   const openRecentSubmenu = recentFiles.length
     ? recentFiles
         .slice(0, 10)
-        .map((filePath) => ({ label: recentLabel(filePath), click: () => handlers.openRecentPath(filePath) }))
+        .map((filePath) => ({ label: recentLabel(filePath, platform), click: () => handlers.openRecentPath(filePath) }))
     : [{ label: 'No Recent Documents', enabled: false }];
 
   const fileSubmenu = [
@@ -55,7 +64,7 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvai
       { type: 'separator' },
       { label: 'Print...', accelerator: 'CmdOrCtrl+P', click: handlers.print },
       { type: 'separator' },
-      { label: 'Show in File Manager', click: handlers.showInFolder },
+      { label: isMac ? 'Reveal in Finder' : 'Show in File Manager', click: handlers.showInFolder },
       { label: 'Copy File Path', click: handlers.copyFilePath },
       { label: 'Copy Folder Path', click: handlers.copyFolderPath },
       { type: 'separator' },
@@ -65,10 +74,13 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvai
       { label: 'Close Document', accelerator: 'CmdOrCtrl+W', click: handlers.closeDocument },
     );
   }
-  fileSubmenu.push(
-    { type: 'separator' },
-    { label: 'Exit', accelerator: 'CmdOrCtrl+Q', click: handlers.quit },
-  );
+  // On macOS, Quit lives in the app menu.
+  if (!isMac) {
+    fileSubmenu.push(
+      { type: 'separator' },
+      { label: 'Exit', accelerator: 'CmdOrCtrl+Q', click: handlers.quit },
+    );
+  }
 
   // A background check (see main.js) sets updateAvailableVersion when a newer
   // release exists. Electron menus have no badge API on Windows/Linux, so the
@@ -93,6 +105,7 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvai
         { role: 'cut' },
         { role: 'copy' },
         { role: 'paste' },
+        ...(isMac ? [{ role: 'selectAll' }] : []),
       ],
     },
     {
@@ -130,10 +143,15 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvai
           : []),
         { label: 'Known Issues', click: handlers.showKnownIssues },
         { label: 'Change Log', click: handlers.showChangelog },
-        { type: 'separator' },
-        updateItem,
-        { type: 'separator' },
-        { label: 'About MDZip Studio', click: handlers.showAbout },
+        // On macOS, About and Check for Updates live in the app menu.
+        ...(isMac
+          ? []
+          : [
+              { type: 'separator' },
+              updateItem,
+              { type: 'separator' },
+              { label: 'About MDZip Studio', click: handlers.showAbout },
+            ]),
       ],
     },
   ];
@@ -150,7 +168,76 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvai
     });
   }
 
+  if (isMac) {
+    // Window menu goes just before Help.
+    template.splice(template.length - 1, 0, { role: 'windowMenu' });
+    template.unshift({
+      label: 'MDZip Studio',
+      submenu: [
+        { label: 'About MDZip Studio', click: handlers.showAbout },
+        { type: 'separator' },
+        updateItem,
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { label: 'Quit MDZip Studio', accelerator: 'Cmd+Q', click: handlers.quit },
+      ],
+    });
+  }
+
   return template;
 }
 
-module.exports = { buildMenuTemplate, recentLabel, shortenFolder };
+// macOS only: the app menu is global, so the print-preview window (which has no
+// document commands) gets its own: app menu, Print, Edit, Window.
+function buildPreviewMenuTemplate({ handlers, updateAvailableVersion = null }) {
+  const updateItem = updateAvailableVersion
+    ? { label: `Download Update (${updateAvailableVersion})...`, click: handlers.checkForUpdates }
+    : { label: 'Check for Updates...', click: handlers.checkForUpdates };
+  return [
+    {
+      label: 'MDZip Studio',
+      submenu: [
+        { label: 'About MDZip Studio', click: handlers.showAbout },
+        { type: 'separator' },
+        updateItem,
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { label: 'Quit MDZip Studio', accelerator: 'Cmd+Q', click: handlers.quit },
+      ],
+    },
+    {
+      label: 'Print',
+      submenu: [
+        { label: 'Quick Print to Default Printer', accelerator: 'Cmd+P', click: handlers.quickPrint },
+        { type: 'separator' },
+        { label: 'Close Preview', accelerator: 'Cmd+W', click: handlers.closePreview },
+      ],
+    },
+    {
+      label: 'Edit',
+      submenu: [{ role: 'copy' }, { role: 'selectAll' }],
+    },
+    { role: 'windowMenu' },
+  ];
+}
+
+// macOS Dock icon menu — the same actions the Windows Jump List tasks trigger.
+function buildDockMenuTemplate({ handlers }) {
+  return [
+    { label: 'New Markdown Document', click: handlers.newMarkdown },
+    { label: 'New MDZip Document', click: handlers.newMdz },
+    { label: 'New Window', click: handlers.newWindow },
+  ];
+}
+
+module.exports = { buildMenuTemplate, buildPreviewMenuTemplate, buildDockMenuTemplate, recentLabel, shortenFolder };

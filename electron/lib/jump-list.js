@@ -1,5 +1,6 @@
 const path = require('path');
 
+// The Jump List is Windows-only, so paths here are always Windows paths (path.win32).
 // Launch flags the Jump List's tasks pass. Studio is single-process, so a plain
 // relaunch just focuses the running window — the second-instance handler
 // (main.js) checks for these to open a fresh window instead.
@@ -38,7 +39,7 @@ function startupActionFromArgs(args) {
 
 function jumpListIconFor(filePath, fileIconsDir) {
   const iconFile = /\.md$/i.test(filePath) ? 'md.ico' : 'mdz.ico';
-  return { iconPath: path.join(fileIconsDir, iconFile), iconIndex: 0 };
+  return { iconPath: path.win32.join(fileIconsDir, iconFile), iconIndex: 0 };
 }
 
 // Shape the Windows taskbar Jump List from the renderer's recent-files list.
@@ -53,7 +54,7 @@ function buildJumpList(recentPaths, { isPackaged, appPath, execPath, fileIconsDi
       type: 'task',
       program: execPath,
       args: jumpListLaunchArgs(p, { isPackaged, appPath }),
-      title: path.basename(p),
+      title: path.win32.basename(p),
       description: p,
       // Per-type document icon instead of the program's (electron.exe) icon.
       ...jumpListIconFor(p, fileIconsDir),
@@ -72,7 +73,7 @@ function buildJumpList(recentPaths, { isPackaged, appPath, execPath, fileIconsDi
         args: flagLaunchArgs(NEW_MARKDOWN_FLAG, launch),
         title: 'New Markdown Document',
         description: 'Create a new Markdown (.md) document in a new window',
-        iconPath: path.join(fileIconsDir, 'md.ico'),
+        iconPath: path.win32.join(fileIconsDir, 'md.ico'),
         iconIndex: 0,
       },
       {
@@ -81,7 +82,7 @@ function buildJumpList(recentPaths, { isPackaged, appPath, execPath, fileIconsDi
         args: flagLaunchArgs(NEW_MDZ_FLAG, launch),
         title: 'New MDZip Document',
         description: 'Create a new MDZip (.mdz) document in a new window',
-        iconPath: path.join(fileIconsDir, 'mdz.ico'),
+        iconPath: path.win32.join(fileIconsDir, 'mdz.ico'),
         iconIndex: 0,
       },
       {
@@ -90,7 +91,7 @@ function buildJumpList(recentPaths, { isPackaged, appPath, execPath, fileIconsDi
         args: newWindowLaunchArgs(launch),
         title: 'New Window',
         description: 'Open a new MDZip Studio window',
-        iconPath: path.join(fileIconsDir, 'mdz.ico'),
+        iconPath: path.win32.join(fileIconsDir, 'mdz.ico'),
         iconIndex: 0,
       },
     ],
@@ -98,7 +99,18 @@ function buildJumpList(recentPaths, { isPackaged, appPath, execPath, fileIconsDi
   return categories;
 }
 
+// macOS: the paths to hand app.addRecentDocument, in call order. The last one
+// added is the most recent and the renderer's list is newest-first, so reverse
+// it. Same .md/.mdz-only, ten-entry rule as the Jump List.
+function recentDocumentsForMac(recentPaths) {
+  return (Array.isArray(recentPaths) ? recentPaths : [])
+    .filter((p) => typeof p === 'string' && /\.(?:mdz|md)$/i.test(p))
+    .slice(0, 10)
+    .reverse();
+}
+
 module.exports = {
+  recentDocumentsForMac,
   NEW_WINDOW_FLAG,
   NEW_MARKDOWN_FLAG,
   NEW_MDZ_FLAG,

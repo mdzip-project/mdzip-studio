@@ -1485,4 +1485,40 @@ describe('AppComponent', () => {
       (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
     }
   });
+
+  describe('shortcut labels and key modifier', () => {
+    afterEach(() => {
+      delete (window as any).mdzipStudio;
+    });
+
+    it('uses Ctrl+/Shift+ labels off macOS', () => {
+      (window as any).mdzipStudio = { platform: 'win32' };
+      expect(component.shortcut('N')).toBe('Ctrl+N');
+      expect(component.shortcut('S', true)).toBe('Ctrl+Shift+S');
+    });
+
+    it('uses ⌘/⇧ labels on macOS', () => {
+      (window as any).mdzipStudio = { platform: 'darwin' };
+      expect(component.shortcut('N')).toBe('⌘N');
+      expect(component.shortcut('S', true)).toBe('⇧⌘S');
+    });
+
+    it('handles Cmd+N on macOS but ignores Ctrl+N', () => {
+      (window as any).mdzipStudio = { platform: 'darwin' };
+      const newArchive = vi.spyOn(component, 'newArchive').mockImplementation(() => {});
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', ctrlKey: true }));
+      expect(newArchive).not.toHaveBeenCalled();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', metaKey: true }));
+      expect(newArchive).toHaveBeenCalledTimes(1);
+    });
+
+    it('handles Ctrl+N elsewhere but ignores Cmd+N', () => {
+      (window as any).mdzipStudio = { platform: 'win32' };
+      const newArchive = vi.spyOn(component, 'newArchive').mockImplementation(() => {});
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', metaKey: true }));
+      expect(newArchive).not.toHaveBeenCalled();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', ctrlKey: true }));
+      expect(newArchive).toHaveBeenCalledTimes(1);
+    });
+  });
 });
