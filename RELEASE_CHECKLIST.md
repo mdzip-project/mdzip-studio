@@ -160,8 +160,21 @@ Paste this into the release notes of each release (the README has the same text)
 > not verify…" dialog, then open **System Settings → Privacy & Security** and
 > click **Open Anyway**. Or run
 > `xattr -dr com.apple.quarantine "/Applications/MDZip Studio.app"`.
-> Homebrew: `brew install --cask mdzip-project/tap/mdzip-studio`
+> Homebrew: `brew install --cask mdzip-project/mdzip/mdzip-studio`
 > (upgrade with `brew upgrade --cask mdzip-studio`).
+
+**Homebrew tap (automatic).** Publishing the draft release fires
+`.github/workflows/bump-tap.yml`, which downloads the `-universal.dmg`, computes
+its sha256 and commits the new `version` and `sha256` to
+`Casks/mdzip-studio.rb` in `mdzip-project/homebrew-mdzip`. Check that the tap's
+latest commit matches the release. It skips quietly if the release has no mac
+`.dmg`. One-time setup:
+
+1. Create the public repo `mdzip-project/homebrew-mdzip` and push the contents
+   of the local `homebrew-mdzip` folder to `main`.
+2. Create a fine-grained personal access token limited to that one repository
+   with **Contents: Read and write**.
+3. Add it to `mdzip-studio` as the Actions secret `HOMEBREW_TAP_TOKEN`.
 
 Windows builds are currently **unsigned** (SmartScreen will warn on first run).
 To sign, add `CSC_LINK` (base64-encoded `.pfx`) and `CSC_KEY_PASSWORD` as repo

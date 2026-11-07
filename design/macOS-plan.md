@@ -6,7 +6,7 @@ Branch: `macOS`. Status: plan, not started. Written 2026-11-04.
 
 - **Never pay Apple.** No Developer ID, no notarization. Builds are **ad-hoc signed** (`codesign -s -`), which on Apple Silicon is required to run at all and gets the milder "Apple could not verify…" dialog (with Open Anyway) instead of "is damaged".
 - **Universal** build (Apple Silicon + Intel), `.dmg` + `.zip` on GitHub Releases.
-- **Homebrew** via our own tap (`mdzip-project/homebrew-tap`). The official `homebrew/cask` has disabled casks that fail Gatekeeper since Sept 2026, so it's not an option.
+- **Homebrew** via our own tap (`mdzip-project/homebrew-mdzip`). The official `homebrew/cask` has disabled casks that fail Gatekeeper since Sept 2026, so it's not an option.
 - **Updates: best free experience.** Squirrel.Mac (electron-updater's mac install path) requires a real signature, so no in-place install. Instead: check → "Update available" → download the `.dmg` in-app with progress → open it and offer to quit so the user drags the new app over. Homebrew installs are told to run `brew upgrade --cask mdzip-studio`.
 - Owner has a Mac from 2026-11-05 for testing.
 
@@ -59,9 +59,9 @@ Done when: config validates (`electron-builder --help`-level check on Windows ca
 
 ### Phase 4 — Homebrew tap (Haiku for the cask; Sonnet for the workflow)
 
-1. New public repo `mdzip-project/homebrew-tap` (**owner creates or approves**) with `Casks/mdzip-studio.rb`: `url` to the universal `.dmg`, `sha256`, `app "MDZip Studio.app"`, `zap` paths, and `caveats` with the Open Anyway / `xattr` steps. No `auto_updates`. **No quarantine-stripping `postflight`** by default (Homebrew discourages it; owner may override).
+1. New public repo `mdzip-project/homebrew-mdzip` (**owner creates or approves**) with `Casks/mdzip-studio.rb`: `url` to the universal `.dmg`, `sha256`, `app "MDZip Studio.app"`, `zap` paths, and `caveats` with the Open Anyway / `xattr` steps. No `auto_updates`. **No quarantine-stripping `postflight`** by default (Homebrew discourages it; owner may override).
 2. Release workflow step that bumps version + sha256 in the tap after a release is published (needs a token with write access to the tap — owner sets the secret).
-3. Users: `brew install --cask mdzip-project/tap/mdzip-studio`, upgrade with `brew upgrade --cask mdzip-studio`.
+3. Users: `brew install --cask mdzip-project/mdzip/mdzip-studio` (or `brew tap mdzip-project/mdzip` then `brew install --cask mdzip-studio`), upgrade with `brew upgrade --cask mdzip-studio`.
 
 ### Phase 5 — test on the Mac (owner, with a checklist from the manager)
 

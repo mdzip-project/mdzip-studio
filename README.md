@@ -58,7 +58,7 @@ runs natively on both Apple Silicon and Intel Macs (macOS 12 or later).
 ### Homebrew
 
 ```bash
-brew install --cask mdzip-project/tap/mdzip-studio
+brew install --cask mdzip-project/mdzip/mdzip-studio
 brew upgrade --cask mdzip-studio
 ```
 

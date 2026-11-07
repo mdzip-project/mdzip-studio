@@ -1,0 +1,81 @@
+name: Bump Homebrew tap
+
+# When a release is published (releases are drafted by release.yml and
+# published by hand), update Casks/mdzip-studio.rb in mdzip-project/homebrew-mdzip
+# with the new version and the sha256 of the universal .dmg.
+#
+# One-time setup: create the tap repo, create a fine-grained PAT with
+# Contents: Read and write on that repo only, and store it here as the
+# Actions secret HOMEBREW_TAP_TOKEN.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish to the tap (e.g. v1.6.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bump-tap
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download the universal .dmg
+        id: dmg
+        run: |
+          mkdir -p dl
+          if gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+               --pattern '*-universal.dmg' --dir dl 2>/dev/null \
+             && ls dl/*-universal.dmg >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "sha256=$(sha256sum dl/*-universal.dmg | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Release $TAG has no mac .dmg; skipping the tap update."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out the tap
+        if: steps.dmg.outputs.found == 'true'
+        uses: actions/checkout@v5
+        with:
+          repository: mdzip-project/homebrew-mdzip
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          ref: main
+
+      - name: Update the cask
+        if: steps.dmg.outputs.found == 'true'
+        env:
+          SHA256: ${{ steps.dmg.outputs.sha256 }}
+        run: |
+          VERSION="${TAG#v}"
+          CASK=Casks/mdzip-studio.rb
+          sed -i -E "s/^(\s*version )\"[^\"]*\"/\1\"${VERSION}\"/" "$CASK"
+          sed -i -E "s/^(\s*sha256 )\"[^\"]*\"/\1\"${SHA256}\"/" "$CASK"
+          grep -E '^\s*(version|sha256) ' "$CASK"
+          grep -q "version \"${VERSION}\"" "$CASK"
+          grep -q "sha256 \"${SHA256}\"" "$CASK"
+
+      - name: Commit and push
+        if: steps.dmg.outputs.found == 'true'
+        run: |
+          if git diff --quiet; then
+            echo "Tap already up to date."
+            exit 0
+          fi
+          git config user.name "mdzip-bot"
+          git config user.email "mdzip-bot@users.noreply.github.com"
+          git add Casks/mdzip-studio.rb
+          git commit -m "mdzip-studio ${TAG#v}"
+          git push origin HEAD:main
