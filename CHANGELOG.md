@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-07
+
+### Added
+- **MDZip Studio for macOS.** One `.dmg` runs natively on Apple Silicon and Intel Macs (macOS 12 or later). The app isn't signed by Apple, so the first launch needs **System Settings → Privacy & Security → Open Anyway**; the README has the steps.
+- **Homebrew:** `brew install --cask mdzip-project/mdzip/mdzip-studio`, upgrade with `brew upgrade --cask mdzip-studio`.
+- On Mac, `.mdz` files open in Studio by double-click and show the MDZip document icon in Finder. Studio is offered under **Open With** for `.md` files without taking over as their default.
+- Mac menus: an **MDZip Studio** app menu (About, Check for Updates, Hide, Quit), a **Window** menu, **Reveal in Finder**, and `⌘` shortcuts in menus and tooltips. The menu follows the focused window.
+- Mac Dock: open files by dropping them on the Dock icon; the Dock menu has **New Markdown Document**, **New MDZip Document** and **New Window**, and recent documents.
+- **Check for Updates on Mac** downloads the new `.dmg` to Downloads and opens it, for you to drag the new app to Applications. Homebrew installs are told to run `brew upgrade --cask mdzip-studio` instead.
+
+### Not on Mac yet
+- The Explorer preview pane has no Quick Look counterpart, and **Make default Markdown editor** is Windows-only (use Finder's **Get Info → Open with → Change All…**).
+
 ## [1.6.1] - 2026-11-02
 
 ### Fixed
@@ -425,7 +438,9 @@ release-pipeline work that was tagged as 1.3.22 and 1.3.23 but never published.
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/mdzip-project/mdzip-studio/compare/v1.6.1...v1.7.0
+[1.6.1]: https://github.com/mdzip-project/mdzip-studio/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/mdzip-project/mdzip-studio/compare/v1.5.1...v1.6.0
 [1.5.1]: https://github.com/mdzip-project/mdzip-studio/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/mdzip-project/mdzip-studio/compare/v1.4.0...v1.5.0
@@ -438,7 +453,6 @@ release-pipeline work that was tagged as 1.3.22 and 1.3.23 but never published.
 [1.3.16]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.15...v1.3.16
 [1.3.15]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.14...v1.3.15
 [1.3.14]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.13...v1.3.14
-[1.6.1]: https://github.com/mdzip-project/mdzip-studio/compare/v1.6.0...v1.6.1
 [1.3.13]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.12...v1.3.13
 [1.3.12]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.11...v1.3.12
 [1.3.11]: https://github.com/mdzip-project/mdzip-studio/compare/v1.3.10...v1.3.11
