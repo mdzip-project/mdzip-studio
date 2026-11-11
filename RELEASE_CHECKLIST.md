@@ -112,6 +112,11 @@ failed a smoke test.
 
 - **Chocolatey** — automatic: publishing the release runs
   `.github/workflows/chocolatey.yml`.
+  - **Next release only:** check whether
+    [#37](https://github.com/mdzip-project/mdzip-studio/issues/37) (drop the
+    .NET runtime dependency) is done. If it is, test a fresh install, an
+    upgrade, and an install on a machine that already has .NET 10, then
+    delete this line.
 - **WinGet** — manual, and only for minor/major releases or installer changes.
   See "Which releases need a WinGet update" in [winget-todo.md](winget-todo.md).
 
