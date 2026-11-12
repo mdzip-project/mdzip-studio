@@ -128,3 +128,10 @@ jobs:
 
       - name: Verify universal binary and ad-hoc signature
         run: bash scripts/verify-mac-build.sh
+
+  # SHA256SUMS.txt for the draft, once every installer is on it.
+  checksums:
+    needs: macos
+    uses: ./.github/workflows/checksums.yml
+    with:
+      tag: ${{ github.ref_name }}

@@ -1,0 +1,56 @@
+# Attach SHA256SUMS.txt to a release: the SHA-256 of each download (both
+# Windows .exe files, the macOS .dmg and .zip, the Linux .AppImage and .deb),
+# so people can check a download against the release page. The app isn't
+# code-signed (see mdzip.org/studio), so this is the check we can offer.
+# (latest*.yml hold SHA-512 hashes too, but in base64 for the auto-updater.)
+#
+# release.yml runs this after its last build job, while the release is still a
+# draft, so the file is there when the release is published. Run it by hand to
+# add or redo the file for an existing release:
+#
+#   gh workflow run checksums.yml -f tag=v1.7.0
+
+name: Checksums
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, for example v1.7.0
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  sha256sums:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the release's installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          mkdir assets
+          for pattern in '*.exe' '*.dmg' '*.zip' '*.AppImage' '*.deb'; do
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$pattern" --dir assets
+          done
+          ls -l assets
+
+      - name: Write SHA256SUMS.txt
+        working-directory: assets
+        run: |
+          sha256sum -- * | sort -k2 > ../SHA256SUMS.txt
+          cat ../SHA256SUMS.txt
+          test "$(wc -l < ../SHA256SUMS.txt)" -eq 6
+
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber

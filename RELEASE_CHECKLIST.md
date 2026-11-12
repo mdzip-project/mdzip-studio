@@ -45,6 +45,7 @@ workflow fails the build if the tag and `package.json` version disagree.
   signature is valid (`codesign --verify --deep --strict`).
 - All three jobs run `electron-builder --publish always`, whose GitHub publisher
   defaults to a **draft** release, so the two jobs converge on one draft (the jobs are chained with `needs:` so they never race to create it).
+- Last, the **checksums** job (`checksums.yml`) downloads the six installers from the draft and attaches `SHA256SUMS.txt`, which the Studio page on mdzip.org tells people to check downloads against. If it fails, or you replace an installer on the draft by hand, rerun it: `gh workflow run checksums.yml -f tag=v<version>`.
 - To test the Mac build without a release, run the **Mac build (test)** workflow (`mac-build.yml`; also runs on pushes to the `macOS` branch). It builds, verifies and uploads the `.dmg`/`.zip` as run artifacts, with no publishing.
 
 Artifacts that must end up on the release (electron-builder produces all of
@@ -58,6 +59,7 @@ these — do not add or rename any by hand):
   `latest-linux.yml` (the AppImage's blockmap is embedded — no separate file)
 - **(macOS)** `MDZip-Studio-<version>-universal.dmg`,
   `MDZip-Studio-<version>-universal.zip` (+ `.blockmap` files) and `latest-mac.yml`
+- **(all)** `SHA256SUMS.txt`, from the checksums job, listing the six installers
 
 ## 4. Smoke test (MANDATORY — do not skip)
 
