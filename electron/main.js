@@ -27,7 +27,7 @@ const {
 } = require('./lib/system-integration');
 const { buildJumpList, wantsNewWindow, startupActionFromArgs, recentDocumentsForMac } = require('./lib/jump-list');
 const { createOpenFileQueue } = require('./lib/open-file-queue');
-const { helpStartupAction } = require('./lib/help-window');
+const { helpStartupAction, shouldCloseLeftoverHelp } = require('./lib/help-window');
 const { statsDiffer } = require('./lib/file-watch');
 const {
   PORTABLE_DOWNLOAD_URL,
@@ -903,6 +903,14 @@ function createWindow({ pendingOpenPath = null, startupAction = null } = {}) {
     if (lastFocusedWindow === win) lastFocusedWindow = null;
     // Last window gone: back to the no-window menu (darwin only; no-op elsewhere).
     if (windows.size === 0) applyDarwinMenu(null);
+    // The last Studio window closed: close the help windows with it (help has
+    // nothing to save, so no need to ask), and Studio quits as usual.
+    if (shouldCloseLeftoverHelp([...windows.values()], process.platform)) {
+      for (const [helpWin, state] of windows) {
+        state.closeApproved = true;
+        if (!helpWin.isDestroyed()) helpWin.close();
+      }
+    }
   });
 
   const appOrigin = isDev

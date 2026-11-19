@@ -22,4 +22,13 @@ function helpStartupAction(payload) {
   return { kind: 'help', doc, page, anchor };
 }
 
-module.exports = { HELP_DOCUMENTS, helpStartupAction };
+// After a window closes: true when only help windows are left, so they close
+// too and Studio quits, rather than leaving help open with no way back to a
+// Studio window. Not on macOS, where Studio keeps running with no windows and
+// its Dock icon opens a new one.
+function shouldCloseLeftoverHelp(remainingStates, platform) {
+  if (platform === 'darwin' || remainingStates.length === 0) return false;
+  return remainingStates.every((state) => state?.help);
+}
+
+module.exports = { HELP_DOCUMENTS, helpStartupAction, shouldCloseLeftoverHelp };
