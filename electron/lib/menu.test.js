@@ -4,7 +4,7 @@ const HANDLER_NAMES = [
   'newDocument', 'newWindow', 'openDocument', 'openRecentPath', 'packFolder', 'unpackMdz',
   'save', 'saveAs', 'print', 'showInFolder', 'insertAgentsGuide', 'insertReadme', 'closeDocument', 'quit',
   'reload', 'toggleLineNumbers', 'toggleRemoteImages', 'toggleOutlineSide', 'toggleDevTools',
-  'showSystemIntegration', 'showKnownIssues', 'showChangelog', 'checkForUpdates', 'showAbout',
+  'showHelp', 'showSystemIntegration', 'showKnownIssues', 'showChangelog', 'checkForUpdates', 'showAbout',
   'exportDraft',
 ];
 
@@ -60,6 +60,17 @@ describe('buildMenuTemplate', () => {
       expect(item).toBeDefined();
       item.click();
       expect(handlers.showSystemIntegration).toHaveBeenCalled();
+    }
+  });
+
+  it('opens MDZip Studio Help from the Help menu or F1, on every platform', () => {
+    for (const platform of ['win32', 'darwin', 'linux']) {
+      const handlers = stubHandlers();
+      const template = buildMenuTemplate({ documentOpen: false, isDev: false, platform, handlers });
+      const item = findMenu(template, 'Help').submenu.find((entry) => entry.label === 'MDZip Studio Help');
+      expect(item.accelerator).toBe('F1');
+      item.click();
+      expect(handlers.showHelp).toHaveBeenCalled();
     }
   });
 
@@ -214,7 +225,7 @@ describe('buildMenuTemplate on darwin', () => {
   });
 
   it('keeps About and Check for Updates out of Help', () => {
-    expect(labelsOf(findMenu(build(), 'Help').submenu)).toEqual(['System Integration...', '[separator]', 'Known Issues', 'Change Log']);
+    expect(labelsOf(findMenu(build(), 'Help').submenu)).toEqual(['MDZip Studio Help', 'System Integration...', '[separator]', 'Known Issues', 'Change Log']);
   });
 
   it('adds Select All to Edit and a Window menu before Help', () => {
@@ -242,7 +253,7 @@ describe('non-darwin menus are unchanged', () => {
     expect(template.map((m) => m.label)).toEqual(['File', 'Edit', 'View', 'Help']);
     expect(findMenu(template, 'Edit').submenu.some((i) => i.role === 'selectAll')).toBe(false);
     expect(labelsOf(findMenu(template, 'Help').submenu)).toEqual([
-      'System Integration...', '[separator]', 'Known Issues', 'Change Log',
+      'MDZip Studio Help', 'System Integration...', '[separator]', 'Known Issues', 'Change Log',
       '[separator]', 'Check for Updates...', '[separator]', 'About MDZip Studio',
     ]);
     expect(labelsOf(findMenu(template, 'File').submenu)).toContain('Show in File Manager');

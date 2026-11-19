@@ -141,6 +141,7 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvai
     {
       label: helpLabel,
       submenu: [
+        { label: 'MDZip Studio Help', accelerator: 'F1', click: handlers.showHelp },
         { label: 'System Integration...', click: handlers.showSystemIntegration },
         { type: 'separator' },
         { label: 'Known Issues', click: handlers.showKnownIssues },

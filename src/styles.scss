@@ -203,3 +203,16 @@ button {
 .mdzip-root .edit-toolbar-divider {
   height: 18px !important;
 }
+
+// Help window: links that leave the help (to mdzip.org and other sites) get an
+// arrow, since there's no status bar to show where a link goes. Not the
+// outline: its links go to headings of the page but carry full http:// URLs.
+.help-view a[href^="http://"]:not(:has(img)):not(.mdz-outline-link)::after,
+.help-view a[href^="https://"]:not(:has(img)):not(.mdz-outline-link)::after,
+.help-view a[href^="mailto:"]:not(:has(img)):not(.mdz-outline-link)::after {
+  content: '\2197';
+  margin-left: 0.15em;
+  font-size: 0.85em;
+  text-decoration: none;
+  display: inline-block;
+}

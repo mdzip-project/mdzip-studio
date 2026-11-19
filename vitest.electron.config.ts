@@ -8,6 +8,6 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['electron/lib/**/*.test.js'],
+    include: ['electron/lib/**/*.test.js', 'scripts/**/*.test.mjs'],
   },
 });

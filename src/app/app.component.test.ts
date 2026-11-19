@@ -130,54 +130,105 @@ describe('AppComponent', () => {
     expect(new TextDecoder().decode(component.helpDialogBytes() ?? new Uint8Array())).toContain('Bundled copy');
   });
 
-  it('opens the System Integration page from the bundled copy, at a section, and in a new window on request', async () => {
+  it("opens Studio's help from the bundled copy, at a page and section, and in a new window on request", async () => {
     const fetch = vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array([80, 75, 3, 4]).buffer });
     vi.stubGlobal('fetch', fetch);
     const openHelpInNewWindow = vi.fn();
     vi.stubGlobal('mdzipStudio', { ...(window.mdzipStudio ?? {}), openHelpInNewWindow });
 
-    await component.openHelpDocument('system-integration', 'explorer-previews');
+    await component.openHelpDocument('studio-help', 'explorer-previews', 'system-integration.md');
 
     // No GitHub fetch: the bundled copy describes this version of Studio.
     expect(fetch).toHaveBeenCalledOnce();
-    expect(fetch).toHaveBeenCalledWith('assets/help/system-integration.mdz', { cache: 'no-store' });
+    expect(fetch).toHaveBeenCalledWith('assets/help/help.mdz', { cache: 'no-store' });
     expect(component.helpDialogStatus()).toMatch(/^For MDZip Studio \d/);
-    expect(component.helpDialogOnlineUrl()).toBe('https://mdzip.org/docs/system-integration.html');
-    expect(component.helpDialogAnchor()).toBe('explorer-previews');
+    expect(component.helpDialogOnlineUrl()).toBe('https://mdzip.org/docs/system-integration.html#explorer-previews');
 
     component.openHelpInNewWindow();
-    expect(openHelpInNewWindow).toHaveBeenCalledWith('system-integration', 'explorer-previews');
+    expect(openHelpInNewWindow).toHaveBeenCalledWith('studio-help', 'system-integration.md', 'explorer-previews');
     expect(component.helpDialogOpen()).toBe(false);
   });
 
-  it("sends System Integration's Learn more straight to the help window, or the dialog outside the desktop app", async () => {
+  it("sends a (?) and Help > MDZip Studio Help to the help window, or the dialog outside the desktop app", async () => {
     const openHelpInNewWindow = vi.fn();
     vi.stubGlobal('mdzipStudio', { ...(window.mdzipStudio ?? {}), openHelpInNewWindow });
     component.showSystemIntegrationHelp('outlook-attachments');
-    expect(openHelpInNewWindow).toHaveBeenCalledWith('system-integration', 'outlook-attachments');
+    expect(openHelpInNewWindow).toHaveBeenCalledWith('studio-help', 'system-integration.md', 'outlook-attachments');
+    component.showStudioHelp();
+    expect(openHelpInNewWindow).toHaveBeenLastCalledWith('studio-help', null, null);
     expect(component.helpDialogOpen()).toBe(false);
 
     vi.stubGlobal('mdzipStudio', undefined);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array([80, 75, 3, 4]).buffer }));
     component.showSystemIntegrationHelp('outlook-attachments');
     await vi.waitFor(() => expect(component.helpDialogOpen()).toBe(true));
+    expect(component.helpDialogPage()).toBe('system-integration.md');
     expect(component.helpDialogAnchor()).toBe('outlook-attachments');
   });
 
-  it('moves an open help window to the section it was asked for again', () => {
-    component.helpWindow.set({ title: 'System Integration', status: 'For MDZip Studio 1.7.0', onlineUrl: 'https://mdzip.org/docs/system-integration.html#pandoc' });
-    component.helpView.set(true);
-    window.dispatchEvent(new CustomEvent('mdzip-studio:help-anchor', { detail: 'explorer-previews' }));
-    expect(component.helpWindow()?.onlineUrl).toBe('https://mdzip.org/docs/system-integration.html#explorer-previews');
-  });
-
-  it('titles a help window as help, with its version note and the page online', () => {
-    component.helpWindow.set({ title: 'System Integration', status: 'For MDZip Studio 1.7.0', onlineUrl: 'https://mdzip.org/docs/system-integration.html#outlook-attachments' });
+  it("names a help window after its page, and links to that page online as you move between pages", () => {
+    component.helpWindow.set({ doc: 'studio-help', status: 'For MDZip Studio 1.7.0' });
+    component.helpPage.set('system-integration.md');
+    component.helpAnchor.set('outlook-attachments');
     component.helpView.set(true);
     expect(component.documentTitleDisplay()).toBe('MDZip Studio Help: System Integration');
+    expect(component.helpStrip()?.onlineUrl).toBe('https://mdzip.org/docs/system-integration.html#outlook-attachments');
+
+    // Clicking Getting Started in the page list.
+    component.onWorkspaceSelectionChanged({ currentPath: 'getting-started.md' } as never);
+    expect(component.documentTitleDisplay()).toBe('MDZip Studio Help: Getting Started');
+    expect(component.helpStrip()?.onlineUrl).toBe('https://mdzip.org/docs/studio-getting-started.html');
+
+    // The contents page is just "MDZip Studio Help".
+    component.onWorkspaceSelectionChanged({ currentPath: 'index.md' } as never);
+    expect(component.documentTitleDisplay()).toBe('MDZip Studio Help');
+
+    // Asked again for a page and section (another (?)).
+    window.dispatchEvent(new CustomEvent('mdzip-studio:help-anchor', { detail: { page: 'system-integration.md', anchor: 'helper-programs' } }));
+    expect(component.helpStrip()?.onlineUrl).toBe('https://mdzip.org/docs/system-integration.html#helper-programs');
+
     // Back to normal (Save As): the usual title.
     component.helpView.set(false);
     expect(component.documentTitleDisplay()).not.toContain('Help');
+  });
+
+  it('goes to a page or section from the contents dropdown, and shows the files only when asked', () => {
+    component.helpWindow.set({ doc: 'studio-help', status: 'For MDZip Studio 1.7.0' });
+    component.helpView.set(true);
+    expect(component.helpControls()).toBe('preview');
+
+    component.helpContentsOpen.set(true);
+    component.goToHelpPage('system-integration.md', 'outlook-attachments');
+    expect(component.helpContentsOpen()).toBe(false);
+    expect(component.helpPage()).toBe('system-integration.md');
+    expect(component.helpStrip()?.onlineUrl).toBe('https://mdzip.org/docs/system-integration.html#outlook-attachments');
+
+    component.toggleHelpFiles();
+    expect(component.helpControls()).toEqual({ preset: 'preview', navigation: true });
+    component.toggleHelpFiles();
+    expect(component.helpControls()).toBe('preview');
+  });
+
+  it('says in the help strip where the link under the pointer goes', () => {
+    vi.stubGlobal('mdzipStudio', { ...(window.mdzipStudio ?? {}), isElectron: true });
+    component.isDesktopShell.set(true);
+    component.helpWindow.set({ doc: 'studio-help', status: 'For MDZip Studio 1.7.0' });
+    component.helpPage.set('index.md');
+    component.helpView.set(true);
+    const hover = (href: string) => {
+      const link = document.createElement('a');
+      link.setAttribute('href', href);
+      document.body.append(link);
+      link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      const said = component.helpStrip()?.hover;
+      link.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+      link.remove();
+      return said;
+    };
+    expect(hover('https://mdzip.org/studio.html')).toEqual({ text: 'Opens in your browser: mdzip.org/studio.html', external: true });
+    expect(hover('system-integration.md#opening-md-files')).toEqual({ text: 'Goes to the help page System Integration', external: false });
+    expect(hover('#images')).toEqual({ text: 'Goes to a section of this page', external: false });
+    expect(component.helpStrip()?.hover).toBeNull();
   });
 
   it('gives a help window the outline on the left without touching your setting, and no New/Open shortcuts', () => {

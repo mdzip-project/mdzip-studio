@@ -1066,23 +1066,27 @@ ipcMain.on('mdzip:open-document-in-new-window', () => {
 });
 
 // One help window per document: asking again brings it forward at the new section.
-ipcMain.on('mdzip:open-help-in-new-window', (_event, payload) => {
+ipcMain.on('mdzip:open-help-in-new-window', (_event, payload) => openHelpWindow(payload));
+
+// payload: { doc, page, anchor } (see helpStartupAction).
+function openHelpWindow(payload) {
   const startupAction = helpStartupAction(payload);
   if (!startupAction) return;
   for (const [win, state] of windows) {
     if (win.isDestroyed() || state.helpDoc !== startupAction.doc) continue;
     if (win.isMinimized()) win.restore();
     win.focus();
-    if (startupAction.anchor) {
-      // The anchor is a checked heading id (helpStartupAction), safe to embed.
+    if (startupAction.page || startupAction.anchor) {
+      // Page and anchor are checked plain names (helpStartupAction), safe to embed.
+      const detail = JSON.stringify({ page: startupAction.page, anchor: startupAction.anchor });
       void win.webContents.executeJavaScript(
-        `window.dispatchEvent(new CustomEvent('mdzip-studio:help-anchor', { detail: ${JSON.stringify(startupAction.anchor)} }))`
+        `window.dispatchEvent(new CustomEvent('mdzip-studio:help-anchor', { detail: ${detail} }))`
       );
     }
     return;
   }
   createWindow({ startupAction });
-});
+}
 
 ipcMain.handle('mdzip:take-startup-action', (event) => {
   const state = windowState(BrowserWindow.fromWebContents(event.sender));
@@ -2020,6 +2024,7 @@ function menuHandlersFor(win) {
     toggleOutlineSide: () => toggleOutlineSide(),
     toggleDevTools: () => win?.webContents.toggleDevTools(),
     showSystemIntegration: () => dispatchOrOpenWindow(win, 'mdzip-studio:show-system-integration'),
+    showHelp: () => openHelpWindow({ doc: 'studio-help' }),
     showKnownIssues: () => dispatchOrOpenWindow(win, 'mdzip-studio:show-known-issues'),
     showChangelog: () => dispatchOrOpenWindow(win, 'mdzip-studio:show-changelog'),
     checkForUpdates: () => checkForUpdates(win),
