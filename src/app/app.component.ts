@@ -902,7 +902,7 @@ interface ArchiveTreeData {
       </ng-template>
     </p-dialog>
 
-    <app-system-integration-dialog [visible]="systemIntegrationOpen()" (visibleChange)="systemIntegrationOpen.set($event)" (learnMore)="showSystemIntegrationHelp($event)" />
+    <app-system-integration-dialog [visible]="systemIntegrationOpen()" (visibleChange)="systemIntegrationOpen.set($event)" (learnMore)="showSystemIntegrationHelp($any($event))" />
 
     <!-- Hidden print-capture workspace. Off-screen but laid out (not
          display:none): Mermaid needs real geometry to measure its diagrams.
