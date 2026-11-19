@@ -2,8 +2,10 @@ import { Component, computed, effect, ElementRef, NgZone, OnDestroy, signal, VER
 import { StateEffect } from '@codemirror/state';
 import { Decoration, EditorView, MatchDecorator, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view';
 import { APP_VERSION } from './app-version';
-import { HELP_ARCHIVE_TITLE, helpPageOnlineUrl, helpPageTitle } from './modules/help/help-pages';
-import { HelpContentsPage, readHelpContents } from './modules/help/help-contents';
+import { HelpDialogComponent, HelpLocation } from './modules/help/help-dialog.component';
+import { HELP_DOCUMENTS, HelpDocumentKind } from './modules/help/help-documents';
+import { HelpStripComponent } from './modules/help/help-strip.component';
+import { HelpWindow } from './modules/help/help-window';
 import { APP_LICENSE_NAME, APP_LICENSE_TEXT, FIRST_PARTY_LIBRARIES, LibraryInfo, OPEN_SOURCE_LIBRARIES } from './app-about-data';
 import { FormsModule } from '@angular/forms';
 import { ButtonModule } from 'primeng/button';
@@ -37,7 +39,6 @@ import { MdzipWorkspaceComponent } from '@mdzip/editor-ng';
 import { NgIconComponent, provideIcons } from '@ng-icons/core';
 import {
   lucideBookOpen,
-  lucideChevronDown,
   lucideBot,
   lucideCheck,
   lucideCircleCheck,
@@ -78,54 +79,11 @@ import {
 
 type AssetViewMode = 'tiles' | 'list';
 type ArchiveTreeKind = 'folder' | 'document' | 'asset';
-type HelpDocumentKind = 'studio-help' | 'known-issues' | 'changelog';
 type SaveValidationState = 'unchecked' | 'valid' | 'invalid';
 const MARKDOWN_IMAGE_SOURCE_ATTR = 'mdzip-studio-src';
 // Marks a preview container once its copy listener is bound, so a re-mount
 // (same node reused across renders) doesn't stack duplicate listeners.
 const COPY_IMAGES_BOUND_ATTR = 'data-mdzip-copy-bound';
-// remoteUrl: fetched first, so the newest copy shows (Known Issues and the
-// Change Log only grow). Without one, the bundled copy shows, which describes
-// this version of Studio. pages: Studio's help, several pages in one archive
-// (help-pages.ts), each also on mdzip.org.
-// What the help strip says about the link under the pointer: another help
-// page, a section of this one, or a page that opens in the browser.
-function describeHelpLink(href: string | null): { text: string; external: boolean } | null {
-  if (!href) return null;
-  if (/^(https?:|mailto:)/i.test(href)) {
-    return { text: `Opens in your browser: ${href.replace(/^https?:\/\//i, '').replace(/^mailto:/i, '')}`, external: true };
-  }
-  if (href.startsWith('#')) return { text: 'Goes to a section of this page', external: false };
-  const page = helpPageTitle(href.split('#')[0]);
-  return page ? { text: `Goes to the help page ${page}`, external: false } : null;
-}
-
-const HELP_DOCUMENTS: Record<HelpDocumentKind, {
-  title: string;
-  fileName: string;
-  remoteUrl?: string;
-  fallbackUrl: string;
-  pages?: boolean;
-}> = {
-  'studio-help': {
-    title: HELP_ARCHIVE_TITLE,
-    fileName: 'help.mdz',
-    fallbackUrl: 'assets/help/help.mdz',
-    pages: true,
-  },
-  'known-issues': {
-    title: 'Known Issues',
-    fileName: 'KNOWN_ISSUES.md',
-    remoteUrl: 'https://raw.githubusercontent.com/mdzip-project/mdzip-studio/main/src/assets/help/known-issues.md',
-    fallbackUrl: 'assets/help/known-issues.md',
-  },
-  changelog: {
-    title: 'Change Log',
-    fileName: 'CHANGELOG.md',
-    remoteUrl: 'https://raw.githubusercontent.com/mdzip-project/mdzip-studio/main/CHANGELOG.md',
-    fallbackUrl: 'assets/help/CHANGELOG.md',
-  },
-};
 type TemplateFileKind = 'agents' | 'readme';
 // Insert AGENTS.md / README.md (issue #12) — same fixed, bundled-asset templates
 // as mdzip-vscode's `mdzip.addAgentsGuide` (mdzTemplates.ts), reused here for
@@ -403,6 +361,8 @@ interface ArchiveTreeData {
     DialogModule,
     TabsModule,
     SystemIntegrationDialogComponent,
+    HelpStripComponent,
+    HelpDialogComponent,
     TreeModule,
     MdzipWorkspaceComponent,
     NgIconComponent,
@@ -410,7 +370,6 @@ interface ArchiveTreeData {
   providers: [
     provideIcons({
       lucideBookOpen,
-      lucideChevronDown,
       lucideBot,
       lucideCheck,
       lucideCircleCheck,
@@ -532,55 +491,15 @@ interface ArchiveTreeData {
           }
         </div>
         }
-        @if (helpStrip(); as help) {
-          <div class="help-strip" role="banner">
-            <ng-icon name="lucideBookOpen" size="16" aria-hidden="true" />
-            @if (helpContents().length) {
-              <!-- Studio's help: the title opens a contents tree of every page and its sections. -->
-              <button
-                type="button"
-                class="help-strip-title help-contents-button"
-                aria-haspopup="menu"
-                [attr.aria-expanded]="helpContentsOpen()"
-                title="Contents"
-                (click)="helpContentsOpen.set(!helpContentsOpen())"
-              >
-                Help <span class="help-strip-sep">·</span> {{ help.title }}
-                <ng-icon name="lucideChevronDown" size="14" aria-hidden="true" />
-              </button>
-              @if (helpContentsOpen()) {
-                <div class="help-contents-backdrop" (click)="helpContentsOpen.set(false)"></div>
-                <nav class="help-contents" aria-label="Help contents" (keydown.escape)="helpContentsOpen.set(false)">
-                  @for (page of helpContents(); track page.file) {
-                    <button type="button" class="help-contents-page" [class.current]="page.file === helpPage()" (click)="goToHelpPage(page.file, null)">
-                      {{ page.title }}
-                    </button>
-                    @for (section of page.sections; track section.id) {
-                      <button type="button" class="help-contents-section" (click)="goToHelpPage(page.file, section.id)">{{ section.text }}</button>
-                    }
-                  }
-                  <div class="help-contents-divider"></div>
-                  <button type="button" class="help-contents-files" (click)="toggleHelpFiles()">
-                    {{ helpFilesShown() ? 'Hide the files in this help' : 'Show the files in this help' }}
-                  </button>
-                </nav>
-              }
-            } @else {
-              <span class="help-strip-title">Help <span class="help-strip-sep">·</span> {{ help.title }}</span>
-            }
-            <span class="help-strip-meta">
-              @if (help.hover; as hover) {
-                <!-- Where the link under the pointer goes (no status bar here). -->
-                <span class="help-strip-hover" [class.external]="hover.external">{{ hover.text }}</span>
-              } @else {
-                {{ help.status }}
-                @if (help.onlineUrl) {
-                  <span class="help-strip-sep">·</span>
-                  <a [href]="help.onlineUrl" target="_blank" rel="noopener">View the latest online</a>
-                }
-              }
-            </span>
-          </div>
+        @if (help.strip(); as strip) {
+          <app-help-strip
+            [strip]="strip"
+            [contents]="help.contents()"
+            [currentPage]="help.page()"
+            [filesShown]="help.filesShown()"
+            (pageSelected)="help.goTo($event.file, $event.anchor)"
+            (filesToggled)="help.toggleFiles()"
+          />
         }
         <div class="toolbar" [style.display]="helpView() ? 'none' : null">
           <button class="tb-btn" type="button" [title]="'New (' + shortcut('N') + ')'" (click)="newArchive()"><ng-icon name="lucidePlus" size="15" /></button>
@@ -673,7 +592,7 @@ interface ArchiveTreeData {
                 [fileName]="workspaceFileName()"
                 [mode]="helpView() ? 'read-only' : 'editable'"
                 [sourceFormat]="sourceFormat()"
-                [controls]="helpView() ? helpControls() : workspaceControls()"
+                [controls]="helpView() ? help.controls() : workspaceControls()"
                 [imageHydrationAnimation]="'initial'"
                 [imageInsertMode]="'ask'"
                 [markdownExtensions]="markdownExtensions"
@@ -971,42 +890,7 @@ interface ArchiveTreeData {
       </ng-template>
     </p-dialog>
 
-    <p-dialog [header]="helpDialogTitle()" [visible]="helpDialogOpen()" (visibleChange)="helpDialogOpen.set($event)" [modal]="true" [style]="{ width: 'min(94vw, 860px)' }" [contentStyle]="{ padding: '0' }">
-      <div class="help-doc-dialog">
-        <div class="help-doc-status" [class.error]="helpDialogError()">
-          @if (helpDialogLoading()) {
-            Loading {{ helpDialogTitle() }}...
-          } @else {
-            {{ helpDialogStatus() }}
-          }
-          <span class="help-doc-links">
-            @if (helpDialogOnlineUrl(); as onlineUrl) {
-              <a [href]="onlineUrl + (helpDialogAnchor() ? '#' + helpDialogAnchor() : '')" target="_blank" rel="noopener">View the latest online</a>
-            }
-            @if (isDesktopShell()) {
-              <button type="button" class="help-doc-link-button" (click)="openHelpInNewWindow()">Open in New Window</button>
-            }
-          </span>
-        </div>
-        <div class="help-doc-viewer">
-          @if (helpDialogBytes()) {
-            <mdzip-workspace
-              #helpWorkspace
-              [bytes]="helpDialogBytes()"
-              [fileName]="helpDialogFileName()"
-              mode="read-only"
-              [sourceFormat]="helpDialogFileName().endsWith('.mdz') ? 'mdz' : 'markdown'"
-              controls="preview"
-              initialLayout="preview"
-              [markdownExtensions]="markdownExtensions"
-            />
-          }
-        </div>
-      </div>
-      <ng-template pTemplate="footer">
-        <p-button label="Close" (onClick)="helpDialogOpen.set(false)" />
-      </ng-template>
-    </p-dialog>
+    <app-help-dialog [markdownExtensions]="markdownExtensions" [canOpenWindow]="isDesktopShell()" (openWindow)="openHelpInNewWindow($event)" />
 
     <p-dialog header="Default Markdown editor" [visible]="mdDefaultPromptOpen()" (visibleChange)="mdDefaultPromptOpen.set($event)" [modal]="true" [closable]="!mdDefaultBusy()" [style]="{ width: 'min(92vw, 460px)' }">
       <div class="dialog-form">
@@ -1051,7 +935,7 @@ export class AppComponent implements OnDestroy {
   @ViewChild('markdownImageInput') private markdownImageInput?: ElementRef<HTMLInputElement>;
   @ViewChild('folderInput') private folderInput?: ElementRef<HTMLInputElement>;
   @ViewChild('workspaceEditor') private workspaceEditor?: MdzipWorkspaceComponent;
-  @ViewChild('helpWorkspace') private helpWorkspace?: MdzipWorkspaceComponent;
+  @ViewChild(HelpDialogComponent) helpDialog?: HelpDialogComponent;
   @ViewChild('printWorkspace', { read: ElementRef }) private printWorkspaceRef?: ElementRef<HTMLElement>;
 
   readonly currentArchive = this.archiveService.currentArchive;
@@ -1172,8 +1056,8 @@ export class AppComponent implements OnDestroy {
   }
   readonly readOnlyHint = 'This file is read-only. Use "Save As" to save your changes to a new file, or clear the read-only attribute in your operating system and reopen it to edit in place.';
   readonly documentTitleDisplay = computed(() => {
-    const strip = this.helpStrip();
-    if (strip) return strip.title === HELP_ARCHIVE_TITLE ? strip.title : `${HELP_ARCHIVE_TITLE}: ${strip.title}`;
+    const helpTitle = this.help.title();
+    if (helpTitle) return helpTitle;
     const name = this.documentTitle();
     return name && this.readOnly() ? `${name} (read-only)` : name;
   });
@@ -1339,46 +1223,11 @@ export class AppComponent implements OnDestroy {
   readonly aboutTab = signal<'about' | 'libraries' | 'license' | 'debug'>('about');
   // Active tab of the manifest.json entry view (Settings form vs read-only JSON).
   readonly debugCopied = signal(false);
-  readonly helpDialogOpen = signal(false);
-  readonly helpDialogTitle = signal('Help');
-  readonly helpDialogFileName = signal('help.md');
-  readonly helpDialogBytes = signal<Uint8Array | null>(null);
-  readonly helpDialogStatus = signal('');
-  readonly helpDialogLoading = signal(false);
-  readonly helpDialogError = signal(false);
-  readonly helpDialogKind = signal<HelpDocumentKind | null>(null);
-  readonly helpDialogAnchor = signal<string | null>(null);
-  readonly helpDialogPage = signal<string | null>(null);
-  readonly helpDialogOnlineUrl = signal<string | null>(null);
-  // This window shows a help document (Open in New Window): read-only, preview only.
-  readonly helpView = signal(false);
-  // What a help window shows in its strip: the document, its version note, and
-  // the page online (at the section it opened at).
-  readonly helpWindow = signal<{ doc: HelpDocumentKind; status: string } | null>(null);
-  // The help page showing (a file of help.mdz) and the section it was opened at.
-  readonly helpPage = signal<string | null>(null);
-  readonly helpAnchor = signal<string | null>(null);
-  // The strip's title and its link to the page online.
-  readonly helpStrip = computed(() => {
-    const help = this.helpWindow();
-    if (!help || !this.helpView()) return null;
-    const doc = HELP_DOCUMENTS[help.doc];
-    const page = this.helpPage();
-    return {
-      title: (doc.pages && page && helpPageTitle(page)) || doc.title,
-      status: help.status,
-      onlineUrl: doc.pages && page ? helpPageOnlineUrl(page, this.helpAnchor()) : null,
-      hover: describeHelpLink(this.hoverUrl()),
-    };
-  });
-  // Studio's help: its pages and their sections, for the strip's contents dropdown.
-  readonly helpContents = signal<HelpContentsPage[]>([]);
-  readonly helpContentsOpen = signal(false);
-  // The editor's file pane, which lists every file in the help archive. Off
-  // unless asked for (the contents dropdown's last item).
-  readonly helpFilesShown = signal(false);
-  readonly helpControls = computed<MdzipControlPolicy | 'preview'>(() =>
-    this.helpFilesShown() ? { preset: 'preview', navigation: true } : 'preview');
+  // This window shows help (Help > MDZip Studio Help, a (?), Open in New
+  // Window): its document, page, contents and strip.
+  readonly help = new HelpWindow(this.hoverUrl, (page, anchor) => this.goToHelp(page, anchor));
+  // Read-only, preview only, no menu, toolbar or status bar.
+  readonly helpView = this.help.active;
 
   // Print flow: setting printCapture mounts the hidden capture workspace; its
   // (assetsHydrated) hands the rendered preview to PrintService → main process.
@@ -1566,13 +1415,7 @@ export class AppComponent implements OnDestroy {
   private readonly handleHelpAnchorCommand = (event: Event) => {
     const detail = (event as CustomEvent<{ page?: string | null; anchor?: string | null }>).detail;
     if (!this.helpView() || !detail) return;
-    this.ngZone.run(() => {
-      const page = detail.page ?? null;
-      const anchor = detail.anchor ?? null;
-      if (page) this.helpPage.set(page);
-      this.helpAnchor.set(anchor);
-      this.goToHelp(page, anchor);
-    });
+    this.ngZone.run(() => this.help.goTo(detail.page ?? null, detail.anchor ?? null));
   };
   private readonly handlePackFolderCommand = () => void this.packFolder();
   private readonly handleInsertAgentsCommand = () => this.insertAgentsGuide();
@@ -1778,30 +1621,7 @@ export class AppComponent implements OnDestroy {
   // `anchor` (a heading id) when given. The dialog's Open in New Window shows
   // it in a window of its own.
   async openHelpDocument(kind: HelpDocumentKind, anchor: string | null = null, page: string | null = null): Promise<void> {
-    const doc = HELP_DOCUMENTS[kind];
-    this.helpDialogKind.set(kind);
-    this.helpDialogPage.set(doc.pages ? page : null);
-    this.helpDialogAnchor.set(anchor);
-    this.helpDialogTitle.set(doc.title);
-    this.helpDialogFileName.set(doc.fileName);
-    this.helpDialogOnlineUrl.set(doc.pages ? helpPageOnlineUrl(page ?? 'index.md', anchor) : null);
-    this.helpDialogBytes.set(null);
-    this.helpDialogStatus.set('');
-    this.helpDialogError.set(false);
-    this.helpDialogLoading.set(true);
-    this.helpDialogOpen.set(true);
-
-    const loaded = await this.loadHelpDocument(kind);
-    this.helpDialogBytes.set(loaded.bytes);
-    this.helpDialogStatus.set(loaded.status);
-    this.helpDialogError.set(loaded.error);
-    this.helpDialogLoading.set(false);
-    // The workspace mounts on the next render; openPath and scrollToAnchor wait for it.
-    if (page) {
-      setTimeout(() => void this.helpWorkspace?.openPath(page, anchor ? { anchor } : undefined), 0);
-    } else if (anchor) {
-      setTimeout(() => void this.helpWorkspace?.scrollToAnchor(anchor), 0);
-    }
+    await this.helpDialog?.open(kind, anchor, page);
   }
 
   // Studio's help at `page` and `anchor` (Help > MDZip Studio Help, a (?)):
@@ -1819,38 +1639,18 @@ export class AppComponent implements OnDestroy {
     this.showStudioHelp('system-integration.md', anchor);
   }
 
-  // Help > Open in New Window: the same document, read-only, in its own Studio window.
-  openHelpInNewWindow(): void {
-    const kind = this.helpDialogKind();
-    if (!kind || !window.mdzipStudio?.openHelpInNewWindow) return;
-    window.mdzipStudio.openHelpInNewWindow(kind, this.helpDialogPage(), this.helpDialogAnchor());
-    this.helpDialogOpen.set(false);
+  // The help dialog's Open in New Window: the same document, read-only, in its own Studio window.
+  openHelpInNewWindow(location: HelpLocation): void {
+    window.mdzipStudio?.openHelpInNewWindow?.(location.doc, location.page, location.anchor);
   }
 
   // A window opened for help: the document fills it, read-only, kept out of
-  // Recent Files, at `page` and `anchor`. Studio's help shows its page list.
+  // Recent Files, at `page` and `anchor`.
   private async showHelpInThisWindow(kind: HelpDocumentKind, page: string | null, anchor: string | null): Promise<void> {
     const doc = HELP_DOCUMENTS[kind];
-    const loaded = await this.loadHelpDocument(kind);
-    this.helpWindow.set({ doc: kind, status: loaded.status });
-    this.helpContents.set(doc.pages ? await readHelpContents(loaded.bytes).catch(() => []) : []);
-    this.helpPage.set(doc.pages ? page ?? 'index.md' : null);
-    this.helpAnchor.set(anchor);
+    const loaded = await this.help.load(kind, page, anchor);
     await this.openDocumentBytes(loaded.bytes, doc.fileName, undefined, true, false, !!doc.pages, true);
-    this.goToHelp(page, anchor);
-  }
-
-  // The contents dropdown: a page, or one of its sections.
-  goToHelpPage(file: string, anchor: string | null): void {
-    this.helpContentsOpen.set(false);
-    this.helpPage.set(file);
-    this.helpAnchor.set(anchor);
-    this.goToHelp(file, anchor);
-  }
-
-  toggleHelpFiles(): void {
-    this.helpContentsOpen.set(false);
-    this.helpFilesShown.update((shown) => !shown);
+    this.help.showLoaded();
   }
 
   // In a help window: show `page` (of Studio's help) at `anchor`.
@@ -1859,33 +1659,6 @@ export class AppComponent implements OnDestroy {
       if (page) void this.workspaceEditor?.openPath(page, anchor ? { anchor } : undefined);
       else if (anchor) void this.workspaceEditor?.scrollToAnchor(anchor);
     }, 0);
-  }
-
-  private async loadHelpDocument(kind: HelpDocumentKind): Promise<{ bytes: Uint8Array; status: string; error: boolean }> {
-    const doc = HELP_DOCUMENTS[kind];
-    if (doc.remoteUrl) {
-      try {
-        return { bytes: await this.fetchHelpBytes(doc.remoteUrl), status: 'Updated from GitHub', error: false };
-      } catch {
-        // Offline or unreachable: the bundled copy below.
-      }
-    }
-    try {
-      const bytes = await this.fetchHelpBytes(doc.fallbackUrl);
-      return { bytes, status: doc.remoteUrl ? 'Showing bundled copy' : `For MDZip Studio ${APP_VERSION}`, error: false };
-    } catch {
-      return {
-        bytes: new TextEncoder().encode(`# ${doc.title}\n\nCould not load this help document.`),
-        status: `Could not load ${doc.title}`,
-        error: true,
-      };
-    }
-  }
-
-  private async fetchHelpBytes(url: string): Promise<Uint8Array> {
-    const response = await fetch(url, { cache: 'no-store' });
-    if (!response.ok) throw new Error(`Could not load ${url}`);
-    return new Uint8Array(await response.arrayBuffer());
   }
 
   // First run only: offer to become the default .md editor when we aren't
@@ -4251,10 +4024,7 @@ export class AppComponent implements OnDestroy {
   onWorkspaceSelectionChanged(snapshot: MdzipWorkspaceSnapshot): void {
     if (this.helpView()) {
       // Moving to another help page: the strip follows it.
-      if (snapshot.currentPath && snapshot.currentPath !== this.helpPage()) {
-        this.helpPage.set(snapshot.currentPath);
-        this.helpAnchor.set(null);
-      }
+      this.help.pageShown(snapshot.currentPath ?? null);
       return;
     }
     if (this.postConvertStatus !== null) return;

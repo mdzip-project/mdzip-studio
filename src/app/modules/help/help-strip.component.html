@@ -1,0 +1,48 @@
+<div class="help-strip" role="banner">
+  <ng-icon name="lucideBookOpen" size="16" aria-hidden="true" />
+  @if (contents().length) {
+    <!-- Studio's help: the title opens a contents tree of every page and its sections. -->
+    <button
+      type="button"
+      class="help-strip-title help-contents-button"
+      aria-haspopup="menu"
+      [attr.aria-expanded]="contentsOpen()"
+      title="Contents"
+      (click)="contentsOpen.set(!contentsOpen())"
+    >
+      Help <span class="help-strip-sep">·</span> {{ strip().title }}
+      <ng-icon name="lucideChevronDown" size="14" aria-hidden="true" />
+    </button>
+    @if (contentsOpen()) {
+      <div class="help-contents-backdrop" (click)="contentsOpen.set(false)"></div>
+      <nav class="help-contents" aria-label="Help contents" (keydown.escape)="contentsOpen.set(false)">
+        @for (page of contents(); track page.file) {
+          <button type="button" class="help-contents-page" [class.current]="page.file === currentPage()" (click)="select(page.file, null)">
+            {{ page.title }}
+          </button>
+          @for (section of page.sections; track section.id) {
+            <button type="button" class="help-contents-section" (click)="select(page.file, section.id)">{{ section.text }}</button>
+          }
+        }
+        <div class="help-contents-divider"></div>
+        <button type="button" class="help-contents-files" (click)="toggleFiles()">
+          {{ filesShown() ? 'Hide the files in this help' : 'Show the files in this help' }}
+        </button>
+      </nav>
+    }
+  } @else {
+    <span class="help-strip-title">Help <span class="help-strip-sep">·</span> {{ strip().title }}</span>
+  }
+  <span class="help-strip-meta">
+    @if (strip().hover; as hover) {
+      <!-- Where the link under the pointer goes (no status bar here). -->
+      <span class="help-strip-hover" [class.external]="hover.external">{{ hover.text }}</span>
+    } @else {
+      {{ strip().status }}
+      @if (strip().onlineUrl; as onlineUrl) {
+        <span class="help-strip-sep">·</span>
+        <a [href]="onlineUrl" target="_blank" rel="noopener">View the latest online</a>
+      }
+    }
+  </span>
+</div>

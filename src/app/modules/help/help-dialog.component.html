@@ -1,0 +1,36 @@
+<p-dialog [header]="title()" [visible]="visible()" (visibleChange)="visible.set($event)" [modal]="true" [style]="{ width: 'min(94vw, 860px)' }" [contentStyle]="{ padding: '0' }">
+  <div class="help-doc-dialog">
+    <div class="help-doc-status" [class.error]="error()">
+      @if (loading()) {
+        Loading {{ title() }}...
+      } @else {
+        {{ status() }}
+      }
+      <span class="help-doc-links">
+        @if (onlineUrl(); as url) {
+          <a [href]="url" target="_blank" rel="noopener">View the latest online</a>
+        }
+        @if (canOpenWindow()) {
+          <button type="button" class="help-doc-link-button" (click)="openInNewWindow()">Open in New Window</button>
+        }
+      </span>
+    </div>
+    <div class="help-doc-viewer">
+      @if (bytes()) {
+        <mdzip-workspace
+          #helpWorkspace
+          [bytes]="bytes()"
+          [fileName]="fileName()"
+          mode="read-only"
+          [sourceFormat]="fileName().endsWith('.mdz') ? 'mdz' : 'markdown'"
+          controls="preview"
+          initialLayout="preview"
+          [markdownExtensions]="markdownExtensions()"
+        />
+      }
+    </div>
+  </div>
+  <ng-template pTemplate="footer">
+    <p-button label="Close" (onClick)="visible.set(false)" />
+  </ng-template>
+</p-dialog>

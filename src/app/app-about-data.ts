@@ -27,6 +27,12 @@ export const FIRST_PARTY_LIBRARIES: LibraryInfo[] = [
     "version": "2.5.1",
     "license": "Apache-2.0",
     "homepage": "https://mdzip.org"
+  },
+  {
+    "name": "@mdzip/renderer",
+    "version": "0.1.0",
+    "license": "Apache-2.0",
+    "homepage": "https://mdzip.org"
   }
 ];
 

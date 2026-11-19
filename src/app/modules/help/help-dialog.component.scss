@@ -1,0 +1,64 @@
+// The help dialog (moved from app.component.scss).
+
+.help-doc-dialog {
+  display: flex;
+  flex-direction: column;
+  min-height: min(70vh, 620px);
+  background: #ffffff;
+}
+
+.help-doc-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 28px;
+  padding: 6px 12px;
+  border-bottom: 1px solid #e3e7ec;
+  font-size: 12px;
+  color: #68717d;
+}
+
+.help-doc-links {
+  display: flex;
+  gap: 14px;
+  margin-left: auto;
+}
+
+.help-doc-links a,
+.help-doc-link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: #2563c9;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.help-doc-links a:hover,
+.help-doc-link-button:hover {
+  text-decoration: underline;
+}
+
+.help-doc-status.error {
+  color: #b42318;
+}
+
+.help-doc-viewer {
+  flex: 1;
+  min-height: 0;
+  height: min(68vh, 620px);
+  overflow: hidden;
+}
+
+.help-doc-viewer mdzip-workspace {
+  display: block;
+  height: 100%;
+}
+
+@media (prefers-color-scheme: dark) {
+  .help-doc-dialog { background: #1e1e1e; }
+  .help-doc-status { color: #8c8c8c; border-bottom-color: #3c3c3c; }
+  .help-doc-status.error { color: #f08a8a; }
+  .help-doc-links a, .help-doc-link-button { color: #6ea8fe; }
+}
