@@ -10,6 +10,7 @@ const { pathToFileURL } = require('url');
 const { documentPathFromArgs } = require('./lib/document-path');
 const { saveDialogFilters } = require('./lib/save-dialog');
 const { resolveInsidePackFolder } = require('./lib/pack-folder');
+const { planExtract, resolveInsideFolder, existingTargets, writeFilesInto } = require('./lib/extract-files');
 const { buildJumpList, wantsNewWindow, startupActionFromArgs, recentDocumentsForMac } = require('./lib/jump-list');
 const { createOpenFileQueue } = require('./lib/open-file-queue');
 const { statsDiffer } = require('./lib/file-watch');
@@ -31,7 +32,7 @@ const {
   updateErrorDialog,
 } = require('./lib/updater');
 const { buildMenuTemplate, buildPreviewMenuTemplate, buildDockMenuTemplate } = require('./lib/menu');
-const { allowImageRequest, isValidViewSetting, loadSettings, saveSettings } = require('./lib/remote-images');
+const { allowImageRequest, isValidViewSetting, loadSettings, saveSettings, viewSettingsOf } = require('./lib/remote-images');
 
 // The portable .exe (electron-builder's "portable" target) unpacks itself to a
 // temp folder on each start and sets PORTABLE_EXECUTABLE_DIR to the folder the
@@ -581,8 +582,7 @@ app.on('ready', () => {
 // and saves a new choice here. Windows already open keep their own until
 // they're next opened.
 ipcMain.on('mdzip:get-view-settings', (event) => {
-  const { colorScheme, previewWidth } = getSettings();
-  event.returnValue = { colorScheme, previewWidth };
+  event.returnValue = viewSettingsOf(getSettings());
 });
 ipcMain.on('mdzip:set-view-setting', (_event, payload) => {
   const { key, value } = payload ?? {};
@@ -594,6 +594,25 @@ ipcMain.on('mdzip:set-view-setting', (_event, payload) => {
     console.error('Could not save settings:', error);
   }
 });
+
+// View > Outline on the Left: saved for new windows, and moves the outline in
+// every open one (the editor has no control of its own for the side).
+function toggleOutlineSide() {
+  const outlinePosition = getSettings().outlinePosition === 'left' ? 'right' : 'left';
+  studioSettings = { ...getSettings(), outlinePosition };
+  try {
+    saveSettings(settingsFile(), studioSettings);
+  } catch (error) {
+    console.error('Could not save settings:', error);
+  }
+  refreshAllWindowMenus();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    win.webContents.executeJavaScript(
+      `window.dispatchEvent(new CustomEvent('mdzip-studio:outline-position', { detail: ${JSON.stringify(outlinePosition)} }))`
+    ).catch(() => {});
+  }
+}
 
 function toggleRemoteImages() {
   const settings = { ...getSettings(), remoteImages: !getSettings().remoteImages };
@@ -758,18 +777,7 @@ async function uniqueChildFolder(parentFolder, requestedName) {
   }
 }
 
-function resolveInsideUnpackFolder(root, rel) {
-  const normalized = String(rel ?? '').replace(/\\/g, '/').replace(/^\/+/, '');
-  if (!normalized || normalized.split('/').some((part) => !part || part === '.' || part === '..')) {
-    throw new Error(`Refusing to write invalid archive path: "${rel}".`);
-  }
-  const abs = path.resolve(root, normalized);
-  const relCheck = path.relative(root, abs);
-  if (relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
-    throw new Error(`Refusing to write outside the destination folder: "${rel}".`);
-  }
-  return abs;
-}
+const resolveInsideUnpackFolder = resolveInsideFolder;
 
 // The per-file-type .ico files ship via extraResources (packaged) and live under
 // build/ in dev. These are the same icons the installer registers for .md/.mdz.
@@ -1315,6 +1323,66 @@ ipcMain.handle('mdzip:write-unpacked-folder', async (event, payload) => {
   };
 });
 
+// The contents pane's Extract… (mdzip-editor#69). One file: a Save dialog under
+// its own name (the system dialog asks before replacing). Several files or a
+// folder: pick a folder; the files keep their archive paths, and Studio asks
+// before replacing any that are already there. Starts in the document's folder.
+ipcMain.handle('mdzip:extract-files', async (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const files = (Array.isArray(payload?.files) ? payload.files : [])
+    .filter((file) => file && typeof file.path === 'string');
+  if (!files.length) {
+    return { canceled: true };
+  }
+  const documentPath = windowState(win)?.documentPath ?? null;
+  const startFolder = documentPath ? path.dirname(documentPath) : undefined;
+  const plan = planExtract({ files, selection: payload?.selection });
+
+  if (plan.kind === 'file') {
+    const result = await dialog.showSaveDialog(win, {
+      title: 'Extract File',
+      defaultPath: startFolder ? path.join(startFolder, plan.fileName) : plan.fileName,
+    });
+    if (result.canceled || !result.filePath) {
+      return { canceled: true };
+    }
+    await fs.writeFile(result.filePath, Buffer.from(files[0].bytes ?? []));
+    return { canceled: false, targetPath: result.filePath, fileCount: 1 };
+  }
+
+  const result = await dialog.showOpenDialog(win, {
+    title: 'Extract to Folder',
+    buttonLabel: 'Extract Here',
+    defaultPath: startFolder,
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return { canceled: true };
+  }
+  const folder = path.resolve(result.filePaths[0]);
+  const existing = await existingTargets(folder, files);
+  if (existing.length) {
+    const shown = existing.slice(0, 8).join('\n') + (existing.length > 8 ? `\n…and ${existing.length - 8} more` : '');
+    const answer = await dialog.showMessageBox(win, {
+      type: 'warning',
+      title: 'Replace Files?',
+      message: existing.length === 1
+        ? `"${existing[0]}" already exists in this folder. Replace it?`
+        : `${existing.length} of these files already exist in this folder. Replace them?`,
+      detail: existing.length === 1 ? undefined : shown,
+      buttons: ['Replace', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (answer.response !== 0) {
+      return { canceled: true };
+    }
+  }
+  const fileCount = await writeFilesInto(folder, files);
+  return { canceled: false, targetPath: folder, fileCount };
+});
+
 ipcMain.handle('mdzip:get-md-default-status', async () => {
   // The portable .exe registers no file types, so it can't be the default.
   if (process.platform !== 'win32' || isPortable) {
@@ -1724,6 +1792,7 @@ function menuHandlersFor(win) {
     reload: () => dispatchAppEvent(win, 'mdzip-studio:reload-document'),
     toggleLineNumbers: () => dispatchAppEvent(win, 'mdzip-studio:toggle-line-numbers'),
     toggleRemoteImages: () => toggleRemoteImages(),
+    toggleOutlineSide: () => toggleOutlineSide(),
     toggleDevTools: () => win?.webContents.toggleDevTools(),
     setMdDefault: () => dispatchAppEvent(win, 'mdzip-studio:set-md-default'),
     showKnownIssues: () => dispatchOrOpenWindow(win, 'mdzip-studio:show-known-issues'),
@@ -1752,6 +1821,7 @@ function refreshWindowMenu(win) {
     updateAvailableVersion: availableUpdateInfo?.version ?? null,
     recentFiles: latestRecentFiles,
     remoteImages: getSettings().remoteImages,
+    outlineLeft: getSettings().outlinePosition === 'left',
   });
   win.setMenu(Menu.buildFromTemplate(template));
 }
@@ -1799,6 +1869,7 @@ function applyDarwinMenu(win) {
       updateAvailableVersion,
       recentFiles: latestRecentFiles,
       remoteImages: getSettings().remoteImages,
+      outlineLeft: getSettings().outlinePosition === 'left',
     });
   }
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));

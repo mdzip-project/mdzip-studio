@@ -2,7 +2,7 @@ import { Injector, NgZone, runInInjectionContext } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { MdzArchiveCore, MdzPackagerCore } from '@mdzip/core-js';
 import { MdzipRenderingService } from '@mdzip/editor';
-import type { MdzipConversionContext, MdzipEntryRenderContext } from '@mdzip/editor';
+import type { MdzipConversionContext } from '@mdzip/editor';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppComponent } from './app.component';
 import { ArchiveService } from './core/services/archive.service';
@@ -276,27 +276,40 @@ describe('AppComponent', () => {
     expect(component.headingAutoInserted()).toBe(false);
   });
 
-  it('persists embedded manifest edits through the entry render context', async () => {
-    const updateManifest = vi.fn().mockResolvedValue(undefined);
-    const manifest = MdzPackagerCore.updateManifest(null, {
-      title: 'Before',
-      mode: 'document',
-      entryPoint: 'index.md',
-    });
-    const context = {
-      manifest,
-      signal: new AbortController().signal,
-      updateManifest,
-    } as unknown as MdzipEntryRenderContext;
+  it('saves manifest edits made in the editor, custom fields included (#43)', async () => {
+    // The editor's manifest view (form + JSON editor) is where the manifest is
+    // edited. Save patches Studio's copy into the flushed bytes, so that copy
+    // must follow the editor's or it would put the old values back.
+    const withManifest = async (bytes: Uint8Array, change: (m: Record<string, unknown>) => void) => {
+      const manifest = await (await MdzArchiveCore.open(bytes)).readManifest() as unknown as Record<string, unknown>;
+      change(manifest);
+      const result = await MdzArchiveCore.updateFiles(bytes, [], [], { manifest: manifest as never });
+      return { bytes: new Uint8Array(await result.blob.arrayBuffer()), manifest };
+    };
+    const app = component as unknown as {
+      openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly?: boolean, recordRecent?: boolean): Promise<void>;
+      flushWorkspaceEdits(): Promise<unknown>;
+      buildDocumentBytes(archive: unknown): Promise<Uint8Array>;
+      workspaceEditor?: unknown;
+    };
+    const before = await withManifest(await buildMdz('# Hi\n', 'Before'), (m) => { m['reviewer'] = 'Ada'; });
+    await app.openDocumentBytes(before.bytes, 'notes.mdz', 'C:/docs/notes.mdz', false, false);
+    expect((component.currentArchive()?.manifest.metadata as Record<string, unknown>)['reviewer']).toBe('Ada');
 
-    await component.onEmbeddedManifestChange(context, {
-      field: 'title',
-      value: 'After',
+    const edited = await withManifest(before.bytes, (m) => {
+      m['title'] = 'After';
+      m['ticket'] = 'MDZ-43';
+      delete m['reviewer'];
     });
+    app.workspaceEditor = {
+      flush: vi.fn().mockResolvedValue({ bytes: new Blob([edited.bytes as BlobPart]), workspace: { manifest: edited.manifest }, state: {} }),
+    };
+    await app.flushWorkspaceEdits();
+    const saved = await (await MdzArchiveCore.open(await app.buildDocumentBytes(component.currentArchive()))).readManifest() as unknown as Record<string, unknown>;
 
-    expect(updateManifest).toHaveBeenCalledOnce();
-    expect(updateManifest.mock.calls[0][0].title).toBe('After');
-    expect(updateManifest.mock.calls[0][0].entryPoint).toBe('index.md');
+    expect(saved['title']).toBe('After');
+    expect(saved['ticket']).toBe('MDZ-43');
+    expect(saved).not.toHaveProperty('reviewer');
   });
 
   it('stores the library conversion context for an intercepted image action', () => {

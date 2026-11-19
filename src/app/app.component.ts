@@ -21,15 +21,17 @@ import {
   MdzipDocumentChangeEvent,
   MdzipDocumentStats,
   MdzipEditorSnapshot,
-  MdzipEntryRenderContext,
+  MdzipExtractRequest,
   MdzipMarkdownRenderContext,
   MdzipMarkdownRenderExtension,
+  MdzipOutlinePosition,
+  MdzipOutlineViewOptions,
   MdzipWorkspaceChange,
   MdzipWorkspaceSave,
   MdzipWorkspaceSnapshot,
 } from '@mdzip/editor';
 import { mdzipMermaidExtension, type MdzipMermaidApi } from '@mdzip/editor/mermaid';
-import { MdzipEntryRendererDirective, MdzipWorkspaceComponent } from '@mdzip/editor-ng';
+import { MdzipWorkspaceComponent } from '@mdzip/editor-ng';
 import { NgIconComponent, provideIcons } from '@ng-icons/core';
 import {
   lucideBot,
@@ -61,10 +63,7 @@ import { ArchiveService, Asset, Document, Manifest, MDZipArchive } from './core/
 import { PrintService } from './core/services/print.service';
 import { StorageService } from './core/services/storage.service';
 import { ValidationError, ValidationService } from './core/services/validation.service';
-import {
-  ManifestEditorChange,
-  ManifestEditorComponent,
-} from './modules/manifest/manifest-editor.component';
+import { ManifestEditorChange } from './modules/manifest/manifest-editor.component';
 
 type AssetViewMode = 'tiles' | 'list';
 type ArchiveTreeKind = 'folder' | 'document' | 'asset';
@@ -169,33 +168,6 @@ function loadStudioMermaid(): Promise<MdzipMermaidApi> {
     };
   });
   return studioMermaidPromise;
-}
-
-function escapeJsonHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-// Greyscale syntax highlighting for the manifest entry view's read-only JSON
-// tab. The input is JSON.stringify output, so the token set is predictable:
-// strings (keys when followed by a colon), numbers, true/false/null, and
-// structural characters — which carry nothing HTML-sensitive themselves.
-function highlightJsonHtml(json: string): string {
-  const token = /("(?:[^"\\]|\\.)*")(\s*:)?|-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b|\btrue\b|\bfalse\b|\bnull\b/g;
-  let html = '';
-  let last = 0;
-  let match: RegExpExecArray | null;
-  while ((match = token.exec(json))) {
-    html += escapeJsonHtml(json.slice(last, match.index));
-    if (match[1] !== undefined) {
-      html += `<span class="${match[2] ? 'json-key' : 'json-string'}">${escapeJsonHtml(match[1])}</span>${match[2] ?? ''}`;
-    } else if (match[0] === 'true' || match[0] === 'false' || match[0] === 'null') {
-      html += `<span class="json-literal">${match[0]}</span>`;
-    } else {
-      html += `<span class="json-number">${match[0]}</span>`;
-    }
-    last = match.index + match[0].length;
-  }
-  return html + escapeJsonHtml(json.slice(last));
 }
 
 interface StatusbarDisplay {
@@ -316,6 +288,10 @@ interface ElectronBridge {
     defaultFolderName: string;
     entries: { path: string; bytes: number[] }[];
   }) => Promise<ElectronUnpackWriteResult>;
+  extractFiles?: (payload: {
+    files: { path: string; bytes: Uint8Array }[];
+    selection: { files: string[]; folders: string[] };
+  }) => Promise<{ canceled: boolean; targetPath?: string; fileCount?: number }>;
   onPackFolderProgress?: (callback: (data: PackFolderProgress) => void) => () => void;
   takePendingOpenDocument?: () => Promise<ElectronDocumentOpenResult>;
   onOpenDocumentRequested?: (callback: () => void) => () => void;
@@ -349,8 +325,17 @@ interface ElectronBridge {
   printPreview?: (payload: { html: string; title: string }) => Promise<{ ok?: boolean; error?: string }>;
   getMarkdownDefaultStatus?: () => Promise<MarkdownDefaultStatus>;
   promptMarkdownDefault?: () => Promise<MarkdownDefaultStatus>;
-  viewSettings?: { colorScheme?: MdzipColorSchemePreference; previewWidth?: MdzipPreviewWidthChoice };
-  setViewSetting?: (key: 'colorScheme' | 'previewWidth', value: string) => void;
+  viewSettings?: {
+    colorScheme?: MdzipColorSchemePreference;
+    previewWidth?: MdzipPreviewWidthChoice;
+    outlineVisible?: boolean;
+    outlinePosition?: MdzipOutlinePosition;
+    outlineWidth?: number | null;
+  };
+  setViewSetting?: (
+    key: 'colorScheme' | 'previewWidth' | 'outlineVisible' | 'outlinePosition' | 'outlineWidth',
+    value: string | boolean | number,
+  ) => void;
 }
 
 declare global {
@@ -374,8 +359,6 @@ interface ArchiveTreeData {
     DialogModule,
     TabsModule,
     TreeModule,
-    ManifestEditorComponent,
-    MdzipEntryRendererDirective,
     MdzipWorkspaceComponent,
     NgIconComponent,
   ],
@@ -602,8 +585,12 @@ interface ArchiveTreeData {
                 [progressiveTextRendering]="true"
                 [initialColorScheme]="initialColorScheme"
                 [previewMaxWidth]="previewWidth()"
+                [outline]="outlineOptions()"
+                [onExtractFiles]="handleExtractFiles"
                 (colorSchemePreferenceChanged)="onColorSchemePreferenceChanged($event)"
                 (previewWidthChanged)="onPreviewWidthChanged($event)"
+                (outlineVisibilityChanged)="onOutlineVisibilityChanged($event)"
+                (outlineWidthChanged)="onOutlineWidthChanged($event)"
                 (changed)="onWorkspaceChanged($event)"
                 (selectionChanged)="onWorkspaceSelectionChanged($event)"
                 (manifestChanged)="onWorkspaceManifestChanged($event)"
@@ -613,44 +600,6 @@ interface ArchiveTreeData {
                 (previewRendered)="onWorkspacePreviewRendered($event)"
                 (failed)="onWorkspaceFailed($event)"
               >
-                <ng-template
-                  mdzipEntryRenderer="manifest.json"
-                  mdzipEntryRendererId="mdzip-studio-manifest"
-                  [mdzipEntryRendererPriority]="100"
-                  let-context
-                >
-                  <section class="studio-entry-view">
-                    <div class="studio-entry-view-header">
-                      <div>
-                        <h2>Manifest</h2>
-                        <p>How this document is packaged and presented — stored in manifest.json.</p>
-                      </div>
-                    </div>
-                    <p-tabs class="manifest-entry-tabs" [value]="manifestEntryTab()" (valueChange)="manifestEntryTab.set($any($event))">
-                      <p-tablist>
-                        <p-tab value="settings">Settings</p-tab>
-                        <p-tab value="json">JSON</p-tab>
-                      </p-tablist>
-                      <p-tabpanels>
-                        <p-tabpanel value="settings">
-                          <app-manifest-editor
-                            [title]="entryManifestTitle(context)"
-                            [author]="entryManifestText(context, 'author')"
-                            [description]="entryManifestText(context, 'description')"
-                            [mode]="entryManifestMode(context)"
-                            [version]="entryManifestVersion(context)"
-                            [entryPoint]="entryManifestEntryPoint(context)"
-                            [documents]="documentPaths()"
-                            (fieldChange)="onEmbeddedManifestChange(context, $event)"
-                          />
-                        </p-tabpanel>
-                        <p-tabpanel value="json">
-                          <pre class="manifest-json" [innerHTML]="entryManifestJsonHtml(context)"></pre>
-                        </p-tabpanel>
-                      </p-tabpanels>
-                    </p-tabs>
-                  </section>
-                </ng-template>
               </mdzip-workspace>
             </section>
           }
@@ -1277,7 +1226,6 @@ export class AppComponent implements OnDestroy {
   readonly aboutOpen = signal(false);
   readonly aboutTab = signal<'about' | 'libraries' | 'license' | 'debug'>('about');
   // Active tab of the manifest.json entry view (Settings form vs read-only JSON).
-  readonly manifestEntryTab = signal<'settings' | 'json'>('settings');
   readonly debugCopied = signal(false);
   readonly helpDialogOpen = signal(false);
   readonly helpDialogTitle = signal('Help');
@@ -1409,6 +1357,37 @@ export class AppComponent implements OnDestroy {
   // app chrome follows Windows via CSS media query.
   readonly initialColorScheme: MdzipColorSchemePreference = window.mdzipStudio?.viewSettings?.colorScheme ?? 'system';
   readonly previewWidth = signal<MdzipPreviewWidthChoice>(window.mdzipStudio?.viewSettings?.previewWidth ?? 'default');
+  // The outline panel as last left: shown or not (the toolbar button), its
+  // side (View > Outline on the Left) and the width it was dragged to. Read
+  // when an editor is created (each document opened gets one), so it follows
+  // every change; the component applies visibility and side live.
+  readonly outlineOptions = signal<MdzipOutlineViewOptions>((() => {
+    const saved = window.mdzipStudio?.viewSettings;
+    return {
+      visible: saved?.outlineVisible ?? false,
+      position: saved?.outlinePosition ?? 'right',
+      ...(typeof saved?.outlineWidth === 'number' ? { width: saved.outlineWidth } : {}),
+    };
+  })());
+
+  // The contents pane's Extract… (mdzip-editor#69): with this the editor's menu
+  // says Extract… instead of Download, and Studio writes the files through a
+  // Save dialog (one file) or a folder picker (see electron/main.js). Not set
+  // outside Electron, where the editor offers browser downloads.
+  readonly handleExtractFiles = window.mdzipStudio?.extractFiles
+    ? async (request: MdzipExtractRequest): Promise<void> => {
+        try {
+          const result = await window.mdzipStudio!.extractFiles!({ files: request.files, selection: request.selection });
+          if (!result || result.canceled) return;
+          const count = result.fileCount ?? request.files.length;
+          this.statusMessage.set(count === 1
+            ? `Extracted to ${result.targetPath}`
+            : `Extracted ${count} files to ${result.targetPath}`);
+        } catch (error) {
+          this.statusMessage.set(error instanceof Error ? error.message : 'Could not extract the files');
+        }
+      }
+    : undefined;
 
   private readonly handleLinkMouseOver = (e: MouseEvent) => {
     if (!this.isDesktopShell()) return;
@@ -1440,6 +1419,12 @@ export class AppComponent implements OnDestroy {
   private readonly handleCopyFolderPathCommand = () => void this.runPathAction('copy-folder');
   private readonly handleReloadDocumentCommand = () => void this.reloadDocumentFromDisk();
   private readonly handleToggleLineNumbersCommand = () => this.toggleLineNumbers();
+  private readonly handleOutlinePositionCommand = (event: Event) => {
+    const position = (event as CustomEvent<unknown>).detail;
+    if (position === 'left' || position === 'right') {
+      this.outlineOptions.update((options) => ({ ...options, position }));
+    }
+  };
   private readonly handlePrintCommand = () => void this.printDocument();
 
   private readonly handleKeyDown = (e: KeyboardEvent): void => {
@@ -1502,6 +1487,7 @@ export class AppComponent implements OnDestroy {
     window.addEventListener('mdzip-studio:copy-folder-path', this.handleCopyFolderPathCommand);
     window.addEventListener('mdzip-studio:reload-document', this.handleReloadDocumentCommand);
     window.addEventListener('mdzip-studio:toggle-line-numbers', this.handleToggleLineNumbersCommand);
+    window.addEventListener('mdzip-studio:outline-position', this.handleOutlinePositionCommand);
     window.addEventListener('mdzip-studio:print', this.handlePrintCommand);
     document.addEventListener('keydown', this.handleKeyDown);
     document.addEventListener('click', this.closeMenuOnDocumentClick);
@@ -1580,6 +1566,7 @@ export class AppComponent implements OnDestroy {
     window.removeEventListener('mdzip-studio:copy-folder-path', this.handleCopyFolderPathCommand);
     window.removeEventListener('mdzip-studio:reload-document', this.handleReloadDocumentCommand);
     window.removeEventListener('mdzip-studio:toggle-line-numbers', this.handleToggleLineNumbersCommand);
+    window.removeEventListener('mdzip-studio:outline-position', this.handleOutlinePositionCommand);
     window.removeEventListener('mdzip-studio:print', this.handlePrintCommand);
     document.removeEventListener('keydown', this.handleKeyDown);
     document.removeEventListener('click', this.closeMenuOnDocumentClick);
@@ -2844,6 +2831,13 @@ export class AppComponent implements OnDestroy {
     try {
       await this.performSave(archive, saveAs, force);
     } catch (error) {
+      // An invalid manifest.json blocks saving (the editor's flush throws
+      // MdzipManifestInvalidError): show it, with its problems marked.
+      if (error instanceof Error && error.name === 'MdzipManifestInvalidError') {
+        this.statusMessage.set('Not saved: manifest.json has errors — fix them and save again');
+        void this.workspaceEditor?.openPath('manifest.json');
+        return;
+      }
       this.statusMessage.set(`Save failed: ${error instanceof Error ? error.message : 'unknown error'}`);
     }
   }
@@ -3005,6 +2999,7 @@ export class AppComponent implements OnDestroy {
     const snapshot = await this.workspaceEditor?.flush();
     if (snapshot) {
       this.latestWorkspaceBytes.set(new Uint8Array(await snapshot.bytes.arrayBuffer()));
+      this.syncManifestFromWorkspace(snapshot.workspace?.manifest);
     }
     return snapshot ?? null;
   }
@@ -3961,93 +3956,12 @@ export class AppComponent implements OnDestroy {
     }
   }
 
-  async onEmbeddedManifestChange(
-    context: MdzipEntryRenderContext,
-    change: ManifestEditorChange
-  ): Promise<void> {
-    if (!context.manifest || context.signal.aborted) return;
-
-    const updates: Parameters<typeof MdzPackagerCore.updateManifest>[1] = {};
-    switch (change.field) {
-      case 'title':
-        updates.title = change.value.trim() || 'Untitled Document';
-        break;
-      case 'author':
-        updates.author = change.value.trim() || null;
-        break;
-      case 'description':
-        updates.description = change.value.trim() || null;
-        break;
-      case 'mode':
-        updates.mode = change.value;
-        break;
-      case 'entryPoint':
-        updates.entryPoint = change.value;
-        break;
-    }
-
-    const manifest = MdzPackagerCore.updateManifest(context.manifest, updates);
-    await context.updateManifest(manifest);
-  }
-
-  // The entry view reads Studio's app state first: manifest edits live there
-  // until save (see onWorkspaceManifestChanged), so the workspace's own
-  // manifest copy can lag behind after an embedded edit.
-  entryManifestTitle(context: MdzipEntryRenderContext): string {
-    return this.currentArchive()?.name ?? context.manifest?.title ?? '';
-  }
-
-  entryManifestText(
-    context: MdzipEntryRenderContext,
-    field: 'author' | 'description'
-  ): string {
-    const archive = this.currentArchive();
-    // With an archive open, its metadata is authoritative — including absence
-    // (a field the user emptied must not resurface from the workspace copy).
-    const value = archive
-      ? (archive.manifest.metadata as Record<string, unknown> | undefined)?.[field]
-      : context.manifest?.[field];
-    if (typeof value === 'string') return value;
-    const name = (value as { name?: unknown } | null | undefined)?.name;
-    return field === 'author' && typeof name === 'string' ? name : '';
-  }
-
-  entryManifestMode(context: MdzipEntryRenderContext): 'document' | 'project' {
-    return this.currentArchive()?.mode ?? context.manifest?.mode ?? 'document';
-  }
-
-  entryManifestVersion(context: MdzipEntryRenderContext): string {
-    return context.manifest?.spec?.version
-      ?? context.manifest?.mdz
-      ?? this.currentArchive()?.manifest.version
-      ?? '1.0.0';
-  }
-
-  entryManifestEntryPoint(context: MdzipEntryRenderContext): string {
-    return this.currentArchive()?.manifest.entryPoint
-      ?? context.manifest?.entryPoint
-      ?? this.documentPaths()[0]
-      ?? 'index.md';
-  }
-
-  // Pretty-printed, syntax-highlighted manifest for the read-only JSON tab.
-  // Shows the manifest as it will be written at save time — Studio state
-  // merged over the workspace copy via the same toMdzManifest used by the
-  // save path. Produces only <span class="…"> markup with escaped content,
-  // so Angular's [innerHTML] sanitizer passes it through unchanged.
-  entryManifestJsonHtml(context: MdzipEntryRenderContext): string {
-    const archive = this.currentArchive();
-    const manifest = archive
-      ? this.toMdzManifest(archive, context.manifest ?? null)
-      : context.manifest ?? {};
-    return highlightJsonHtml(JSON.stringify(manifest, null, 2));
-  }
-
   onWorkspaceChanged(event: MdzipWorkspaceChange): void {
     this.clearWorkspaceLoad();
     this.scheduleStudioHtmlTagHighlight();
     this.latestWorkspaceBytes.set(event.bytes);
     this.latestWorkspaceSnapshot.set(event.snapshot);
+    this.syncManifestFromWorkspace(event.snapshot.workspace?.manifest);
     this.recomputeDocumentStats(event.snapshot);
     // Structural change: other documents' texts may have changed, so their
     // cached image-reference sets are stale.
@@ -4134,13 +4048,35 @@ export class AppComponent implements OnDestroy {
     window.mdzipStudio?.setViewSetting?.('previewWidth', width);
   }
 
+  onOutlineVisibilityChanged(visible: boolean): void {
+    this.outlineOptions.update((options) => ({ ...options, visible }));
+    window.mdzipStudio?.setViewSetting?.('outlineVisible', visible);
+  }
+
+  onOutlineWidthChanged(width: number): void {
+    const rounded = Math.round(width);
+    this.outlineOptions.update((options) => ({ ...options, width: rounded }));
+    window.mdzipStudio?.setViewSetting?.('outlineWidth', rounded);
+  }
+
   onWorkspaceManifestChanged(event: MdzipDocumentChangeEvent): void {
     // Manifest-only edits made inside the editor (e.g. title) no longer flow
     // through (changed) with rebuilt bytes; the editor delegates persistence
     // to the host. Sync the new manifest into app state; it is patched into
     // the archive bytes at save time.
-    const manifest = (event.snapshot.workspace?.manifest ?? null) as Record<string, unknown> | null;
-    if (!manifest) return;
+    this.syncManifestFromWorkspace(event.snapshot.workspace?.manifest);
+  }
+
+  // The editor's manifest view (Document properties form + JSON editor, from
+  // @mdzip/editor 2.5) is where the manifest is edited (#43). Save patches
+  // Studio's copy (currentArchive) into the bytes, so that copy has to follow
+  // the editor's, or the patch would put back the old values (and a removed
+  // custom field). Called on manifest changes, structural changes, and after
+  // every flush, which is when JSON typed into manifest.json is committed.
+  private syncManifestFromWorkspace(workspaceManifest: unknown): void {
+    if (this.sourceFormat() !== 'mdz') return;
+    const manifest = (workspaceManifest ?? null) as Record<string, unknown> | null;
+    if (!manifest || typeof manifest !== 'object') return;
     const title = typeof manifest['title'] === 'string' && manifest['title'] ? manifest['title'] : null;
     this.archiveService.currentArchive.update((archive) =>
       archive

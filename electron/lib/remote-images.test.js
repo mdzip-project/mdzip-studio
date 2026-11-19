@@ -35,21 +35,23 @@ describe('settings file', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('defaults to remote images on, System colors and the default page width when there is no file', () => {
-    expect(loadSettings(path.join(dir, 'missing.json'))).toEqual({ remoteImages: true, colorScheme: 'system', previewWidth: 'default' });
+  it('defaults to remote images on, System colors, the default page width and a closed outline on the right when there is no file', () => {
+    expect(loadSettings(path.join(dir, 'missing.json'))).toEqual({ remoteImages: true, colorScheme: 'system', previewWidth: 'default', outlineVisible: false, outlinePosition: 'right', outlineWidth: null });
   });
 
   it('round-trips and keeps unknown keys', () => {
     const file = path.join(dir, 'settings.json');
     saveSettings(file, { remoteImages: false, colorScheme: 'dark', previewWidth: 'full', theme: 'dark' });
-    expect(loadSettings(file)).toEqual({ remoteImages: false, colorScheme: 'dark', previewWidth: 'full', theme: 'dark' });
+    expect(loadSettings(file)).toEqual({ remoteImages: false, colorScheme: 'dark', previewWidth: 'full', outlineVisible: false, outlinePosition: 'right', outlineWidth: null, theme: 'dark' });
+    saveSettings(file, { outlineVisible: true, outlinePosition: 'left', outlineWidth: 320 });
+    expect(loadSettings(file)).toMatchObject({ outlineVisible: true, outlinePosition: 'left', outlineWidth: 320 });
   });
 
   it('ignores a corrupt file or a wrong type', () => {
     const file = path.join(dir, 'settings.json');
     fs.writeFileSync(file, '{ nope');
     expect(loadSettings(file)).toEqual({ ...DEFAULT_SETTINGS });
-    fs.writeFileSync(file, '{"remoteImages": "no", "colorScheme": "blue", "previewWidth": 900}');
+    fs.writeFileSync(file, '{"remoteImages": "no", "colorScheme": "blue", "previewWidth": 900, "outlineVisible": "yes", "outlinePosition": "top", "outlineWidth": -5}');
     expect(loadSettings(file)).toEqual({ ...DEFAULT_SETTINGS });
   });
 });
@@ -61,6 +63,13 @@ describe('isValidViewSetting', () => {
     expect(isValidViewSetting('colorScheme', 'wide')).toBe(false);
     expect(isValidViewSetting('previewWidth', 900)).toBe(false);
     expect(isValidViewSetting('remoteImages', true)).toBe(false);
+    expect(isValidViewSetting('outlineVisible', true)).toBe(true);
+    expect(isValidViewSetting('outlineVisible', 'true')).toBe(false);
+    expect(isValidViewSetting('outlinePosition', 'left')).toBe(true);
+    expect(isValidViewSetting('outlinePosition', 'top')).toBe(false);
+    expect(isValidViewSetting('outlineWidth', 320)).toBe(true);
+    expect(isValidViewSetting('outlineWidth', 320.5)).toBe(false);
+    expect(isValidViewSetting('outlineWidth', '320')).toBe(false);
     expect(isValidViewSetting('__proto__', 'x')).toBe(false);
   });
 });

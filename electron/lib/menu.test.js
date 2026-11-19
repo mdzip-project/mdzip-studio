@@ -3,7 +3,7 @@ const { buildMenuTemplate, buildPreviewMenuTemplate, buildDockMenuTemplate, rece
 const HANDLER_NAMES = [
   'newDocument', 'newWindow', 'openDocument', 'openRecentPath', 'packFolder', 'unpackMdz',
   'save', 'saveAs', 'print', 'showInFolder', 'insertAgentsGuide', 'insertReadme', 'closeDocument', 'quit',
-  'reload', 'toggleLineNumbers', 'toggleRemoteImages', 'toggleDevTools',
+  'reload', 'toggleLineNumbers', 'toggleRemoteImages', 'toggleOutlineSide', 'toggleDevTools',
   'setMdDefault', 'showKnownIssues', 'showChangelog', 'checkForUpdates', 'showAbout',
   'exportDraft',
 ];
@@ -293,6 +293,18 @@ describe('View > Load Remote Images', () => {
     const { handlers, entry } = item(true);
     entry.click();
     expect(handlers.toggleRemoteImages).toHaveBeenCalled();
+  });
+});
+
+describe('View > Outline on the Left', () => {
+  it('is a checkbox reflecting the setting, off by default, and calls the toggle handler', () => {
+    const handlers = stubHandlers();
+    const find = (template) => findMenu(template, 'View').submenu.find((i) => i.label === 'Outline on the Left');
+    expect(find(buildMenuTemplate({ documentOpen: false, isDev: false, platform: 'win32', handlers }))).toMatchObject({ type: 'checkbox', checked: false });
+    const entry = find(buildMenuTemplate({ documentOpen: false, isDev: false, platform: 'win32', handlers, outlineLeft: true }));
+    expect(entry.checked).toBe(true);
+    entry.click();
+    expect(handlers.toggleOutlineSide).toHaveBeenCalled();
   });
 });
 

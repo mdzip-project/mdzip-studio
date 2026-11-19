@@ -5,17 +5,40 @@ const fs = require('fs');
 // loaded. Electron-free so it's unit-testable; main.js wires it to
 // session.webRequest and the View menu.
 
-const DEFAULT_SETTINGS = Object.freeze({ remoteImages: true, colorScheme: 'system', previewWidth: 'default' });
+const DEFAULT_SETTINGS = Object.freeze({
+  remoteImages: true,
+  colorScheme: 'system',
+  previewWidth: 'default',
+  outlineVisible: false,
+  outlinePosition: 'right',
+  outlineWidth: null,
+});
 
-// The editor's own toolbar choices Studio remembers: the color scheme menu and
-// the page width menu. Each window starts with the saved values.
+// The editor's own choices Studio remembers: the color scheme and page width
+// menus, and the outline panel (shown or not, its side, the width it was
+// dragged to). Each window starts with the saved values.
 const VIEW_SETTING_VALUES = Object.freeze({
   colorScheme: Object.freeze(['light', 'dark', 'system']),
   previewWidth: Object.freeze(['narrow', 'default', 'wide', 'full']),
+  outlineVisible: Object.freeze([true, false]),
+  outlinePosition: Object.freeze(['left', 'right']),
 });
 
+// The editor keeps a dragged outline between 160px and half the window; this
+// only keeps out nonsense.
+function isValidOutlineWidth(value) {
+  return Number.isInteger(value) && value >= 100 && value <= 4000;
+}
+
 function isValidViewSetting(key, value) {
+  if (key === 'outlineWidth') return isValidOutlineWidth(value);
   return Object.prototype.hasOwnProperty.call(VIEW_SETTING_VALUES, key) && VIEW_SETTING_VALUES[key].includes(value);
+}
+
+// The view settings a window starts with.
+function viewSettingsOf(settings) {
+  const { colorScheme, previewWidth, outlineVisible, outlinePosition, outlineWidth } = settings;
+  return { colorScheme, previewWidth, outlineVisible, outlinePosition, outlineWidth };
 }
 
 // Whether an image request may go ahead. `appOrigin` is the origin the UI itself
@@ -48,6 +71,9 @@ function loadSettings(file) {
         remoteImages: typeof parsed.remoteImages === 'boolean' ? parsed.remoteImages : DEFAULT_SETTINGS.remoteImages,
         colorScheme: isValidViewSetting('colorScheme', parsed.colorScheme) ? parsed.colorScheme : DEFAULT_SETTINGS.colorScheme,
         previewWidth: isValidViewSetting('previewWidth', parsed.previewWidth) ? parsed.previewWidth : DEFAULT_SETTINGS.previewWidth,
+        outlineVisible: isValidViewSetting('outlineVisible', parsed.outlineVisible) ? parsed.outlineVisible : DEFAULT_SETTINGS.outlineVisible,
+        outlinePosition: isValidViewSetting('outlinePosition', parsed.outlinePosition) ? parsed.outlinePosition : DEFAULT_SETTINGS.outlinePosition,
+        outlineWidth: isValidViewSetting('outlineWidth', parsed.outlineWidth) ? parsed.outlineWidth : DEFAULT_SETTINGS.outlineWidth,
       };
     }
   } catch {
@@ -60,4 +86,4 @@ function saveSettings(file, settings) {
   fs.writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
 }
 
-module.exports = { DEFAULT_SETTINGS, allowImageRequest, isValidViewSetting, loadSettings, saveSettings };
+module.exports = { DEFAULT_SETTINGS, allowImageRequest, isValidViewSetting, loadSettings, saveSettings, viewSettingsOf };

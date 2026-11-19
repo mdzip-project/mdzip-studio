@@ -36,7 +36,7 @@ function recentLabel(filePath, platform = process.platform) {
 // state that decides shape (documentOpen/isDev/platform) plus a bag of click
 // handlers, and returns a plain template array — no Menu/BrowserWindow/app
 // references, so it's unit-testable without a running main process.
-function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvailableVersion = null, recentFiles = [], remoteImages = true }) {
+function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvailableVersion = null, recentFiles = [], remoteImages = true, outlineLeft = false }) {
   // Electron's native Windows menu doesn't expose a styleable disabled state, so
   // the document-only items would look enabled until hovered. Instead of greying
   // them out, omit them entirely when no document is open — unambiguous, and they
@@ -123,6 +123,12 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvai
           type: 'checkbox',
           checked: remoteImages,
           click: handlers.toggleRemoteImages,
+        },
+        {
+          label: 'Outline on the Left',
+          type: 'checkbox',
+          checked: outlineLeft,
+          click: handlers.toggleOutlineSide,
         },
         { type: 'separator' },
         {

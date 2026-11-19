@@ -28,6 +28,9 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
   readFolder: (payload) => ipcRenderer.invoke('mdzip:read-folder', payload),
   pickMdzForUnpack: () => ipcRenderer.invoke('mdzip:pick-mdz-for-unpack'),
   writeUnpackedFolder: (payload) => ipcRenderer.invoke('mdzip:write-unpacked-folder', payload),
+  // The contents pane's Extract…: { files: [{ path, bytes }], selection } →
+  // { canceled } or { canceled: false, targetPath, fileCount }.
+  extractFiles: (payload) => ipcRenderer.invoke('mdzip:extract-files', payload),
   onPackFolderProgress: (callback) => {
     const listener = (_event, data) => callback(data);
     ipcRenderer.on('mdzip:pack-folder-progress', listener);

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Extract files from a document.** Select files in the contents pane (Ctrl+click, Shift+click, Ctrl+A) or right-click a folder, and choose **Extract…**. One file is saved where you choose; several files or a folder go into a folder you pick, keeping their folders, and Studio asks before replacing files that are already there. The document isn't changed.
+- **Outline panel.** A table of contents beside the preview: the toolbar's outline button shows it, a click goes to a section, and the section you're reading is marked. Drag its edge to make it wider, and put it on the left with **View → Outline on the Left**. Studio remembers whether it's open, its side and its width (`@mdzip/editor` 2.5.0).
+- **Edit the manifest as a form or as JSON** (#43). `manifest.json` opens as **Document properties** (title, description, author, keywords, language, license, document version, and under Advanced the entry point and mode); Edit shows its JSON, which you can now change, including fields of your own. Problems are marked as you type, and a manifest with errors can't be saved: Save says so and shows it. This replaces Studio's own Settings/JSON manifest view.
+- **Find in View** searches the rendered document without opening the source, and in Split the source now stays level with the preview block by block (`@mdzip/editor` 2.5.0).
+
 ## [1.7.0] - 2026-11-07
 
 ### Added
