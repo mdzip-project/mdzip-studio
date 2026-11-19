@@ -64,6 +64,13 @@ import { PrintService } from './core/services/print.service';
 import { StorageService } from './core/services/storage.service';
 import { ValidationError, ValidationService } from './core/services/validation.service';
 import { ManifestEditorChange } from './modules/manifest/manifest-editor.component';
+import {
+  SystemIntegrationAction,
+  SystemIntegrationActionResult,
+  HelperLatestVersions,
+  SystemIntegrationDialogComponent,
+  SystemIntegrationStatus,
+} from './modules/system-integration/system-integration-dialog.component';
 
 type AssetViewMode = 'tiles' | 'list';
 type ArchiveTreeKind = 'folder' | 'document' | 'asset';
@@ -218,6 +225,9 @@ interface ElectronMarkdownImageResult {
 interface MarkdownDefaultStatus {
   supported: boolean;
   isDefault: boolean;
+  // Windows 11: Settings was opened at MDZip Studio's Default apps page, where
+  // the user finishes the choice.
+  openedSettings?: boolean;
 }
 
 interface ElectronFolderFile {
@@ -325,6 +335,9 @@ interface ElectronBridge {
   printPreview?: (payload: { html: string; title: string }) => Promise<{ ok?: boolean; error?: string }>;
   getMarkdownDefaultStatus?: () => Promise<MarkdownDefaultStatus>;
   promptMarkdownDefault?: () => Promise<MarkdownDefaultStatus>;
+  getSystemIntegrationStatus?: () => Promise<SystemIntegrationStatus>;
+  getHelperLatestVersions?: () => Promise<HelperLatestVersions>;
+  runSystemIntegrationAction?: (payload: { action: SystemIntegrationAction; id?: string }) => Promise<SystemIntegrationActionResult>;
   viewSettings?: {
     colorScheme?: MdzipColorSchemePreference;
     previewWidth?: MdzipPreviewWidthChoice;
@@ -358,6 +371,7 @@ interface ArchiveTreeData {
     ButtonModule,
     DialogModule,
     TabsModule,
+    SystemIntegrationDialogComponent,
     TreeModule,
     MdzipWorkspaceComponent,
     NgIconComponent,
@@ -911,6 +925,8 @@ interface ArchiveTreeData {
       </ng-template>
     </p-dialog>
 
+    <app-system-integration-dialog [visible]="systemIntegrationOpen()" (visibleChange)="systemIntegrationOpen.set($event)" />
+
     <!-- Hidden print-capture workspace. Off-screen but laid out (not
          display:none): Mermaid needs real geometry to measure its diagrams.
          Forced light so the PDF never bakes in dark-scheme colors. -->
@@ -1244,6 +1260,8 @@ export class AppComponent implements OnDestroy {
   private printCaptureHandled = false;
   private printCaptureTimer: ReturnType<typeof setTimeout> | null = null;
   readonly mdDefaultPromptOpen = signal(false);
+  // Help > System Integration... (studio#11).
+  readonly systemIntegrationOpen = signal(false);
   readonly mdDefaultBusy = signal(false);
   private static readonly MD_DEFAULT_PROMPT_KEY = 'mdDefaultPromptSeen';
   readonly imageDestinationDialogOpen = signal(false);
@@ -1410,6 +1428,7 @@ export class AppComponent implements OnDestroy {
   private readonly handleShowKnownIssuesCommand = () => void this.openHelpDocument('known-issues');
   private readonly handleShowChangelogCommand = () => void this.openHelpDocument('changelog');
   private readonly handleSetMdDefaultCommand = () => void this.promptMarkdownDefaultManually();
+  private readonly handleShowSystemIntegrationCommand = () => this.systemIntegrationOpen.set(true);
   private readonly handlePackFolderCommand = () => void this.packFolder();
   private readonly handleInsertAgentsCommand = () => this.insertAgentsGuide();
   private readonly handleInsertReadmeCommand = () => this.insertReadme();
@@ -1478,6 +1497,7 @@ export class AppComponent implements OnDestroy {
     window.addEventListener('mdzip-studio:show-known-issues', this.handleShowKnownIssuesCommand);
     window.addEventListener('mdzip-studio:show-changelog', this.handleShowChangelogCommand);
     window.addEventListener('mdzip-studio:set-md-default', this.handleSetMdDefaultCommand);
+    window.addEventListener('mdzip-studio:show-system-integration', this.handleShowSystemIntegrationCommand);
     window.addEventListener('mdzip-studio:pack-folder', this.handlePackFolderCommand);
     window.addEventListener('mdzip-studio:insert-agents', this.handleInsertAgentsCommand);
     window.addEventListener('mdzip-studio:insert-readme', this.handleInsertReadmeCommand);
@@ -1557,6 +1577,7 @@ export class AppComponent implements OnDestroy {
     window.removeEventListener('mdzip-studio:show-known-issues', this.handleShowKnownIssuesCommand);
     window.removeEventListener('mdzip-studio:show-changelog', this.handleShowChangelogCommand);
     window.removeEventListener('mdzip-studio:set-md-default', this.handleSetMdDefaultCommand);
+    window.removeEventListener('mdzip-studio:show-system-integration', this.handleShowSystemIntegrationCommand);
     window.removeEventListener('mdzip-studio:pack-folder', this.handlePackFolderCommand);
     window.removeEventListener('mdzip-studio:insert-agents', this.handleInsertAgentsCommand);
     window.removeEventListener('mdzip-studio:insert-readme', this.handleInsertReadmeCommand);
@@ -1683,7 +1704,9 @@ export class AppComponent implements OnDestroy {
       this.statusMessage.set(
         status.isDefault
           ? 'MDZip Studio is now the default for .md files'
-          : 'You can set the default anytime from Help'
+          : status.openedSettings
+            ? 'In Settings, click .md and choose MDZip Studio'
+            : 'You can set the default anytime from Help'
       );
     } catch {
       this.statusMessage.set('Could not open the Windows default-app dialog');

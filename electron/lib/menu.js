@@ -141,12 +141,8 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvai
     {
       label: helpLabel,
       submenu: [
-        ...(platform === 'win32'
-          ? [
-              { label: 'Set as Default for .md Files...', click: handlers.setMdDefault },
-              { type: 'separator' },
-            ]
-          : []),
+        { label: 'System Integration...', click: handlers.showSystemIntegration },
+        { type: 'separator' },
         { label: 'Known Issues', click: handlers.showKnownIssues },
         { label: 'Change Log', click: handlers.showChangelog },
         // On macOS, About and Check for Updates live in the app menu.

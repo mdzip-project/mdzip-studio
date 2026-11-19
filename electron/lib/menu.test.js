@@ -4,7 +4,7 @@ const HANDLER_NAMES = [
   'newDocument', 'newWindow', 'openDocument', 'openRecentPath', 'packFolder', 'unpackMdz',
   'save', 'saveAs', 'print', 'showInFolder', 'insertAgentsGuide', 'insertReadme', 'closeDocument', 'quit',
   'reload', 'toggleLineNumbers', 'toggleRemoteImages', 'toggleOutlineSide', 'toggleDevTools',
-  'setMdDefault', 'showKnownIssues', 'showChangelog', 'checkForUpdates', 'showAbout',
+  'showSystemIntegration', 'showKnownIssues', 'showChangelog', 'checkForUpdates', 'showAbout',
   'exportDraft',
 ];
 
@@ -52,11 +52,15 @@ describe('buildMenuTemplate', () => {
     expect(fileLabels.at(-1)).toBe('Exit');
   });
 
-  it('only shows "Set as Default for .md Files" on win32', () => {
-    const win = buildMenuTemplate({ documentOpen: false, isDev: false, platform: 'win32', handlers: stubHandlers() });
-    const mac = buildMenuTemplate({ documentOpen: false, isDev: false, platform: 'darwin', handlers: stubHandlers() });
-    expect(labelsOf(findMenu(win, 'Help').submenu)).toContain('Set as Default for .md Files...');
-    expect(labelsOf(findMenu(mac, 'Help').submenu)).not.toContain('Set as Default for .md Files...');
+  it('shows System Integration on every platform (Windows rows and helper programs)', () => {
+    for (const platform of ['win32', 'darwin', 'linux']) {
+      const handlers = stubHandlers();
+      const template = buildMenuTemplate({ documentOpen: false, isDev: false, platform, handlers });
+      const item = findMenu(template, 'Help').submenu.find((entry) => entry.label === 'System Integration...');
+      expect(item).toBeDefined();
+      item.click();
+      expect(handlers.showSystemIntegration).toHaveBeenCalled();
+    }
   });
 
   it('adds a Developer menu only in dev', () => {
@@ -210,7 +214,7 @@ describe('buildMenuTemplate on darwin', () => {
   });
 
   it('keeps About and Check for Updates out of Help', () => {
-    expect(labelsOf(findMenu(build(), 'Help').submenu)).toEqual(['Known Issues', 'Change Log']);
+    expect(labelsOf(findMenu(build(), 'Help').submenu)).toEqual(['System Integration...', '[separator]', 'Known Issues', 'Change Log']);
   });
 
   it('adds Select All to Edit and a Window menu before Help', () => {
@@ -238,7 +242,7 @@ describe('non-darwin menus are unchanged', () => {
     expect(template.map((m) => m.label)).toEqual(['File', 'Edit', 'View', 'Help']);
     expect(findMenu(template, 'Edit').submenu.some((i) => i.role === 'selectAll')).toBe(false);
     expect(labelsOf(findMenu(template, 'Help').submenu)).toEqual([
-      'Set as Default for .md Files...', '[separator]', 'Known Issues', 'Change Log',
+      'System Integration...', '[separator]', 'Known Issues', 'Change Log',
       '[separator]', 'Check for Updates...', '[separator]', 'About MDZip Studio',
     ]);
     expect(labelsOf(findMenu(template, 'File').submenu)).toContain('Show in File Manager');

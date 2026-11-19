@@ -63,6 +63,13 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
   saveDocument: (payload) => ipcRenderer.invoke('mdzip:save-document', payload),
   getMarkdownDefaultStatus: () => ipcRenderer.invoke('mdzip:get-md-default-status'),
   promptMarkdownDefault: () => ipcRenderer.invoke('mdzip:prompt-md-default'),
+  // Help > System Integration...: every row's status, and its actions
+  // ({ action: 'markdown-default' | 'outlook-allow' | 'outlook-undo' |
+  // 'preview-off' | 'preview-on' | 'install-helper' | 'upgrade-helper' | 'open-page', id }).
+  getSystemIntegrationStatus: () => ipcRenderer.invoke('mdzip:system-integration-status'),
+  // Each helper program's newest version: { [id]: { latest, upgradeCommand } }.
+  getHelperLatestVersions: () => ipcRenderer.invoke('mdzip:system-integration-latest'),
+  runSystemIntegrationAction: (payload) => ipcRenderer.invoke('mdzip:system-integration-action', payload),
   writeMarkdownImage: (payload) => ipcRenderer.invoke('mdzip:write-markdown-image', payload),
   readMarkdownAsset: (payload) => ipcRenderer.invoke('mdzip:read-markdown-asset', payload),
   showInFolder: (filePath) => ipcRenderer.invoke('mdzip:show-in-folder', { filePath }),

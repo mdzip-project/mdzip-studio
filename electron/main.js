@@ -3,7 +3,7 @@ const { runPathAction } = require('./lib/path-actions');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs/promises');
 const { constants: fsConstants, createWriteStream, existsSync, readdirSync, unlinkSync, watch: watchFs } = require('fs');
-const { execFile } = require('child_process');
+const { exec, execFile, spawn } = require('child_process');
 const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
@@ -11,6 +11,20 @@ const { documentPathFromArgs } = require('./lib/document-path');
 const { saveDialogFilters } = require('./lib/save-dialog');
 const { resolveInsidePackFolder } = require('./lib/pack-folder');
 const { planExtract, resolveInsideFolder, existingTargets, writeFilesInto } = require('./lib/extract-files');
+const {
+  HELPER_PROGRAMS,
+  createRegistry,
+  freshPath,
+  helperStatus,
+  installCommandFor,
+  latestVersion,
+  upgradeCommandFor,
+  outlookStatus,
+  previewHandlerStatus,
+  setOutlookAllowed,
+  setPreviewForUser,
+  userChoiceProgId,
+} = require('./lib/system-integration');
 const { buildJumpList, wantsNewWindow, startupActionFromArgs, recentDocumentsForMac } = require('./lib/jump-list');
 const { createOpenFileQueue } = require('./lib/open-file-queue');
 const { statsDiffer } = require('./lib/file-watch');
@@ -659,31 +673,12 @@ async function readDocument(win, filePath, options = {}) {
   };
 }
 
-// Read the ProgID Windows currently uses to open .md for this user. The
-// per-extension UserChoice is the value Explorer actually honors; an absent key
-// means no explicit default has been set.
+// Read the ProgID Windows currently uses to open .md for this user (see
+// userChoiceProgId: UserChoiceLatest on current Windows 11, else UserChoice);
+// null means no explicit default has been set.
 function getMarkdownDefaultProgId() {
   if (process.platform !== 'win32') return Promise.resolve(null);
-  return new Promise((resolve) => {
-    execFile(
-      'reg',
-      [
-        'query',
-        'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.md\\UserChoice',
-        '/v',
-        'ProgId',
-      ],
-      { windowsHide: true },
-      (error, stdout) => {
-        if (error) {
-          resolve(null);
-          return;
-        }
-        const match = /ProgId\s+REG_SZ\s+(\S+)/i.exec(stdout ?? '');
-        resolve(match ? match[1] : null);
-      }
-    );
-  });
+  return userChoiceProgId(createRegistry((file, args) => runProcess(file, args)), '.md');
 }
 
 // Show the Windows "How do you want to open .md files?" dialog via
@@ -1392,12 +1387,37 @@ ipcMain.handle('mdzip:get-md-default-status', async () => {
   return { supported: true, isDefault: progId === MD_PROGID };
 });
 
-ipcMain.handle('mdzip:prompt-md-default', async (event) => {
+ipcMain.handle('mdzip:prompt-md-default', async (event) =>
+  promptMarkdownDefault(BrowserWindow.fromWebContents(event.sender)));
+
+// Windows 11 no longer lets an app's "How do you want to open…" dialog set a
+// default (it says "To change your default apps, go to Settings > Apps >
+// Default apps"). It has a Settings link to the app's own Default apps page
+// instead, listing .md and .mdz: one click on .md, then pick MDZip Studio.
+function usesDefaultAppsSettings() {
+  if (process.platform !== 'win32') return false;
+  const build = Number.parseInt(String(os.release()).split('.')[2] ?? '', 10);
+  return Number.isFinite(build) && build >= 22000;
+}
+
+// The link needs the name MDZip Studio is registered under, which only an
+// all-users install writes (HKLM\Software\RegisteredApplications); otherwise
+// it opens Default apps itself.
+async function openDefaultAppsSettings() {
+  const registered = (await runProcess('reg', ['query', 'HKLM\\Software\\RegisteredApplications', '/v', 'MDZip Studio'])).code === 0;
+  await shell.openExternal(registered
+    ? `ms-settings:defaultapps?registeredAppMachine=${encodeURIComponent('MDZip Studio')}`
+    : 'ms-settings:defaultapps');
+}
+
+async function promptMarkdownDefault(win) {
   if (process.platform !== 'win32' || isPortable) {
     return { supported: false, isDefault: false };
   }
-
-  const win = BrowserWindow.fromWebContents(event.sender);
+  if (usesDefaultAppsSettings()) {
+    await openDefaultAppsSettings();
+    return { supported: true, isDefault: (await getMarkdownDefaultProgId()) === MD_PROGID, openedSettings: true };
+  }
 
   // SHOpenWithDialog needs a file whose extension is .md; the file is never
   // opened (no OAIF_EXEC), so a throwaway in the temp dir is enough.
@@ -1421,6 +1441,182 @@ ipcMain.handle('mdzip:prompt-md-default', async (event) => {
 
   const progId = await getMarkdownDefaultProgId();
   return { supported: true, isDefault: progId === MD_PROGID };
+}
+
+// ---- Help > System Integration... (studio#11) -------------------------------
+
+// Runs a program and reports how it went instead of throwing: { code, stdout,
+// stderr }, with code -1 when it couldn't start or timed out. With `shell`, the
+// command line goes through cmd.exe, which Windows needs for npm's and pip's
+// .cmd shims; only Studio's own fixed commands are run this way.
+function runProcess(file, args, { env = process.env, shell = false } = {}) {
+  return new Promise((resolve) => {
+    const done = (error, stdout, stderr) => resolve({
+      code: error ? (typeof error.code === 'number' ? error.code : -1) : 0,
+      stdout: String(stdout ?? ''),
+      stderr: String(stderr ?? ''),
+    });
+    const options = { env, timeout: 10000, windowsHide: true, maxBuffer: 1024 * 1024 };
+    if (shell) {
+      exec([file, ...args].join(' '), options, done);
+    } else {
+      execFile(file, args, options, done);
+    }
+  });
+}
+
+// Where the Studio installer (with Windows Explorer integration) comes from.
+const STUDIO_DOWNLOAD_URL = 'https://mdzip.org/studio.html';
+
+// Every row's status. Windows rows only on Windows; helper programs everywhere.
+async function systemIntegrationStatus() {
+  const platform = process.platform;
+  const reg = createRegistry((file, args) => runProcess(file, args));
+  const windowsRows = platform === 'win32'
+    ? Promise.all([
+        isPortable
+          ? Promise.resolve({ state: 'unsupported' })
+          : getMarkdownDefaultProgId().then((progId) => ({
+              state: progId === MD_PROGID ? 'default' : 'not-default',
+              via: usesDefaultAppsSettings() ? 'settings' : 'dialog',
+            })),
+        previewHandlerStatus({
+          reg,
+          isPortable,
+          fileExists: (file) => existsSync(file),
+          listDir: (dir) => readdirSync(dir),
+          programFiles: process.env.ProgramW6432 || process.env.ProgramFiles,
+        }),
+        outlookStatus(reg),
+      ])
+    : Promise.resolve([null, null, null]);
+
+  // A fresh PATH, so programs installed since Studio started are found.
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'path') delete env[key];
+  }
+  env.PATH = await freshPath({ platform, reg, env: process.env });
+  const helpers = await Promise.all(HELPER_PROGRAMS.map(async (helper) => ({
+    id: helper.id,
+    name: helper.name,
+    purpose: helper.purpose,
+    url: helper.url,
+    installCommand: installCommandFor(helper, platform),
+    ...(await helperStatus(helper, (file, args) => runProcess(file, args, { env, shell: platform === 'win32' }))),
+  })));
+
+  const [markdownDefault, previewHandler, outlook] = await windowsRows;
+  return { platform, portable: isPortable, markdownDefault, previewHandler, outlook, helpers };
+}
+
+// Opens a terminal window running `command`, so the user sees the package
+// manager's progress and answers its prompts. Returns false where Studio
+// doesn't know how to open one (Linux): the row shows the command to copy.
+function runInTerminal(command, title) {
+  if (process.platform === 'win32') {
+    const child = spawn('cmd.exe', ['/k', `title ${title} && ${command}`], {
+      detached: true,
+      stdio: 'ignore',
+      windowsVerbatimArguments: true,
+    });
+    child.unref();
+    return true;
+  }
+  if (process.platform === 'darwin') {
+    const child = spawn('osascript', [
+      '-e', `tell application "Terminal" to do script "${command}"`,
+      '-e', 'tell application "Terminal" to activate',
+    ], { detached: true, stdio: 'ignore' });
+    child.unref();
+    return true;
+  }
+  return false;
+}
+
+ipcMain.handle('mdzip:system-integration-status', () => systemIntegrationStatus());
+
+// Each helper program's newest version, asked of its publisher (GitHub
+// releases, the npm registry, PyPI) only while System Integration is open, and
+// kept for six hours so reopening the dialog doesn't ask again. Separate from
+// the status call so a slow or missing network never holds up the dialog.
+const LATEST_VERSION_TTL_MS = 6 * 60 * 60 * 1000;
+const latestVersionCache = new Map();
+
+async function fetchJson(url) {
+  const response = await net.fetch(url, {
+    headers: { Accept: 'application/json', 'User-Agent': 'MDZip-Studio' },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json();
+}
+
+ipcMain.handle('mdzip:system-integration-latest', async () => {
+  const now = Date.now();
+  const entries = await Promise.all(HELPER_PROGRAMS.map(async (helper) => {
+    const cached = latestVersionCache.get(helper.id);
+    let latest = cached && now - cached.at < LATEST_VERSION_TTL_MS ? cached.version : undefined;
+    if (latest === undefined) {
+      latest = await latestVersion(helper, fetchJson);
+      // Only answers are kept, so a failed check is tried again next time.
+      if (latest) latestVersionCache.set(helper.id, { version: latest, at: now });
+    }
+    return [helper.id, { latest, upgradeCommand: upgradeCommandFor(helper, process.platform) }];
+  }));
+  return Object.fromEntries(entries);
+});
+
+ipcMain.handle('mdzip:system-integration-action', async (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const action = payload?.action;
+  try {
+    switch (action) {
+      case 'markdown-default':
+        await promptMarkdownDefault(win);
+        return { ok: true };
+      case 'outlook-allow':
+      case 'outlook-undo':
+        if (process.platform !== 'win32') return { ok: false, error: 'Windows only.' };
+        await setOutlookAllowed(createRegistry((file, args) => runProcess(file, args)), action === 'outlook-allow');
+        return { ok: true };
+      case 'preview-off':
+      case 'preview-on':
+        // Per user only: HKCU overrides hide the machine-wide handler for this
+        // account. Turning it off for everyone is the installer's option.
+        if (process.platform !== 'win32') return { ok: false, error: 'Windows only.' };
+        await setPreviewForUser(createRegistry((file, args) => runProcess(file, args)), action === 'preview-on');
+        return { ok: true };
+      case 'install-helper': {
+        const helper = HELPER_PROGRAMS.find((candidate) => candidate.id === payload?.id);
+        const command = helper ? installCommandFor(helper, process.platform) : null;
+        if (!helper || !command) return { ok: false, error: 'No installer for this program here.' };
+        return runInTerminal(command, `Installing ${helper.name}`)
+          ? { ok: true }
+          : { ok: false, error: 'no-terminal', command };
+      }
+      case 'upgrade-helper': {
+        const helper = HELPER_PROGRAMS.find((candidate) => candidate.id === payload?.id);
+        const command = helper ? upgradeCommandFor(helper, process.platform) : null;
+        if (!helper || !command) return { ok: false, error: 'No updater for this program here.' };
+        return runInTerminal(command, `Updating ${helper.name}`)
+          ? { ok: true }
+          : { ok: false, error: 'no-terminal', command };
+      }
+      case 'open-page': {
+        // Only Studio's own known pages: a helper's download page, or Studio's.
+        const helper = HELPER_PROGRAMS.find((candidate) => candidate.id === payload?.id);
+        const url = helper ? helper.url : payload?.id === 'studio' ? STUDIO_DOWNLOAD_URL : null;
+        if (!url) return { ok: false, error: 'Unknown page.' };
+        await shell.openExternal(url);
+        return { ok: true };
+      }
+      default:
+        return { ok: false, error: 'Unknown action.' };
+    }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 });
 
 // MIME types for relative images referenced by an opened Markdown document.
@@ -1794,7 +1990,7 @@ function menuHandlersFor(win) {
     toggleRemoteImages: () => toggleRemoteImages(),
     toggleOutlineSide: () => toggleOutlineSide(),
     toggleDevTools: () => win?.webContents.toggleDevTools(),
-    setMdDefault: () => dispatchAppEvent(win, 'mdzip-studio:set-md-default'),
+    showSystemIntegration: () => dispatchOrOpenWindow(win, 'mdzip-studio:show-system-integration'),
     showKnownIssues: () => dispatchOrOpenWindow(win, 'mdzip-studio:show-known-issues'),
     showChangelog: () => dispatchOrOpenWindow(win, 'mdzip-studio:show-changelog'),
     checkForUpdates: () => checkForUpdates(win),
