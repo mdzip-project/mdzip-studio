@@ -56,6 +56,15 @@ describe('SystemIntegrationDialogComponent', () => {
     dialog.ngOnDestroy();
   });
 
+  it('points a current-user install to the installer instead of Settings for .md', async () => {
+    const { dialog, action } = await open(windowsStatus({ markdownDefault: { state: 'unregistered', via: 'settings' } }));
+    const row = dialog.windowsRows().find((entry) => entry.id === 'markdown')!;
+    expect(row.status).toBe('Needs an all-users install');
+    expect(row.action?.label).toBe('Get the Installer');
+    row.action!.run();
+    await vi.waitFor(() => expect(action).toHaveBeenCalledWith({ action: 'open-page', id: 'studio' }));
+  });
+
   it('has no Windows rows elsewhere, only helper programs', async () => {
     const { dialog } = await open(windowsStatus({ platform: 'darwin', markdownDefault: null, previewHandler: null, outlook: null }));
     expect(dialog.windowsRows()).toEqual([]);

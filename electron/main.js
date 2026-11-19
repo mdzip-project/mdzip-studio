@@ -1476,8 +1476,13 @@ async function systemIntegrationStatus() {
     ? Promise.all([
         isPortable
           ? Promise.resolve({ state: 'unsupported' })
-          : getMarkdownDefaultProgId().then((progId) => ({
-              state: progId === MD_PROGID ? 'default' : 'not-default',
+          : Promise.all([
+              getMarkdownDefaultProgId(),
+              // Only an all-users install with Explorer integration registers
+              // Studio for .md; without it, Windows doesn't offer Studio there.
+              reg.keyExists(`HKCR\\${MD_PROGID}\\shell\\open\\command`),
+            ]).then(([progId, registered]) => ({
+              state: progId === MD_PROGID ? 'default' : registered ? 'not-default' : 'unregistered',
               via: usesDefaultAppsSettings() ? 'settings' : 'dialog',
             })),
         previewHandlerStatus({

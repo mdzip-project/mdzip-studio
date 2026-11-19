@@ -20,7 +20,9 @@ export interface SystemIntegrationStatus {
   platform: string;
   portable: boolean;
   // via: how the choice is made: Windows 11's Settings page, or Windows 10's dialog.
-  markdownDefault: { state: 'default' | 'not-default' | 'unsupported'; via?: 'settings' | 'dialog' } | null;
+  // unregistered: not an all-users install with Explorer integration, so
+  // Windows doesn't offer Studio for .md files.
+  markdownDefault: { state: 'default' | 'not-default' | 'unregistered' | 'unsupported'; via?: 'settings' | 'dialog' } | null;
   previewHandler:
     | { state: 'not-installed' | 'portable' }
     // off-for-user: hidden for this Windows account only. other: another
@@ -407,6 +409,16 @@ export class SystemIntegrationDialogComponent implements OnChanges, OnDestroy {
         tone: 'off',
         status: 'Not available in the portable version',
         detail: 'The portable version doesn’t register with Windows, so it can’t be the default app.',
+      };
+    }
+    if (state === 'unregistered') {
+      return {
+        id: 'markdown',
+        title: 'Open .md files with MDZip Studio',
+        tone: 'off',
+        status: 'Needs an all-users install',
+        detail: 'Windows offers MDZip Studio for .md files when it’s installed for all users with the installer’s Windows Explorer integration option. .mdz files already open in MDZip Studio.',
+        action: { label: 'Get the Installer', secondary: true, run: () => void this.openPage('studio') },
       };
     }
     const isDefault = state === 'default';
