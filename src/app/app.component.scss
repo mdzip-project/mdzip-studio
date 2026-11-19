@@ -206,6 +206,45 @@ p {
 
 /* Compact toolbar below menu bar */
 
+.help-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 14px;
+  border-bottom: 1px solid #c9dcf5;
+  background: #e8f1fc;
+  color: #1d3f6e;
+  font-size: 13px;
+}
+
+.help-strip-title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.help-strip-meta {
+  margin-left: auto;
+  color: #3d5a80;
+  white-space: nowrap;
+}
+
+.help-strip-sep {
+  margin: 0 4px;
+  opacity: 0.6;
+}
+
+.help-strip a {
+  color: #1f5fbf;
+  text-decoration: none;
+}
+
+.help-strip a:hover {
+  text-decoration: underline;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
@@ -1369,11 +1408,36 @@ p-button {
 }
 
 .help-doc-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   min-height: 28px;
   padding: 6px 12px;
   border-bottom: 1px solid #e3e7ec;
   font-size: 12px;
   color: #68717d;
+}
+
+.help-doc-links {
+  display: flex;
+  gap: 14px;
+  margin-left: auto;
+}
+
+.help-doc-links a,
+.help-doc-link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: #2563c9;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.help-doc-links a:hover,
+.help-doc-link-button:hover {
+  text-decoration: underline;
 }
 
 .help-doc-status.error {
@@ -1564,5 +1628,9 @@ p-button {
   .help-doc-dialog { background: #1e1e1e; }
   .help-doc-status { color: #8c8c8c; border-bottom-color: #3c3c3c; }
   .help-doc-status.error { color: #f08a8a; }
+  .help-strip { background: #1c2b40; border-bottom-color: #2c4466; color: #d6e4f7; }
+  .help-strip-meta { color: #a9bfdc; }
+  .help-strip a { color: #8ab8ff; }
+  .help-doc-links a, .help-doc-link-button { color: #6ea8fe; }
   .license-text { background: #252526; border-color: #3c3c3c; color: #b8bcc2; }
 }

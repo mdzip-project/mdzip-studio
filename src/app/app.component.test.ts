@@ -114,7 +114,7 @@ describe('AppComponent', () => {
   it('opens help documents from the bundled copy when remote fetch fails', async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({ ok: true, text: async () => '# Known Issues\n\nBundled copy' });
+      .mockResolvedValueOnce({ ok: true, arrayBuffer: async () => new TextEncoder().encode('# Known Issues\n\nBundled copy').buffer });
     vi.stubGlobal('fetch', fetch);
 
     await component.openHelpDocument('known-issues');
@@ -128,6 +128,73 @@ describe('AppComponent', () => {
     expect(component.helpDialogOpen()).toBe(true);
     expect(component.helpDialogStatus()).toBe('Showing bundled copy');
     expect(new TextDecoder().decode(component.helpDialogBytes() ?? new Uint8Array())).toContain('Bundled copy');
+  });
+
+  it('opens the System Integration page from the bundled copy, at a section, and in a new window on request', async () => {
+    const fetch = vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array([80, 75, 3, 4]).buffer });
+    vi.stubGlobal('fetch', fetch);
+    const openHelpInNewWindow = vi.fn();
+    vi.stubGlobal('mdzipStudio', { ...(window.mdzipStudio ?? {}), openHelpInNewWindow });
+
+    await component.openHelpDocument('system-integration', 'explorer-previews');
+
+    // No GitHub fetch: the bundled copy describes this version of Studio.
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledWith('assets/help/system-integration.mdz', { cache: 'no-store' });
+    expect(component.helpDialogStatus()).toMatch(/^For MDZip Studio \d/);
+    expect(component.helpDialogOnlineUrl()).toBe('https://mdzip.org/docs/system-integration.html');
+    expect(component.helpDialogAnchor()).toBe('explorer-previews');
+
+    component.openHelpInNewWindow();
+    expect(openHelpInNewWindow).toHaveBeenCalledWith('system-integration', 'explorer-previews');
+    expect(component.helpDialogOpen()).toBe(false);
+  });
+
+  it("sends System Integration's Learn more straight to the help window, or the dialog outside the desktop app", async () => {
+    const openHelpInNewWindow = vi.fn();
+    vi.stubGlobal('mdzipStudio', { ...(window.mdzipStudio ?? {}), openHelpInNewWindow });
+    component.showSystemIntegrationHelp('outlook-attachments');
+    expect(openHelpInNewWindow).toHaveBeenCalledWith('system-integration', 'outlook-attachments');
+    expect(component.helpDialogOpen()).toBe(false);
+
+    vi.stubGlobal('mdzipStudio', undefined);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array([80, 75, 3, 4]).buffer }));
+    component.showSystemIntegrationHelp('outlook-attachments');
+    await vi.waitFor(() => expect(component.helpDialogOpen()).toBe(true));
+    expect(component.helpDialogAnchor()).toBe('outlook-attachments');
+  });
+
+  it('moves an open help window to the section it was asked for again', () => {
+    component.helpWindow.set({ title: 'System Integration', status: 'For MDZip Studio 1.7.0', onlineUrl: 'https://mdzip.org/docs/system-integration.html#pandoc' });
+    component.helpView.set(true);
+    window.dispatchEvent(new CustomEvent('mdzip-studio:help-anchor', { detail: 'explorer-previews' }));
+    expect(component.helpWindow()?.onlineUrl).toBe('https://mdzip.org/docs/system-integration.html#explorer-previews');
+  });
+
+  it('titles a help window as help, with its version note and the page online', () => {
+    component.helpWindow.set({ title: 'System Integration', status: 'For MDZip Studio 1.7.0', onlineUrl: 'https://mdzip.org/docs/system-integration.html#outlook-attachments' });
+    component.helpView.set(true);
+    expect(component.documentTitleDisplay()).toBe('MDZip Studio Help: System Integration');
+    // Back to normal (Save As): the usual title.
+    component.helpView.set(false);
+    expect(component.documentTitleDisplay()).not.toContain('Help');
+  });
+
+  it('gives a help window the outline on the left without touching your setting, and no New/Open shortcuts', () => {
+    const setViewSetting = vi.fn();
+    vi.stubGlobal('mdzipStudio', { ...(window.mdzipStudio ?? {}), setViewSetting });
+    component.helpView.set(true);
+
+    expect(component.helpOutlineOptions()).toMatchObject({ visible: true, position: 'left' });
+    // The page has no file on disk, but closing the window shouldn't offer to save it.
+    expect(component.needsSave()).toBe(false);
+    component.onOutlineVisibilityChanged(false);
+    component.onOutlineWidthChanged(300);
+    expect(setViewSetting).not.toHaveBeenCalled();
+
+    const newArchive = vi.spyOn(component, 'newArchive');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, metaKey: true }));
+    expect(newArchive).not.toHaveBeenCalled();
   });
 
   it('routes manifest editor changes into Studio archive state', async () => {

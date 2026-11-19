@@ -65,6 +65,16 @@ describe('SystemIntegrationDialogComponent', () => {
     await vi.waitFor(() => expect(action).toHaveBeenCalledWith({ action: 'open-page', id: 'studio' }));
   });
 
+  it("asks for each card's section of the help page", async () => {
+    const { dialog } = await open(windowsStatus());
+    const asked: (string | null)[] = [];
+    dialog.learnMore.subscribe((anchor) => asked.push(anchor));
+    for (const id of ['markdown', 'preview', 'outlook', 'helpers', 'pandoc', 'mmdc', 'mdz']) dialog.showHelp(id);
+    expect(asked).toEqual([
+      'opening-md-files', 'explorer-previews', 'outlook-attachments', 'helper-programs', 'pandoc', 'mermaid-cli', 'mdz-command-line',
+    ]);
+  });
+
   it('has no Windows rows elsewhere, only helper programs', async () => {
     const { dialog } = await open(windowsStatus({ platform: 'darwin', markdownDefault: null, previewHandler: null, outlook: null }));
     expect(dialog.windowsRows()).toEqual([]);

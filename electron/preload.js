@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
   // has a document open, so Open Document / Open Recent don't clobber it.
   openDocumentInNewWindow: () => ipcRenderer.send('mdzip:open-document-in-new-window'),
   openPathInNewWindow: (filePath) => ipcRenderer.send('mdzip:open-path-in-new-window', { filePath }),
+  // A help document ('known-issues' | 'changelog' | 'system-integration'), read-only, at a heading id.
+  openHelpInNewWindow: (doc, anchor) => ipcRenderer.send('mdzip:open-help-in-new-window', { doc, anchor }),
   setRecentFiles: (paths) => ipcRenderer.send('mdzip:set-recent-files', { paths }),
   // Tell the main process whether a document is open so it can enable/disable
   // document-only menu items (Save, Save As, Close, Show in File Manager).

@@ -34,6 +34,7 @@ import { mdzipMermaidExtension, type MdzipMermaidApi } from '@mdzip/editor/merma
 import { MdzipWorkspaceComponent } from '@mdzip/editor-ng';
 import { NgIconComponent, provideIcons } from '@ng-icons/core';
 import {
+  lucideBookOpen,
   lucideBot,
   lucideCheck,
   lucideCircleCheck,
@@ -74,18 +75,28 @@ import {
 
 type AssetViewMode = 'tiles' | 'list';
 type ArchiveTreeKind = 'folder' | 'document' | 'asset';
-type HelpDocumentKind = 'known-issues' | 'changelog';
+type HelpDocumentKind = 'known-issues' | 'changelog' | 'system-integration';
 type SaveValidationState = 'unchecked' | 'valid' | 'invalid';
 const MARKDOWN_IMAGE_SOURCE_ATTR = 'mdzip-studio-src';
 // Marks a preview container once its copy listener is bound, so a re-mount
 // (same node reused across renders) doesn't stack duplicate listeners.
 const COPY_IMAGES_BOUND_ATTR = 'data-mdzip-copy-bound';
+// remoteUrl: fetched first, so the newest copy shows (Known Issues and the
+// Change Log only grow). Without one, the bundled copy shows, which describes
+// this version of Studio, and onlineUrl offers the latest one in the browser.
 const HELP_DOCUMENTS: Record<HelpDocumentKind, {
   title: string;
   fileName: string;
-  remoteUrl: string;
+  remoteUrl?: string;
   fallbackUrl: string;
+  onlineUrl?: string;
 }> = {
+  'system-integration': {
+    title: 'System Integration',
+    fileName: 'system-integration.mdz',
+    fallbackUrl: 'assets/help/system-integration.mdz',
+    onlineUrl: 'https://mdzip.org/docs/system-integration.html',
+  },
   'known-issues': {
     title: 'Known Issues',
     fileName: 'KNOWN_ISSUES.md',
@@ -306,8 +317,12 @@ interface ElectronBridge {
   takePendingOpenDocument?: () => Promise<ElectronDocumentOpenResult>;
   onOpenDocumentRequested?: (callback: () => void) => () => void;
   takeStartupAction?: () => Promise<
-    { kind: 'open-dialog' } | { kind: 'new-document'; format: 'markdown' | 'mdz' } | null
+    | { kind: 'open-dialog' }
+    | { kind: 'new-document'; format: 'markdown' | 'mdz' }
+    | { kind: 'help'; doc: HelpDocumentKind; anchor: string | null }
+    | null
   >;
+  openHelpInNewWindow?: (doc: HelpDocumentKind, anchor: string | null) => void;
   onDocumentChangedExternally?: (callback: (data: { filePath: string }) => void) => () => void;
   onWindowCloseRequested?: (callback: (requestId: number) => void) => () => void;
   respondWindowClose?: (requestId: number, allow: boolean) => void;
@@ -378,6 +393,7 @@ interface ArchiveTreeData {
   ],
   providers: [
     provideIcons({
+      lucideBookOpen,
       lucideBot,
       lucideCheck,
       lucideCircleCheck,
@@ -498,7 +514,20 @@ interface ArchiveTreeData {
           }
         </div>
         }
-        <div class="toolbar">
+        @if (helpView() ? helpWindow() : null; as help) {
+          <div class="help-strip" role="banner">
+            <ng-icon name="lucideBookOpen" size="16" aria-hidden="true" />
+            <span class="help-strip-title">Help <span class="help-strip-sep">·</span> {{ help.title }}</span>
+            <span class="help-strip-meta">
+              {{ help.status }}
+              @if (help.onlineUrl) {
+                <span class="help-strip-sep">·</span>
+                <a [href]="help.onlineUrl" target="_blank" rel="noopener">View the latest online</a>
+              }
+            </span>
+          </div>
+        }
+        <div class="toolbar" [style.display]="helpView() ? 'none' : null">
           <button class="tb-btn" type="button" [title]="'New (' + shortcut('N') + ')'" (click)="newArchive()"><ng-icon name="lucidePlus" size="15" /></button>
           <button class="tb-btn" type="button" [title]="'Open (' + shortcut('O') + ')'" (click)="openFilePicker()"><ng-icon name="lucideFolderOpen" size="15" /></button>
           @if (isDesktopShell()) {
@@ -587,19 +616,19 @@ interface ArchiveTreeData {
                 #workspaceEditor
                 [bytes]="workspaceBytes()"
                 [fileName]="workspaceFileName()"
-                mode="editable"
+                [mode]="helpView() ? 'read-only' : 'editable'"
                 [sourceFormat]="sourceFormat()"
-                [controls]="workspaceControls()"
+                [controls]="helpView() ? 'preview' : workspaceControls()"
                 [imageHydrationAnimation]="'initial'"
                 [imageInsertMode]="'ask'"
                 [markdownExtensions]="markdownExtensions"
                 [onConversionRequested]="handleConversionRequested"
-                initialLayout="split"
+                [initialLayout]="helpView() ? 'preview' : 'split'"
                 [navigationButtonActive]="navigationActive()"
                 [progressiveTextRendering]="true"
                 [initialColorScheme]="initialColorScheme"
                 [previewMaxWidth]="previewWidth()"
-                [outline]="outlineOptions()"
+                [outline]="helpView() ? helpOutlineOptions() : outlineOptions()"
                 [onExtractFiles]="handleExtractFiles"
                 (colorSchemePreferenceChanged)="onColorSchemePreferenceChanged($event)"
                 (previewWidthChanged)="onPreviewWidthChanged($event)"
@@ -620,7 +649,7 @@ interface ArchiveTreeData {
         </section>
       </section>
 
-      <footer class="statusbar">
+      <footer class="statusbar" [style.display]="helpView() ? 'none' : null">
         <span class="statusbar-left">
           @if (currentArchive()) {
             <ng-icon
@@ -895,14 +924,23 @@ interface ArchiveTreeData {
           } @else {
             {{ helpDialogStatus() }}
           }
+          <span class="help-doc-links">
+            @if (helpDialogOnlineUrl(); as onlineUrl) {
+              <a [href]="onlineUrl + (helpDialogAnchor() ? '#' + helpDialogAnchor() : '')" target="_blank" rel="noopener">View the latest online</a>
+            }
+            @if (isDesktopShell()) {
+              <button type="button" class="help-doc-link-button" (click)="openHelpInNewWindow()">Open in New Window</button>
+            }
+          </span>
         </div>
         <div class="help-doc-viewer">
           @if (helpDialogBytes()) {
             <mdzip-workspace
+              #helpWorkspace
               [bytes]="helpDialogBytes()"
               [fileName]="helpDialogFileName()"
               mode="read-only"
-              sourceFormat="markdown"
+              [sourceFormat]="helpDialogFileName().endsWith('.mdz') ? 'mdz' : 'markdown'"
               controls="preview"
               initialLayout="preview"
               [markdownExtensions]="markdownExtensions"
@@ -925,7 +963,7 @@ interface ArchiveTreeData {
       </ng-template>
     </p-dialog>
 
-    <app-system-integration-dialog [visible]="systemIntegrationOpen()" (visibleChange)="systemIntegrationOpen.set($event)" />
+    <app-system-integration-dialog [visible]="systemIntegrationOpen()" (visibleChange)="systemIntegrationOpen.set($event)" (learnMore)="showSystemIntegrationHelp($event)" />
 
     <!-- Hidden print-capture workspace. Off-screen but laid out (not
          display:none): Mermaid needs real geometry to measure its diagrams.
@@ -958,6 +996,7 @@ export class AppComponent implements OnDestroy {
   @ViewChild('markdownImageInput') private markdownImageInput?: ElementRef<HTMLInputElement>;
   @ViewChild('folderInput') private folderInput?: ElementRef<HTMLInputElement>;
   @ViewChild('workspaceEditor') private workspaceEditor?: MdzipWorkspaceComponent;
+  @ViewChild('helpWorkspace') private helpWorkspace?: MdzipWorkspaceComponent;
   @ViewChild('printWorkspace', { read: ElementRef }) private printWorkspaceRef?: ElementRef<HTMLElement>;
 
   readonly currentArchive = this.archiveService.currentArchive;
@@ -1078,6 +1117,8 @@ export class AppComponent implements OnDestroy {
   }
   readonly readOnlyHint = 'This file is read-only. Use "Save As" to save your changes to a new file, or clear the read-only attribute in your operating system and reopen it to edit in place.';
   readonly documentTitleDisplay = computed(() => {
+    const help = this.helpWindow();
+    if (help && this.helpView()) return `MDZip Studio Help: ${help.title}`;
     const name = this.documentTitle();
     return name && this.readOnly() ? `${name} (read-only)` : name;
   });
@@ -1250,6 +1291,14 @@ export class AppComponent implements OnDestroy {
   readonly helpDialogStatus = signal('');
   readonly helpDialogLoading = signal(false);
   readonly helpDialogError = signal(false);
+  readonly helpDialogKind = signal<HelpDocumentKind | null>(null);
+  readonly helpDialogAnchor = signal<string | null>(null);
+  readonly helpDialogOnlineUrl = signal<string | null>(null);
+  // This window shows a help document (Open in New Window): read-only, preview only.
+  readonly helpView = signal(false);
+  // What a help window shows in its strip: the document, its version note, and
+  // the page online (at the section it opened at).
+  readonly helpWindow = signal<{ title: string; status: string; onlineUrl: string | null } | null>(null);
 
   // Print flow: setting printCapture mounts the hidden capture workspace; its
   // (assetsHydrated) hands the rendered preview to PrintService → main process.
@@ -1379,6 +1428,8 @@ export class AppComponent implements OnDestroy {
   // side (View > Outline on the Left) and the width it was dragged to. Read
   // when an editor is created (each document opened gets one), so it follows
   // every change; the component applies visibility and side live.
+  // A help window opens with the outline on the left, whatever your setting is.
+  readonly helpOutlineOptions = computed<MdzipOutlineViewOptions>(() => ({ ...this.outlineOptions(), visible: true, position: 'left' }));
   readonly outlineOptions = signal<MdzipOutlineViewOptions>((() => {
     const saved = window.mdzipStudio?.viewSettings;
     return {
@@ -1429,6 +1480,18 @@ export class AppComponent implements OnDestroy {
   private readonly handleShowChangelogCommand = () => void this.openHelpDocument('changelog');
   private readonly handleSetMdDefaultCommand = () => void this.promptMarkdownDefaultManually();
   private readonly handleShowSystemIntegrationCommand = () => this.systemIntegrationOpen.set(true);
+  // Main process: the help window already open was asked for another section.
+  private readonly handleHelpAnchorCommand = (event: Event) => {
+    const anchor = (event as CustomEvent<string>).detail;
+    if (!this.helpView() || typeof anchor !== 'string') return;
+    this.ngZone.run(() => {
+      this.helpWindow.update((help) => help && ({
+        ...help,
+        onlineUrl: help.onlineUrl ? `${help.onlineUrl.split('#')[0]}#${anchor}` : null,
+      }));
+      void this.workspaceEditor?.scrollToAnchor(anchor);
+    });
+  };
   private readonly handlePackFolderCommand = () => void this.packFolder();
   private readonly handleInsertAgentsCommand = () => this.insertAgentsGuide();
   private readonly handleInsertReadmeCommand = () => this.insertReadme();
@@ -1449,7 +1512,8 @@ export class AppComponent implements OnDestroy {
   private readonly handleKeyDown = (e: KeyboardEvent): void => {
     // Cmd on macOS, Ctrl elsewhere.
     const modifier = this.isMac() ? e.metaKey : e.ctrlKey;
-    if (!modifier) return;
+    // A help window has no menu or toolbar: New, Open, Save and Close don't apply.
+    if (!modifier || this.helpView()) return;
     switch (e.key) {
       case 'n':
         e.preventDefault();
@@ -1498,6 +1562,7 @@ export class AppComponent implements OnDestroy {
     window.addEventListener('mdzip-studio:show-changelog', this.handleShowChangelogCommand);
     window.addEventListener('mdzip-studio:set-md-default', this.handleSetMdDefaultCommand);
     window.addEventListener('mdzip-studio:show-system-integration', this.handleShowSystemIntegrationCommand);
+    window.addEventListener('mdzip-studio:help-anchor', this.handleHelpAnchorCommand);
     window.addEventListener('mdzip-studio:pack-folder', this.handlePackFolderCommand);
     window.addEventListener('mdzip-studio:insert-agents', this.handleInsertAgentsCommand);
     window.addEventListener('mdzip-studio:insert-readme', this.handleInsertReadmeCommand);
@@ -1530,6 +1595,8 @@ export class AppComponent implements OnDestroy {
         this.ngZone.run(() => this.launchFilePicker());
       } else if (action?.kind === 'new-document') {
         this.ngZone.run(() => void this.createNewDocument(action.format));
+      } else if (action?.kind === 'help') {
+        this.ngZone.run(() => void this.showHelpInThisWindow(action.doc, action.anchor));
       }
     });
     this.removeDocumentChangedExternallyListener = window.mdzipStudio?.onDocumentChangedExternally?.(
@@ -1578,6 +1645,7 @@ export class AppComponent implements OnDestroy {
     window.removeEventListener('mdzip-studio:show-changelog', this.handleShowChangelogCommand);
     window.removeEventListener('mdzip-studio:set-md-default', this.handleSetMdDefaultCommand);
     window.removeEventListener('mdzip-studio:show-system-integration', this.handleShowSystemIntegrationCommand);
+    window.removeEventListener('mdzip-studio:help-anchor', this.handleHelpAnchorCommand);
     window.removeEventListener('mdzip-studio:pack-folder', this.handlePackFolderCommand);
     window.removeEventListener('mdzip-studio:insert-agents', this.handleInsertAgentsCommand);
     window.removeEventListener('mdzip-studio:insert-readme', this.handleInsertReadmeCommand);
@@ -1624,39 +1692,89 @@ export class AppComponent implements OnDestroy {
     this.aboutOpen.set(true);
   }
 
-  async openHelpDocument(kind: HelpDocumentKind): Promise<void> {
+  // Opens a help document in the help dialog, scrolled to `anchor` (a heading
+  // id) when given. The dialog's Open in New Window shows it in a window of its own.
+  async openHelpDocument(kind: HelpDocumentKind, anchor: string | null = null): Promise<void> {
     const doc = HELP_DOCUMENTS[kind];
+    this.helpDialogKind.set(kind);
+    this.helpDialogAnchor.set(anchor);
     this.helpDialogTitle.set(doc.title);
     this.helpDialogFileName.set(doc.fileName);
+    this.helpDialogOnlineUrl.set(doc.onlineUrl ?? null);
     this.helpDialogBytes.set(null);
     this.helpDialogStatus.set('');
     this.helpDialogError.set(false);
     this.helpDialogLoading.set(true);
     this.helpDialogOpen.set(true);
 
-    try {
-      const remote = await this.fetchHelpMarkdown(doc.remoteUrl);
-      this.helpDialogBytes.set(new TextEncoder().encode(remote));
-      this.helpDialogStatus.set('Updated from GitHub');
-    } catch {
-      try {
-        const fallback = await this.fetchHelpMarkdown(doc.fallbackUrl);
-        this.helpDialogBytes.set(new TextEncoder().encode(fallback));
-        this.helpDialogStatus.set('Showing bundled copy');
-      } catch {
-        this.helpDialogError.set(true);
-        this.helpDialogStatus.set(`Could not load ${doc.title}`);
-        this.helpDialogBytes.set(new TextEncoder().encode(`# ${doc.title}\n\nCould not load this help document.`));
-      }
-    } finally {
-      this.helpDialogLoading.set(false);
+    const loaded = await this.loadHelpDocument(kind);
+    this.helpDialogBytes.set(loaded.bytes);
+    this.helpDialogStatus.set(loaded.status);
+    this.helpDialogError.set(loaded.error);
+    this.helpDialogLoading.set(false);
+    if (anchor) {
+      // The workspace mounts on the next render; scrollToAnchor waits for its preview.
+      setTimeout(() => void this.helpWorkspace?.scrollToAnchor(anchor), 0);
     }
   }
 
-  private async fetchHelpMarkdown(url: string): Promise<string> {
+  // System Integration's Learn more: straight to the help window (the desktop
+  // app), or the help dialog where there are no windows to open.
+  showSystemIntegrationHelp(anchor: string | null): void {
+    if (window.mdzipStudio?.openHelpInNewWindow) {
+      window.mdzipStudio.openHelpInNewWindow('system-integration', anchor);
+    } else {
+      void this.openHelpDocument('system-integration', anchor);
+    }
+  }
+
+  // Help > Open in New Window: the same document, read-only, in its own Studio window.
+  openHelpInNewWindow(): void {
+    const kind = this.helpDialogKind();
+    if (!kind || !window.mdzipStudio?.openHelpInNewWindow) return;
+    window.mdzipStudio.openHelpInNewWindow(kind, this.helpDialogAnchor());
+    this.helpDialogOpen.set(false);
+  }
+
+  // A window opened for help: the document fills it, read-only, kept out of
+  // Recent Files, scrolled to `anchor`.
+  private async showHelpInThisWindow(kind: HelpDocumentKind, anchor: string | null): Promise<void> {
+    const doc = HELP_DOCUMENTS[kind];
+    const loaded = await this.loadHelpDocument(kind);
+    this.helpWindow.set({
+      title: doc.title,
+      status: loaded.status,
+      onlineUrl: doc.onlineUrl ? doc.onlineUrl + (anchor ? `#${anchor}` : '') : null,
+    });
+    await this.openDocumentBytes(loaded.bytes, doc.fileName, undefined, true, false, false, true);
+    if (anchor) setTimeout(() => void this.workspaceEditor?.scrollToAnchor(anchor), 0);
+  }
+
+  private async loadHelpDocument(kind: HelpDocumentKind): Promise<{ bytes: Uint8Array; status: string; error: boolean }> {
+    const doc = HELP_DOCUMENTS[kind];
+    if (doc.remoteUrl) {
+      try {
+        return { bytes: await this.fetchHelpBytes(doc.remoteUrl), status: 'Updated from GitHub', error: false };
+      } catch {
+        // Offline or unreachable: the bundled copy below.
+      }
+    }
+    try {
+      const bytes = await this.fetchHelpBytes(doc.fallbackUrl);
+      return { bytes, status: doc.remoteUrl ? 'Showing bundled copy' : `For MDZip Studio ${APP_VERSION}`, error: false };
+    } catch {
+      return {
+        bytes: new TextEncoder().encode(`# ${doc.title}\n\nCould not load this help document.`),
+        status: `Could not load ${doc.title}`,
+        error: true,
+      };
+    }
+  }
+
+  private async fetchHelpBytes(url: string): Promise<Uint8Array> {
     const response = await fetch(url, { cache: 'no-store' });
     if (!response.ok) throw new Error(`Could not load ${url}`);
-    return response.text();
+    return new Uint8Array(await response.arrayBuffer());
   }
 
   // First run only: offer to become the default .md editor when we aren't
@@ -1815,11 +1933,12 @@ export class AppComponent implements OnDestroy {
   // editor's dirty flag covers edits but not these "never saved" cases, so the
   // Save button keys off this instead of dirty alone. (In the browser shell
   // there is no on-disk path, so we fall back to dirty.)
-  readonly needsSave = computed(() =>
+  // A help window's page has no file on disk, but there's nothing of yours to save.
+  readonly needsSave = computed(() => !this.helpView() && (
     this.isDirty()
     || this.headingAutoInserted()
     || (this.isDesktopShell() && !!this.currentArchive() && !this.hasFileOnDisk())
-  );
+  ));
 
   async showInFileManager(): Promise<void> {
     this.closeMenu();
@@ -1877,6 +1996,8 @@ export class AppComponent implements OnDestroy {
     this.currentMarkdownPath = null;
     this.clearMdAssetCaches();
     this.readOnly.set(false);
+
+    this.helpView.set(false);
     this.externalChangeBannerVisible.set(false);
     this.statusMessage.set('Closed document');
   }
@@ -2491,6 +2612,8 @@ export class AppComponent implements OnDestroy {
     this.currentMarkdownPath = null;
     this.clearMdAssetCaches();
     this.readOnly.set(false);
+
+    this.helpView.set(false);
     this.statusMessage.set(`Created ${name}`);
   }
 
@@ -2672,8 +2795,9 @@ export class AppComponent implements OnDestroy {
     });
   }
 
-  private async openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly = false, recordRecent = true, showNavigation = false): Promise<void> {
+  private async openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly = false, recordRecent = true, showNavigation = false, help = false): Promise<void> {
     this.readOnly.set(readOnly);
+    this.helpView.set(help);
     // Decide nav-pane visibility before the workspace (re)mounts, so the freshly
     // created view picks it up. Off for normal opens, on for packed folders.
     this.navigationActive.set(showNavigation);
@@ -2927,6 +3051,8 @@ export class AppComponent implements OnDestroy {
         this.workspaceEditor?.markPersisted();
         this.markClean();
         this.readOnly.set(false);
+
+        this.helpView.set(false);
         // A markdown source only becomes .mdz via Save As, so mdzBytes was built above.
         if (result.format === 'mdz' && mdzBytes) {
           const firstDocument = archive.documents[0];
@@ -3002,6 +3128,8 @@ export class AppComponent implements OnDestroy {
       this.workspaceEditor?.markPersisted();
       this.markClean();
       this.readOnly.set(false);
+
+      this.helpView.set(false);
       const savedTarget = result.filePath ?? result.name ?? archive.name;
       this.statusMessage.set(validation.valid ? `Saved ${savedTarget}` : `Saved ${savedTarget} with technical issues`);
       return;
@@ -4072,11 +4200,14 @@ export class AppComponent implements OnDestroy {
   }
 
   onOutlineVisibilityChanged(visible: boolean): void {
+    // A help window's outline is its own: it doesn't change your saved setting.
+    if (this.helpView()) return;
     this.outlineOptions.update((options) => ({ ...options, visible }));
     window.mdzipStudio?.setViewSetting?.('outlineVisible', visible);
   }
 
   onOutlineWidthChanged(width: number): void {
+    if (this.helpView()) return;
     const rounded = Math.round(width);
     this.outlineOptions.update((options) => ({ ...options, width: rounded }));
     window.mdzipStudio?.setViewSetting?.('outlineWidth', rounded);

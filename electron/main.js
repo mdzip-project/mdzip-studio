@@ -27,6 +27,7 @@ const {
 } = require('./lib/system-integration');
 const { buildJumpList, wantsNewWindow, startupActionFromArgs, recentDocumentsForMac } = require('./lib/jump-list');
 const { createOpenFileQueue } = require('./lib/open-file-queue');
+const { helpStartupAction } = require('./lib/help-window');
 const { statsDiffer } = require('./lib/file-watch');
 const {
   PORTABLE_DOWNLOAD_URL,
@@ -817,7 +818,8 @@ function dispatchAppEvent(win, name) {
 function createWindow({ pendingOpenPath = null, startupAction = null } = {}) {
   const win = new BrowserWindow({
     show: false,
-    width: 1200,
+    // A help window is narrower: a page to read next to the window you're working in.
+    width: startupAction?.kind === 'help' ? 900 : 1200,
     height: 800,
     icon: windowIconForTheme(),
     title: 'MDZip Studio',
@@ -842,6 +844,9 @@ function createWindow({ pendingOpenPath = null, startupAction = null } = {}) {
     fileWatcher: null,
     externalChangeTimer: null,
     afterReady: [],
+    // A help window (Help > Open in New Window): a read-only page, no menu.
+    help: startupAction?.kind === 'help',
+    helpDoc: startupAction?.kind === 'help' ? startupAction.doc : null,
     // Set once the renderer has approved this window closing (X button or the
     // quit flow), so the 'close' handler below lets the next attempt through.
     closeApproved: false,
@@ -1058,6 +1063,25 @@ ipcMain.on('mdzip:set-recent-files', (_event, payload) => {
 // same call sites skip this and load in place instead.
 ipcMain.on('mdzip:open-document-in-new-window', () => {
   createWindow({ startupAction: { kind: 'open-dialog' } });
+});
+
+// One help window per document: asking again brings it forward at the new section.
+ipcMain.on('mdzip:open-help-in-new-window', (_event, payload) => {
+  const startupAction = helpStartupAction(payload);
+  if (!startupAction) return;
+  for (const [win, state] of windows) {
+    if (win.isDestroyed() || state.helpDoc !== startupAction.doc) continue;
+    if (win.isMinimized()) win.restore();
+    win.focus();
+    if (startupAction.anchor) {
+      // The anchor is a checked heading id (helpStartupAction), safe to embed.
+      void win.webContents.executeJavaScript(
+        `window.dispatchEvent(new CustomEvent('mdzip-studio:help-anchor', { detail: ${JSON.stringify(startupAction.anchor)} }))`
+      );
+    }
+    return;
+  }
+  createWindow({ startupAction });
 });
 
 ipcMain.handle('mdzip:take-startup-action', (event) => {
@@ -2014,6 +2038,10 @@ function refreshWindowMenu(win) {
     return;
   }
   const state = windowState(win);
+  if (state?.help) {
+    win.setMenu(null);
+    return;
+  }
   const template = buildMenuTemplate({
     documentOpen: state?.documentOpen ?? false,
     isDev,

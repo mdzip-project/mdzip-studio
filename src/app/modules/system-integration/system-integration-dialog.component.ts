@@ -1,8 +1,9 @@
 import { Component, EventEmitter, Input, OnChanges, OnDestroy, Output, SimpleChanges, computed, signal } from '@angular/core';
+import { HELP_SECTIONS } from './help-sections';
 import { ButtonModule } from 'primeng/button';
 import { DialogModule } from 'primeng/dialog';
 import { NgIconComponent, provideIcons } from '@ng-icons/core';
-import { lucideCircleArrowUp, lucideCircleCheck, lucideCircleX } from '@ng-icons/lucide';
+import { lucideCircleArrowUp, lucideCircleCheck, lucideCircleHelp, lucideCircleX } from '@ng-icons/lucide';
 
 // What the main process reports for Help > System Integration… (studio#11);
 // see electron/lib/system-integration.js.
@@ -91,7 +92,7 @@ interface Row {
   selector: 'app-system-integration-dialog',
   standalone: true,
   imports: [ButtonModule, DialogModule, NgIconComponent],
-  providers: [provideIcons({ lucideCircleArrowUp, lucideCircleCheck, lucideCircleX })],
+  providers: [provideIcons({ lucideCircleArrowUp, lucideCircleCheck, lucideCircleHelp, lucideCircleX })],
   template: `
     <p-dialog
       header="System Integration"
@@ -115,7 +116,12 @@ interface Row {
               @for (row of windowsRows(); track row.id) {
                 <li class="si-row">
                   <div class="si-main">
-                    <div class="si-title">{{ row.title }}</div>
+                    <div class="si-title">
+                      {{ row.title }}
+                      <button type="button" class="si-help" [attr.title]="'Help: ' + row.title" [attr.aria-label]="'Help: ' + row.title" (click)="showHelp(row.id)">
+                        <ng-icon name="lucideCircleHelp" size="15" aria-hidden="true" />
+                      </button>
+                    </div>
                     <div [class]="'si-status si-' + row.tone">
                       <ng-icon [name]="toneIcon(row.tone)" size="15" aria-hidden="true" />
                       {{ row.status }}
@@ -143,7 +149,12 @@ interface Row {
             </ul>
           }
 
-          <h3>Helper programs</h3>
+          <h3>
+            Helper programs
+            <button type="button" class="si-help" title="Help: Helper programs" aria-label="Help: Helper programs" (click)="showHelp('helpers')">
+              <ng-icon name="lucideCircleHelp" size="15" aria-hidden="true" />
+            </button>
+          </h3>
           <p class="si-intro">
             Studio works without these. Export and Import, coming in later versions, use them when they're installed.
           </p>
@@ -152,7 +163,12 @@ interface Row {
               @let helper = row.helper;
               <li class="si-row">
                 <div class="si-main">
-                  <div class="si-title">{{ helper.name }}</div>
+                  <div class="si-title">
+                    {{ helper.name }}
+                    <button type="button" class="si-help" [attr.title]="'Help: ' + helper.name" [attr.aria-label]="'Help: ' + helper.name" (click)="showHelp(helper.id)">
+                      <ng-icon name="lucideCircleHelp" size="15" aria-hidden="true" />
+                    </button>
+                  </div>
                   <div [class]="'si-status si-' + row.tone">
                     <ng-icon [name]="toneIcon(row.tone)" size="15" aria-hidden="true" />
                     {{ row.status }}
@@ -196,6 +212,13 @@ interface Row {
   `,
   styles: [`
     .si { display: grid; gap: 4px; }
+    /* Context help: a small blue (?) after a card's title, opening its section of the help page. */
+    .si-help {
+      display: inline-flex; vertical-align: -2px; margin-left: 4px; padding: 1px; border: 0; border-radius: 50%;
+      background: none; color: #2563c9; cursor: pointer; opacity: 0.85;
+    }
+    .si-help:hover { opacity: 1; background: rgba(37, 99, 201, 0.1); }
+    .si-help:focus-visible { outline: 2px solid #2563c9; outline-offset: 1px; }
     /* Room under the last card, so a row cut off by scrolling reads as scrolled. */
     .si { padding-bottom: 8px; }
     .si h3 {
@@ -238,6 +261,8 @@ interface Row {
     .si-error { color: #b42318; }
     @media (prefers-color-scheme: dark) {
       .si h3 { color: #e6e8ec; }
+      .si-help { color: #6ea8fe; }
+      .si-help:hover { background: rgba(110, 168, 254, 0.15); }
       .si-off, .si-loading { color: #9aa0a6; }
       .si-row { border-color: #3c3c3c; background: #262628; }
       ::ng-deep .si-dialog .p-dialog-footer { border-top-color: #3c3c3c; }
@@ -253,6 +278,8 @@ interface Row {
 export class SystemIntegrationDialogComponent implements OnChanges, OnDestroy {
   @Input() visible = false;
   @Output() readonly visibleChange = new EventEmitter<boolean>();
+  // A card's "Learn more": the heading id of its section on the help page.
+  @Output() readonly learnMore = new EventEmitter<string | null>();
 
   readonly status = signal<SystemIntegrationStatus | null>(null);
   readonly loading = signal(false);
@@ -323,6 +350,10 @@ export class SystemIntegrationDialogComponent implements OnChanges, OnDestroy {
     } catch {
       // Unknown newest versions just leave the rows without "latest".
     }
+  }
+
+  showHelp(id: string): void {
+    this.learnMore.emit(HELP_SECTIONS[id] ?? null);
   }
 
   toneIcon(tone: Tone): string {

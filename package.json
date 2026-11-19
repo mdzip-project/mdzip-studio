@@ -13,6 +13,7 @@
     "start:angular": "ng serve --port 4300",
     "start:electron": "electron .",
     "prebuild": "node scripts/sync-version.js && node scripts/generate-about-data.js && npm run build:preview-handler",
+    "sync:help": "node scripts/sync-help-docs.js",
     "version": "node scripts/sync-version.js && git add src/app/app-version.ts",
     "build": "npm run build:angular && npm run build:electron",
     "build:angular": "ng build --configuration production",
