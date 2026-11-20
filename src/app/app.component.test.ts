@@ -5,6 +5,8 @@ import { MdzipRenderingService } from '@mdzip/editor';
 import type { MdzipConversionContext } from '@mdzip/editor';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppComponent } from './app.component';
+import { helpReaderSource } from './modules/help/help-documents';
+import { HELP_PAGES } from './modules/help/help-pages';
 import { ArchiveService } from './core/services/archive.service';
 import { PrintService } from './core/services/print.service';
 import { StorageService } from './core/services/storage.service';
@@ -134,18 +136,23 @@ describe('AppComponent', () => {
     expect(open).toHaveBeenCalledWith('studio-help', 'outlook-attachments', 'system-integration.md');
   });
 
+  // Studio's help, as a help window shows it (contents read from help.mdz in the real thing).
+  const showHelpWindow = (page: string | null, anchor: string | null = null) => {
+    const contents = HELP_PAGES.map((helpPage) => ({ file: helpPage.file, title: helpPage.title, sections: [] }));
+    component.reader.show(helpReaderSource('studio-help', 'For MDZip Studio 1.7.0'), contents, page, anchor);
+    component.readerView.set(true);
+  };
+
   it("names a help window after its page, and links to that page online as you move between pages", () => {
-    component.help.document.set({ doc: 'studio-help', status: 'For MDZip Studio 1.7.0' });
-    component.help.page.set('system-integration.md');
-    component.help.anchor.set('outlook-attachments');
-    component.helpView.set(true);
+    showHelpWindow('system-integration.md', 'outlook-attachments');
     expect(component.documentTitleDisplay()).toBe('MDZip Studio Help: System Integration');
-    expect(component.help.strip()?.onlineUrl).toBe('https://mdzip.org/docs/system-integration.html#outlook-attachments');
+    expect(component.reader.strip()).toMatchObject({ label: 'Help', title: 'System Integration', refreshable: false });
+    expect(component.reader.strip()?.onlineUrl).toBe('https://mdzip.org/docs/system-integration.html#outlook-attachments');
 
     // Clicking Getting Started in the page list.
     component.onWorkspaceSelectionChanged({ currentPath: 'getting-started.md' } as never);
     expect(component.documentTitleDisplay()).toBe('MDZip Studio Help: Getting Started');
-    expect(component.help.strip()?.onlineUrl).toBe('https://mdzip.org/docs/studio-getting-started.html');
+    expect(component.reader.strip()?.onlineUrl).toBe('https://mdzip.org/docs/studio-getting-started.html');
 
     // The contents page is just "MDZip Studio Help".
     component.onWorkspaceSelectionChanged({ currentPath: 'index.md' } as never);
@@ -153,54 +160,87 @@ describe('AppComponent', () => {
 
     // Asked again for a page and section (another (?)).
     window.dispatchEvent(new CustomEvent('mdzip-studio:help-anchor', { detail: { page: 'system-integration.md', anchor: 'helper-programs' } }));
-    expect(component.help.strip()?.onlineUrl).toBe('https://mdzip.org/docs/system-integration.html#helper-programs');
+    expect(component.reader.strip()?.onlineUrl).toBe('https://mdzip.org/docs/system-integration.html#helper-programs');
 
     // Back to normal (Save As): the usual title.
-    component.helpView.set(false);
+    component.readerView.set(false);
     expect(component.documentTitleDisplay()).not.toContain('Help');
   });
 
   it('goes to a page or section from the contents dropdown, and shows the files only when asked', () => {
-    component.help.document.set({ doc: 'studio-help', status: 'For MDZip Studio 1.7.0' });
-    component.helpView.set(true);
-    expect(component.help.controls()).toBe('preview');
+    showHelpWindow(null);
+    expect(component.reader.page()).toBe('index.md');
+    expect(component.reader.controls()).toBe('preview');
 
-    component.help.goTo('system-integration.md', 'outlook-attachments');
-    expect(component.help.page()).toBe('system-integration.md');
-    expect(component.help.strip()?.onlineUrl).toBe('https://mdzip.org/docs/system-integration.html#outlook-attachments');
+    component.reader.goTo('system-integration.md', 'outlook-attachments');
+    expect(component.reader.page()).toBe('system-integration.md');
+    expect(component.reader.strip()?.onlineUrl).toBe('https://mdzip.org/docs/system-integration.html#outlook-attachments');
 
-    component.help.toggleFiles();
-    expect(component.help.controls()).toEqual({ preset: 'preview', navigation: true });
-    component.help.toggleFiles();
-    expect(component.help.controls()).toBe('preview');
+    component.reader.toggleFiles();
+    expect(component.reader.controls()).toEqual({ preset: 'preview', navigation: true });
+    component.reader.toggleFiles();
+    expect(component.reader.controls()).toBe('preview');
   });
 
-  it('says in the help strip where the link under the pointer goes', () => {
+  it('says in the strip where the link under the pointer goes', () => {
     vi.stubGlobal('mdzipStudio', { ...(window.mdzipStudio ?? {}), isElectron: true });
     component.isDesktopShell.set(true);
-    component.help.document.set({ doc: 'studio-help', status: 'For MDZip Studio 1.7.0' });
-    component.help.page.set('index.md');
-    component.helpView.set(true);
+    showHelpWindow('index.md');
     const hover = (href: string) => {
       const link = document.createElement('a');
       link.setAttribute('href', href);
       document.body.append(link);
       link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-      const said = component.help.strip()?.hover;
+      const said = component.reader.strip()?.hover;
       link.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
       link.remove();
       return said;
     };
     expect(hover('https://mdzip.org/studio.html')).toEqual({ text: 'Opens in your browser: mdzip.org/studio.html', external: true });
-    expect(hover('system-integration.md#opening-md-files')).toEqual({ text: 'Goes to the help page System Integration', external: false });
+    expect(hover('system-integration.md#opening-md-files')).toEqual({ text: 'Goes to the page System Integration', external: false });
     expect(hover('#images')).toEqual({ text: 'Goes to a section of this page', external: false });
-    expect(component.help.strip()?.hover).toBeNull();
+    expect(component.reader.strip()?.hover).toBeNull();
   });
 
-  it('gives a help window the outline on the left without touching your setting, and no New/Open shortcuts', () => {
+  it('sends the document, unsaved edits included, to a reader window (View > Read as Document)', async () => {
+    const openReaderWindow = vi.fn();
+    vi.stubGlobal('mdzipStudio', { ...(window.mdzipStudio ?? {}), openReaderWindow });
+    await component.readAsDocument();
+    expect(openReaderWindow).not.toHaveBeenCalled(); // nothing open
+
+    await component.createNewDocument('markdown');
+    await component.readAsDocument();
+    expect(openReaderWindow).toHaveBeenCalledOnce();
+    const snapshot = openReaderWindow.mock.calls[0][0];
+    expect(snapshot).toMatchObject({ fileName: 'untitled.md', title: 'Untitled' });
+    expect(ArrayBuffer.isView(snapshot.bytes)).toBe(true);
+  });
+
+  it('shows a document in a reader window: its title, contents, Refresh, and nothing to save', async () => {
+    const refreshReader = vi.fn();
+    vi.stubGlobal('mdzipStudio', { ...(window.mdzipStudio ?? {}), refreshReader });
+    const app = component as unknown as { showReaderInThisWindow(snapshot: { bytes: Uint8Array; fileName: string; title: string }): Promise<void> };
+    await app.showReaderInThisWindow({
+      bytes: new TextEncoder().encode('# Field Notes\n\n## Monday\n\n## Tuesday\n'),
+      fileName: 'notes.md',
+      title: 'Notes',
+    });
+
+    expect(component.readerView()).toBe(true);
+    expect(component.documentTitleDisplay()).toBe('Notes (reading)');
+    expect(component.reader.strip()).toMatchObject({ label: 'Notes', title: 'Field Notes', refreshable: true, onlineUrl: null });
+    expect(component.reader.strip()?.status).toMatch(/^As of /);
+    expect(component.reader.contents()[0].sections.map((section) => section.text)).toEqual(['Monday', 'Tuesday']);
+    expect(component.needsSave()).toBe(false);
+
+    component.refreshReader();
+    expect(refreshReader).toHaveBeenCalled();
+  });
+
+  it('gives a reading window the outline on the left without touching your setting, and no New/Open shortcuts', () => {
     const setViewSetting = vi.fn();
     vi.stubGlobal('mdzipStudio', { ...(window.mdzipStudio ?? {}), setViewSetting });
-    component.helpView.set(true);
+    component.readerView.set(true);
 
     expect(component.helpOutlineOptions()).toMatchObject({ visible: true, position: 'left' });
     // The page has no file on disk, but closing the window shouldn't offer to save it.

@@ -3,7 +3,7 @@ const { buildMenuTemplate, buildPreviewMenuTemplate, buildDockMenuTemplate, rece
 const HANDLER_NAMES = [
   'newDocument', 'newWindow', 'openDocument', 'openRecentPath', 'packFolder', 'unpackMdz',
   'save', 'saveAs', 'print', 'showInFolder', 'insertAgentsGuide', 'insertReadme', 'closeDocument', 'quit',
-  'reload', 'toggleLineNumbers', 'toggleRemoteImages', 'toggleOutlineSide', 'toggleDevTools',
+  'reload', 'readAsDocument', 'toggleLineNumbers', 'toggleRemoteImages', 'toggleOutlineSide', 'toggleDevTools',
   'showHelp', 'showSystemIntegration', 'showKnownIssues', 'showChangelog', 'checkForUpdates', 'showAbout',
   'exportDraft',
 ];
@@ -320,6 +320,18 @@ describe('View > Outline on the Left', () => {
     expect(entry.checked).toBe(true);
     entry.click();
     expect(handlers.toggleOutlineSide).toHaveBeenCalled();
+  });
+});
+
+describe('View > Read as Document', () => {
+  it('is first in View, only with a document open, and calls its handler', () => {
+    const handlers = stubHandlers();
+    const find = (template) => findMenu(template, 'View').submenu[0];
+    expect(find(buildMenuTemplate({ documentOpen: false, isDev: false, platform: 'win32', handlers }))).toMatchObject({ label: 'Read as Document', enabled: false });
+    const entry = find(buildMenuTemplate({ documentOpen: true, isDev: false, platform: 'win32', handlers }));
+    expect(entry.enabled).toBe(true);
+    entry.click();
+    expect(handlers.readAsDocument).toHaveBeenCalled();
   });
 });
 

@@ -1,27 +1,10 @@
-// The help window's contents dropdown: each help page and its main sections
-// (## headings), read from the bundled help archive, with the heading ids the
-// preview gives them, so a click can go straight to one.
-import { MdzArchiveCore } from '@mdzip/core-js';
-import { collectMdzipHeadings, tokenizeMdzipMarkdown } from '@mdzip/renderer';
+// Studio's help contents: the reader's contents for help.mdz, with each page
+// named as help-pages.ts names it ("Getting Started", not its first heading).
+import { DocumentContentsPage, readDocumentContents } from '../reader/document-contents';
 import { HELP_PAGES } from './help-pages';
 
-export interface HelpContentsPage {
-  file: string;
-  title: string;
-  sections: { id: string; text: string }[];
-}
+const HELP_TITLES = Object.fromEntries(HELP_PAGES.map((page) => [page.file, page.title]));
 
-export async function readHelpContents(bytes: Uint8Array): Promise<HelpContentsPage[]> {
-  const archive = await MdzArchiveCore.open(bytes);
-  const pages: HelpContentsPage[] = [];
-  for (const page of HELP_PAGES) {
-    if (!archive.hasEntry(page.file)) continue;
-    const headings = collectMdzipHeadings(tokenizeMdzipMarkdown(await archive.readText(page.file)));
-    pages.push({
-      file: page.file,
-      title: page.title,
-      sections: headings.filter((heading) => heading.level === 2).map(({ id, text }) => ({ id, text })),
-    });
-  }
-  return pages;
+export function readHelpContents(bytes: Uint8Array): Promise<DocumentContentsPage[]> {
+  return readDocumentContents(bytes, 'help.mdz', { titles: HELP_TITLES });
 }

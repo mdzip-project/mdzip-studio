@@ -3,9 +3,11 @@ import { StateEffect } from '@codemirror/state';
 import { Decoration, EditorView, MatchDecorator, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view';
 import { APP_VERSION } from './app-version';
 import { HelpDialogComponent, HelpLocation } from './modules/help/help-dialog.component';
-import { HELP_DOCUMENTS, HelpDocumentKind } from './modules/help/help-documents';
-import { HelpStripComponent } from './modules/help/help-strip.component';
-import { HelpWindow } from './modules/help/help-window';
+import { readHelpContents } from './modules/help/help-contents';
+import { HELP_DOCUMENTS, HelpDocumentKind, helpReaderSource, loadHelpDocument } from './modules/help/help-documents';
+import { readDocumentContents } from './modules/reader/document-contents';
+import { ReaderStripComponent } from './modules/reader/reader-strip.component';
+import { ReaderWindow } from './modules/reader/reader-window';
 import { APP_LICENSE_NAME, APP_LICENSE_TEXT, FIRST_PARTY_LIBRARIES, LibraryInfo, OPEN_SOURCE_LIBRARIES } from './app-about-data';
 import { FormsModule } from '@angular/forms';
 import { ButtonModule } from 'primeng/button';
@@ -78,6 +80,14 @@ import {
 } from './modules/system-integration/system-integration-dialog.component';
 
 type AssetViewMode = 'tiles' | 'list';
+// A document sent to a reader window: its bytes and name, the title its
+// editing window shows, and (a .md file) its path, for relative images.
+interface ReaderSnapshot {
+  bytes: Uint8Array;
+  fileName: string;
+  title: string;
+  filePath?: string | null;
+}
 type ArchiveTreeKind = 'folder' | 'document' | 'asset';
 type SaveValidationState = 'unchecked' | 'valid' | 'invalid';
 const MARKDOWN_IMAGE_SOURCE_ATTR = 'mdzip-studio-src';
@@ -294,9 +304,15 @@ interface ElectronBridge {
     | { kind: 'open-dialog' }
     | { kind: 'new-document'; format: 'markdown' | 'mdz' }
     | { kind: 'help'; doc: HelpDocumentKind; page: string | null; anchor: string | null }
+    | ({ kind: 'reader' } & ReaderSnapshot)
     | null
   >;
   openHelpInNewWindow?: (doc: HelpDocumentKind, page: string | null, anchor: string | null) => void;
+  // View > Read as Document: this document, as it is now, in this window's reader window.
+  openReaderWindow?: (snapshot: { bytes: Uint8Array; fileName: string; title: string }) => void;
+  // A reader window: Refresh (its editing window sends the document again), and the update.
+  refreshReader?: () => void;
+  onReaderUpdate?: (callback: (snapshot: ReaderSnapshot) => void) => () => void;
   onDocumentChangedExternally?: (callback: (data: { filePath: string }) => void) => () => void;
   onWindowCloseRequested?: (callback: (requestId: number) => void) => () => void;
   respondWindowClose?: (requestId: number, allow: boolean) => void;
@@ -361,7 +377,7 @@ interface ArchiveTreeData {
     DialogModule,
     TabsModule,
     SystemIntegrationDialogComponent,
-    HelpStripComponent,
+    ReaderStripComponent,
     HelpDialogComponent,
     TreeModule,
     MdzipWorkspaceComponent,
@@ -491,17 +507,18 @@ interface ArchiveTreeData {
           }
         </div>
         }
-        @if (help.strip(); as strip) {
-          <app-help-strip
+        @if (reader.strip(); as strip) {
+          <app-reader-strip
             [strip]="strip"
-            [contents]="help.contents()"
-            [currentPage]="help.page()"
-            [filesShown]="help.filesShown()"
-            (pageSelected)="help.goTo($event.file, $event.anchor)"
-            (filesToggled)="help.toggleFiles()"
+            [contents]="reader.contents()"
+            [currentPage]="reader.page()"
+            [filesShown]="reader.filesShown()"
+            (pageSelected)="reader.goTo($event.file, $event.anchor)"
+            (filesToggled)="reader.toggleFiles()"
+            (refreshRequested)="refreshReader()"
           />
         }
-        <div class="toolbar" [style.display]="helpView() ? 'none' : null">
+        <div class="toolbar" [style.display]="readerView() ? 'none' : null">
           <button class="tb-btn" type="button" [title]="'New (' + shortcut('N') + ')'" (click)="newArchive()"><ng-icon name="lucidePlus" size="15" /></button>
           <button class="tb-btn" type="button" [title]="'Open (' + shortcut('O') + ')'" (click)="openFilePicker()"><ng-icon name="lucideFolderOpen" size="15" /></button>
           @if (isDesktopShell()) {
@@ -585,24 +602,24 @@ interface ArchiveTreeData {
           }
 
           @if (currentArchive()) {
-            <section class="panel workspace-panel" [class.help-view]="helpView()">
+            <section class="panel workspace-panel" [class.reader-view]="readerView()">
               <mdzip-workspace
                 #workspaceEditor
                 [bytes]="workspaceBytes()"
                 [fileName]="workspaceFileName()"
-                [mode]="helpView() ? 'read-only' : 'editable'"
+                [mode]="readerView() ? 'read-only' : 'editable'"
                 [sourceFormat]="sourceFormat()"
-                [controls]="helpView() ? help.controls() : workspaceControls()"
+                [controls]="readerView() ? reader.controls() : workspaceControls()"
                 [imageHydrationAnimation]="'initial'"
                 [imageInsertMode]="'ask'"
                 [markdownExtensions]="markdownExtensions"
                 [onConversionRequested]="handleConversionRequested"
-                [initialLayout]="helpView() ? 'preview' : 'split'"
+                [initialLayout]="readerView() ? 'preview' : 'split'"
                 [navigationButtonActive]="navigationActive()"
                 [progressiveTextRendering]="true"
                 [initialColorScheme]="initialColorScheme"
                 [previewMaxWidth]="previewWidth()"
-                [outline]="helpView() ? helpOutlineOptions() : outlineOptions()"
+                [outline]="readerView() ? helpOutlineOptions() : outlineOptions()"
                 [onExtractFiles]="handleExtractFiles"
                 (colorSchemePreferenceChanged)="onColorSchemePreferenceChanged($event)"
                 (previewWidthChanged)="onPreviewWidthChanged($event)"
@@ -623,7 +640,7 @@ interface ArchiveTreeData {
         </section>
       </section>
 
-      <footer class="statusbar" [style.display]="helpView() ? 'none' : null">
+      <footer class="statusbar" [style.display]="readerView() ? 'none' : null">
         <span class="statusbar-left">
           @if (currentArchive()) {
             <ng-icon
@@ -1056,8 +1073,8 @@ export class AppComponent implements OnDestroy {
   }
   readonly readOnlyHint = 'This file is read-only. Use "Save As" to save your changes to a new file, or clear the read-only attribute in your operating system and reopen it to edit in place.';
   readonly documentTitleDisplay = computed(() => {
-    const helpTitle = this.help.title();
-    if (helpTitle) return helpTitle;
+    const readerTitle = this.reader.title();
+    if (readerTitle) return readerTitle;
     const name = this.documentTitle();
     return name && this.readOnly() ? `${name} (read-only)` : name;
   });
@@ -1223,11 +1240,12 @@ export class AppComponent implements OnDestroy {
   readonly aboutTab = signal<'about' | 'libraries' | 'license' | 'debug'>('about');
   // Active tab of the manifest.json entry view (Settings form vs read-only JSON).
   readonly debugCopied = signal(false);
-  // This window shows help (Help > MDZip Studio Help, a (?), Open in New
-  // Window): its document, page, contents and strip.
-  readonly help = new HelpWindow(this.hoverUrl, (page, anchor) => this.goToHelp(page, anchor));
+  // This window is for reading: Studio's help (Help > MDZip Studio Help, a
+  // (?)) or a document (View > Read as Document). Its document, page,
+  // contents and strip.
+  readonly reader = new ReaderWindow(this.hoverUrl, (page, anchor) => this.goToReaderPage(page, anchor));
   // Read-only, preview only, no menu, toolbar or status bar.
-  readonly helpView = this.help.active;
+  readonly readerView = this.reader.active;
 
   // Print flow: setting printCapture mounts the hidden capture workspace; its
   // (assetsHydrated) hands the rendered preview to PrintService → main process.
@@ -1318,6 +1336,7 @@ export class AppComponent implements OnDestroy {
   private pendingMarkdownImageDestination: 'same' | 'subfolder' | 'mdz' | null = null;
   private removeOpenDocumentRequestedListener: (() => void) | null = null;
   private removeDocumentChangedExternallyListener: (() => void) | null = null;
+  private removeReaderUpdateListener: (() => void) | null = null;
   private removeWindowCloseRequestedListener: (() => void) | null = null;
   private pendingElectronOpen: Promise<boolean> | null = null;
   private electronOpenRequestedWhilePending = false;
@@ -1407,6 +1426,7 @@ export class AppComponent implements OnDestroy {
   private readonly handleCloseArchiveCommand = () => this.closeDocument();
   private readonly handleExportDraftCommand = () => this.exportDraft();
   private readonly handleShowAboutCommand = () => this.showAbout();
+  private readonly handleReadAsDocumentCommand = () => this.ngZone.run(() => void this.readAsDocument());
   private readonly handleShowKnownIssuesCommand = () => void this.openHelpDocument('known-issues');
   private readonly handleShowChangelogCommand = () => void this.openHelpDocument('changelog');
   private readonly handleSetMdDefaultCommand = () => void this.promptMarkdownDefaultManually();
@@ -1414,8 +1434,8 @@ export class AppComponent implements OnDestroy {
   // Main process: the help window already open was asked for another section.
   private readonly handleHelpAnchorCommand = (event: Event) => {
     const detail = (event as CustomEvent<{ page?: string | null; anchor?: string | null }>).detail;
-    if (!this.helpView() || !detail) return;
-    this.ngZone.run(() => this.help.goTo(detail.page ?? null, detail.anchor ?? null));
+    if (!this.readerView() || !detail) return;
+    this.ngZone.run(() => this.reader.goTo(detail.page ?? null, detail.anchor ?? null));
   };
   private readonly handlePackFolderCommand = () => void this.packFolder();
   private readonly handleInsertAgentsCommand = () => this.insertAgentsGuide();
@@ -1438,7 +1458,7 @@ export class AppComponent implements OnDestroy {
     // Cmd on macOS, Ctrl elsewhere.
     const modifier = this.isMac() ? e.metaKey : e.ctrlKey;
     // A help window has no menu or toolbar: New, Open, Save and Close don't apply.
-    if (!modifier || this.helpView()) return;
+    if (!modifier || this.readerView()) return;
     switch (e.key) {
       case 'n':
         e.preventDefault();
@@ -1499,6 +1519,7 @@ export class AppComponent implements OnDestroy {
     window.addEventListener('mdzip-studio:toggle-line-numbers', this.handleToggleLineNumbersCommand);
     window.addEventListener('mdzip-studio:outline-position', this.handleOutlinePositionCommand);
     window.addEventListener('mdzip-studio:print', this.handlePrintCommand);
+    window.addEventListener('mdzip-studio:read-as-document', this.handleReadAsDocumentCommand);
     document.addEventListener('keydown', this.handleKeyDown);
     document.addEventListener('click', this.closeMenuOnDocumentClick);
     document.addEventListener('mouseover', this.handleLinkMouseOver);
@@ -1522,8 +1543,13 @@ export class AppComponent implements OnDestroy {
         this.ngZone.run(() => void this.createNewDocument(action.format));
       } else if (action?.kind === 'help') {
         this.ngZone.run(() => void this.showHelpInThisWindow(action.doc, action.page, action.anchor));
+      } else if (action?.kind === 'reader') {
+        this.ngZone.run(() => void this.showReaderInThisWindow(action));
       }
     });
+    this.removeReaderUpdateListener = window.mdzipStudio?.onReaderUpdate?.(
+      (snapshot) => this.ngZone.run(() => void this.showReaderInThisWindow(snapshot)),
+    ) ?? null;
     this.removeDocumentChangedExternallyListener = window.mdzipStudio?.onDocumentChangedExternally?.(
       (data) => this.ngZone.run(() => {
         // Guard against a notification arriving for a document this window
@@ -1582,6 +1608,8 @@ export class AppComponent implements OnDestroy {
     window.removeEventListener('mdzip-studio:toggle-line-numbers', this.handleToggleLineNumbersCommand);
     window.removeEventListener('mdzip-studio:outline-position', this.handleOutlinePositionCommand);
     window.removeEventListener('mdzip-studio:print', this.handlePrintCommand);
+    window.removeEventListener('mdzip-studio:read-as-document', this.handleReadAsDocumentCommand);
+    this.removeReaderUpdateListener?.();
     document.removeEventListener('keydown', this.handleKeyDown);
     document.removeEventListener('click', this.closeMenuOnDocumentClick);
     document.removeEventListener('mouseover', this.handleLinkMouseOver);
@@ -1648,13 +1676,55 @@ export class AppComponent implements OnDestroy {
   // Recent Files, at `page` and `anchor`.
   private async showHelpInThisWindow(kind: HelpDocumentKind, page: string | null, anchor: string | null): Promise<void> {
     const doc = HELP_DOCUMENTS[kind];
-    const loaded = await this.help.load(kind, page, anchor);
+    const loaded = await loadHelpDocument(kind);
+    const contents = doc.pages ? await readHelpContents(loaded.bytes).catch(() => []) : [];
+    this.reader.show(helpReaderSource(kind, loaded.status), contents, doc.pages ? page : null, anchor);
     await this.openDocumentBytes(loaded.bytes, doc.fileName, undefined, true, false, !!doc.pages, true);
-    this.help.showLoaded();
+    this.reader.showLoaded();
   }
 
-  // In a help window: show `page` (of Studio's help) at `anchor`.
-  private goToHelp(page: string | null, anchor: string | null): void {
+  // View > Read as Document: the document as it is now, unsaved edits
+  // included, in this window's reader window (asking again, or the reader's
+  // Refresh, updates it).
+  async readAsDocument(): Promise<void> {
+    const archive = this.currentArchive();
+    if (!archive || this.readerView() || !window.mdzipStudio?.openReaderWindow) return;
+    // Same flush as Save and Print, so unsaved typing shows.
+    const flushed = await this.flushWorkspaceEdits();
+    const bytes = this.latestWorkspaceBytes() ?? this.workspaceBytes();
+    if (!bytes) return;
+    window.mdzipStudio.openReaderWindow({
+      bytes,
+      fileName: this.workspaceFileName(),
+      title: flushed?.state.displayTitle || archive.name || 'Document',
+    });
+  }
+
+  // A reader window: the document from its editing window, read-only, kept
+  // out of Recent Files. On Refresh, stays on the page you were reading.
+  private async showReaderInThisWindow(snapshot: ReaderSnapshot): Promise<void> {
+    const bytes = new Uint8Array(snapshot.bytes);
+    const contents = await readDocumentContents(bytes, snapshot.fileName).catch(() => []);
+    const current = this.readerView() ? this.reader.page() : null;
+    const page = current && contents.some((candidate) => candidate.file === current) ? current : null;
+    const time = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    this.reader.show({
+      label: snapshot.title,
+      title: snapshot.title,
+      status: `As of ${time}`,
+      windowTitle: () => `${snapshot.title} (reading)`,
+      refreshable: true,
+    }, contents, page, null);
+    await this.openDocumentBytes(bytes, snapshot.fileName, snapshot.filePath ?? undefined, true, false, /\.mdz$/i.test(snapshot.fileName), true);
+    this.reader.showLoaded();
+  }
+
+  refreshReader(): void {
+    window.mdzipStudio?.refreshReader?.();
+  }
+
+  // In a reading window: show `page` at `anchor`.
+  private goToReaderPage(page: string | null, anchor: string | null): void {
     setTimeout(() => {
       if (page) void this.workspaceEditor?.openPath(page, anchor ? { anchor } : undefined);
       else if (anchor) void this.workspaceEditor?.scrollToAnchor(anchor);
@@ -1818,7 +1888,7 @@ export class AppComponent implements OnDestroy {
   // Save button keys off this instead of dirty alone. (In the browser shell
   // there is no on-disk path, so we fall back to dirty.)
   // A help window's page has no file on disk, but there's nothing of yours to save.
-  readonly needsSave = computed(() => !this.helpView() && (
+  readonly needsSave = computed(() => !this.readerView() && (
     this.isDirty()
     || this.headingAutoInserted()
     || (this.isDesktopShell() && !!this.currentArchive() && !this.hasFileOnDisk())
@@ -1881,7 +1951,7 @@ export class AppComponent implements OnDestroy {
     this.clearMdAssetCaches();
     this.readOnly.set(false);
 
-    this.helpView.set(false);
+    this.readerView.set(false);
     this.externalChangeBannerVisible.set(false);
     this.statusMessage.set('Closed document');
   }
@@ -2497,7 +2567,7 @@ export class AppComponent implements OnDestroy {
     this.clearMdAssetCaches();
     this.readOnly.set(false);
 
-    this.helpView.set(false);
+    this.readerView.set(false);
     this.statusMessage.set(`Created ${name}`);
   }
 
@@ -2679,9 +2749,9 @@ export class AppComponent implements OnDestroy {
     });
   }
 
-  private async openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly = false, recordRecent = true, showNavigation = false, help = false): Promise<void> {
+  private async openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly = false, recordRecent = true, showNavigation = false, reading = false): Promise<void> {
     this.readOnly.set(readOnly);
-    this.helpView.set(help);
+    this.readerView.set(reading);
     // Decide nav-pane visibility before the workspace (re)mounts, so the freshly
     // created view picks it up. Off for normal opens, on for packed folders.
     this.navigationActive.set(showNavigation);
@@ -2936,7 +3006,7 @@ export class AppComponent implements OnDestroy {
         this.markClean();
         this.readOnly.set(false);
 
-        this.helpView.set(false);
+        this.readerView.set(false);
         // A markdown source only becomes .mdz via Save As, so mdzBytes was built above.
         if (result.format === 'mdz' && mdzBytes) {
           const firstDocument = archive.documents[0];
@@ -3013,7 +3083,7 @@ export class AppComponent implements OnDestroy {
       this.markClean();
       this.readOnly.set(false);
 
-      this.helpView.set(false);
+      this.readerView.set(false);
       const savedTarget = result.filePath ?? result.name ?? archive.name;
       this.statusMessage.set(validation.valid ? `Saved ${savedTarget}` : `Saved ${savedTarget} with technical issues`);
       return;
@@ -4022,9 +4092,9 @@ export class AppComponent implements OnDestroy {
   // no longer fires for navigation (no archive bytes changed), so the
   // "Viewing <file>" label follows the selection from here instead.
   onWorkspaceSelectionChanged(snapshot: MdzipWorkspaceSnapshot): void {
-    if (this.helpView()) {
+    if (this.readerView()) {
       // Moving to another help page: the strip follows it.
-      this.help.pageShown(snapshot.currentPath ?? null);
+      this.reader.pageShown(snapshot.currentPath ?? null);
       return;
     }
     if (this.postConvertStatus !== null) return;
@@ -4090,13 +4160,13 @@ export class AppComponent implements OnDestroy {
 
   onOutlineVisibilityChanged(visible: boolean): void {
     // A help window's outline is its own: it doesn't change your saved setting.
-    if (this.helpView()) return;
+    if (this.readerView()) return;
     this.outlineOptions.update((options) => ({ ...options, visible }));
     window.mdzipStudio?.setViewSetting?.('outlineVisible', visible);
   }
 
   onOutlineWidthChanged(width: number): void {
-    if (this.helpView()) return;
+    if (this.readerView()) return;
     const rounded = Math.round(width);
     this.outlineOptions.update((options) => ({ ...options, width: rounded }));
     window.mdzipStudio?.setViewSetting?.('outlineWidth', rounded);

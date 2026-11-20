@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { helpStartupAction, shouldCloseLeftoverHelp } from './help-window';
+import { helpStartupAction } from './help-window';
 
 describe('helpStartupAction', () => {
   it('opens Studio’s help at a page and section', () => {
@@ -18,18 +18,5 @@ describe('helpStartupAction', () => {
     expect(action.page).toBeNull();
     expect(action.anchor).toBeNull();
     expect(helpStartupAction({ doc: 'studio-help', page: 'images/x.png', anchor: 42 })).toMatchObject({ page: null, anchor: null });
-  });
-});
-
-describe('shouldCloseLeftoverHelp', () => {
-  it('closes help windows left after the last Studio window closes', () => {
-    expect(shouldCloseLeftoverHelp([{ help: true }, { help: true }], 'win32')).toBe(true);
-    expect(shouldCloseLeftoverHelp([{ help: true }], 'linux')).toBe(true);
-  });
-
-  it('leaves them while a Studio window is open, and on macOS', () => {
-    expect(shouldCloseLeftoverHelp([{ help: true }, { help: false }], 'win32')).toBe(false);
-    expect(shouldCloseLeftoverHelp([], 'win32')).toBe(false);
-    expect(shouldCloseLeftoverHelp([{ help: true }], 'darwin')).toBe(false);
   });
 });

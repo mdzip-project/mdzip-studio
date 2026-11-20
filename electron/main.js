@@ -27,7 +27,8 @@ const {
 } = require('./lib/system-integration');
 const { buildJumpList, wantsNewWindow, startupActionFromArgs, recentDocumentsForMac } = require('./lib/jump-list');
 const { createOpenFileQueue } = require('./lib/open-file-queue');
-const { helpStartupAction, shouldCloseLeftoverHelp } = require('./lib/help-window');
+const { helpStartupAction } = require('./lib/help-window');
+const { readerSnapshot, shouldCloseLeftoverReaders } = require('./lib/reader-window');
 const { statsDiffer } = require('./lib/file-watch');
 const {
   PORTABLE_DOWNLOAD_URL,
@@ -109,6 +110,8 @@ function windowState(win) {
 
 function findWindowForPath(filePath) {
   for (const [win, state] of windows) {
+    // A reader window shows a copy, not the file: opening it goes to an editing window.
+    if (state.reader) continue;
     if (state.documentPath === filePath) return win;
   }
   return null;
@@ -815,11 +818,12 @@ function dispatchAppEvent(win, name) {
 // has initialized — { kind: 'open-dialog' } or { kind: 'new-document', format }.
 // Pulled by the renderer (mdzip:take-startup-action) rather than pushed, so it
 // can't arrive before Angular has registered anything to receive it.
-function createWindow({ pendingOpenPath = null, startupAction = null } = {}) {
+function createWindow({ pendingOpenPath = null, startupAction = null, readerSource = null } = {}) {
+  const reading = startupAction?.kind === 'help' || startupAction?.kind === 'reader';
   const win = new BrowserWindow({
     show: false,
-    // A help window is narrower: a page to read next to the window you're working in.
-    width: startupAction?.kind === 'help' ? 900 : 1200,
+    // A help or reader window is narrower: a page to read next to the window you're working in.
+    width: reading ? 900 : 1200,
     height: 800,
     icon: windowIconForTheme(),
     title: 'MDZip Studio',
@@ -834,7 +838,10 @@ function createWindow({ pendingOpenPath = null, startupAction = null } = {}) {
   });
 
   windows.set(win, {
-    documentPath: null,
+    // A reader window of a .md file: that file's path, so its relative images
+    // load (mdzip:read-markdown-asset). Not watched, and not "the window for"
+    // that file (findWindowForPath).
+    documentPath: startupAction?.kind === 'reader' ? startupAction.filePath ?? null : null,
     documentOpen: false,
     pendingOpenPath,
     startupAction,
@@ -847,6 +854,9 @@ function createWindow({ pendingOpenPath = null, startupAction = null } = {}) {
     // A help window (Help > Open in New Window): a read-only page, no menu.
     help: startupAction?.kind === 'help',
     helpDoc: startupAction?.kind === 'help' ? startupAction.doc : null,
+    // A reader window (View > Read as Document) and the editing window it reads.
+    reader: startupAction?.kind === 'reader',
+    readerSource,
     // Set once the renderer has approved this window closing (X button or the
     // quit flow), so the 'close' handler below lets the next attempt through.
     closeApproved: false,
@@ -903,13 +913,14 @@ function createWindow({ pendingOpenPath = null, startupAction = null } = {}) {
     if (lastFocusedWindow === win) lastFocusedWindow = null;
     // Last window gone: back to the no-window menu (darwin only; no-op elsewhere).
     if (windows.size === 0) applyDarwinMenu(null);
-    // The last Studio window closed: close the help windows with it (help has
-    // nothing to save, so no need to ask), and Studio quits as usual.
-    if (shouldCloseLeftoverHelp([...windows.values()], process.platform)) {
-      for (const [helpWin, state] of windows) {
-        state.closeApproved = true;
-        if (!helpWin.isDestroyed()) helpWin.close();
-      }
+    // Reading windows have nothing to save, so they close without asking:
+    // this window's reader, with it; and every help and reader window once
+    // the last Studio window has closed, so Studio quits as usual.
+    const closeAll = shouldCloseLeftoverReaders([...windows.values()], process.platform);
+    for (const [other, state] of windows) {
+      if (!closeAll && state.readerSource !== win) continue;
+      state.closeApproved = true;
+      if (!other.isDestroyed()) other.close();
     }
   });
 
@@ -1096,6 +1107,36 @@ function openHelpWindow(payload) {
   createWindow({ startupAction });
 }
 
+// View > Read as Document: the sending window's document, in that window's
+// reader window. Asking again (or the reader's Refresh) updates it and brings
+// it forward.
+ipcMain.on('mdzip:open-reader-window', (event, payload) => {
+  const source = BrowserWindow.fromWebContents(event.sender);
+  const sourceState = windowState(source);
+  if (!sourceState || sourceState.help || sourceState.reader) return;
+  const snapshot = readerSnapshot(payload);
+  if (!snapshot) return;
+  // A .md file's relative images load from beside it.
+  const filePath = /\.mdz$/i.test(snapshot.fileName) ? null : sourceState.documentPath ?? null;
+  const update = { ...snapshot, filePath };
+  for (const [win, state] of windows) {
+    if (win.isDestroyed() || state.readerSource !== source) continue;
+    state.documentPath = filePath;
+    if (win.isMinimized()) win.restore();
+    win.focus();
+    win.webContents.send('mdzip:reader-update', update);
+    return;
+  }
+  createWindow({ startupAction: { kind: 'reader', ...update }, readerSource: source });
+});
+
+// A reader window's Refresh: its editing window sends the document again.
+ipcMain.on('mdzip:refresh-reader', (event) => {
+  const state = windowState(BrowserWindow.fromWebContents(event.sender));
+  const source = state?.reader ? state.readerSource : null;
+  if (source && !source.isDestroyed()) void dispatchAppEvent(source, 'mdzip-studio:read-as-document');
+});
+
 ipcMain.handle('mdzip:take-startup-action', (event) => {
   const state = windowState(BrowserWindow.fromWebContents(event.sender));
   const action = state?.startupAction ?? null;
@@ -1132,7 +1173,8 @@ ipcMain.on('mdzip:set-document-open', (event, open) => {
 ipcMain.on('mdzip:set-current-document-path', (event, payload) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   const state = windowState(win);
-  if (!state) return;
+  // A reader window's path is its editing window's, set here in main.
+  if (!state || state.reader) return;
   const filePath = typeof payload?.filePath === 'string' && payload.filePath
     ? payload.filePath
     : null;
@@ -2027,6 +2069,7 @@ function menuHandlersFor(win) {
     closeDocument: () => dispatchAppEvent(win, 'mdzip-studio:close-archive'),
     quit: () => app.quit(),
     reload: () => dispatchAppEvent(win, 'mdzip-studio:reload-document'),
+    readAsDocument: () => dispatchAppEvent(win, 'mdzip-studio:read-as-document'),
     toggleLineNumbers: () => dispatchAppEvent(win, 'mdzip-studio:toggle-line-numbers'),
     toggleRemoteImages: () => toggleRemoteImages(),
     toggleOutlineSide: () => toggleOutlineSide(),
@@ -2051,7 +2094,7 @@ function refreshWindowMenu(win) {
     return;
   }
   const state = windowState(win);
-  if (state?.help) {
+  if (state?.help || state?.reader) {
     win.setMenu(null);
     return;
   }

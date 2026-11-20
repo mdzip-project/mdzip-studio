@@ -1,15 +1,15 @@
 import { Injector, runInInjectionContext } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { HelpStripComponent } from './help-strip.component';
+import { ReaderStripComponent } from './reader-strip.component';
 
-describe('HelpStripComponent', () => {
-  let strip: HelpStripComponent;
+describe('ReaderStripComponent', () => {
+  let strip: ReaderStripComponent;
 
   beforeEach(() => {
     TestBed.configureTestingModule({});
     runInInjectionContext(TestBed.inject(Injector), () => {
-      strip = new HelpStripComponent();
+      strip = new ReaderStripComponent();
     });
   });
 
@@ -34,5 +34,17 @@ describe('HelpStripComponent', () => {
     strip.toggleFiles();
     expect(strip.contentsOpen()).toBe(false);
     expect(toggled).toBe(1);
+  });
+});
+
+describe('ReaderStripComponent contents', () => {
+  it('offers contents for several pages, or one page with sections', () => {
+    TestBed.configureTestingModule({});
+    let strip!: ReaderStripComponent;
+    runInInjectionContext(TestBed.inject(Injector), () => {
+      strip = new ReaderStripComponent();
+    });
+    // No inputs bound: no contents.
+    expect(strip.hasContents()).toBe(false);
   });
 });

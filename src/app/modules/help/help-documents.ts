@@ -1,7 +1,8 @@
 // The documents Studio's help shows, and loading them. No Angular here: the
 // help dialog, help windows and tests all share it.
 import { APP_VERSION } from '../../app-version';
-import { HELP_ARCHIVE_TITLE, helpPageTitle } from './help-pages';
+import type { ReaderSource } from '../reader/reader-window';
+import { HELP_ARCHIVE_TITLE, helpPageOnlineUrl } from './help-pages';
 
 export type HelpDocumentKind = 'studio-help' | 'known-issues' | 'changelog';
 
@@ -74,19 +75,18 @@ async function fetchBytes(url: string): Promise<Uint8Array> {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-export interface HelpLinkDescription {
-  text: string;
-  external: boolean;
-}
-
-// What the help strip says about the link under the pointer: another help
-// page, a section of this one, or a page that opens in the browser.
-export function describeHelpLink(href: string | null): HelpLinkDescription | null {
-  if (!href) return null;
-  if (/^(https?:|mailto:)/i.test(href)) {
-    return { text: `Opens in your browser: ${href.replace(/^https?:\/\//i, '').replace(/^mailto:/i, '')}`, external: true };
-  }
-  if (href.startsWith('#')) return { text: 'Goes to a section of this page', external: false };
-  const page = helpPageTitle(href.split('#')[0]);
-  return page ? { text: `Goes to the help page ${page}`, external: false } : null;
+// How a help window describes its document: "Help · <page>", the version
+// note, and each page online.
+export function helpReaderSource(kind: HelpDocumentKind, status: string): ReaderSource {
+  const doc = HELP_DOCUMENTS[kind];
+  return {
+    label: 'Help',
+    title: doc.title,
+    status,
+    windowTitle: (pageTitle) => {
+      const title = pageTitle ?? doc.title;
+      return title === HELP_ARCHIVE_TITLE ? title : `${HELP_ARCHIVE_TITLE}: ${title}`;
+    },
+    onlineUrl: doc.pages ? (page, anchor) => (page ? helpPageOnlineUrl(page, anchor) : null) : undefined,
+  };
 }
