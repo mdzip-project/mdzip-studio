@@ -24,6 +24,8 @@ export class ReaderStripComponent {
   readonly contents = input<DocumentContentsPage[]>([]);
   readonly currentPage = input<string | null>(null);
   readonly filesShown = input(false);
+  // An .mdz: Show the files lists what's in it (a .md file is just itself).
+  readonly canShowFiles = input(false);
   // Desktop only: Save a Copy needs the save dialog.
   readonly canSaveCopy = input(false);
 
@@ -38,6 +40,11 @@ export class ReaderStripComponent {
   hasContents(): boolean {
     const contents = this.contents();
     return contents.length > 1 || (contents.length === 1 && contents[0].sections.length > 0);
+  }
+
+  // The title opens a dropdown when there's anything to put in it.
+  hasMenu(): boolean {
+    return this.hasContents() || this.canShowFiles() || this.canSaveCopy();
   }
 
   select(file: string, anchor: string | null): void {

@@ -857,6 +857,9 @@ function createWindow({ pendingOpenPath = null, startupAction = null, readerSour
     // A reader window (View > Reading View) and the editing window it reads.
     reader: startupAction?.kind === 'reader',
     readerSource,
+    // Shows the window (set below); a reading window calls it once its
+    // document is drawn (mdzip:reading-window-ready).
+    reveal: null,
     // Set once the renderer has approved this window closing (X button or the
     // quit flow), so the 'close' handler below lets the next attempt through.
     closeApproved: false,
@@ -884,9 +887,15 @@ function createWindow({ pendingOpenPath = null, startupAction = null, readerSour
       win.webContents.send('mdzip:open-document-requested');
     }
   };
-  win.once('ready-to-show', revealWindow);
-  win.webContents.once('did-finish-load', revealWindow);
-  const revealFallbackTimer = setTimeout(revealWindow, 4000);
+  windowState(win).reveal = revealWindow;
+  // A help or reader window waits for its document to be drawn: shown on page
+  // load, it would flash Studio's start screen first. The timeout still shows
+  // it if the renderer never says so.
+  if (!reading) {
+    win.once('ready-to-show', revealWindow);
+    win.webContents.once('did-finish-load', revealWindow);
+  }
+  const revealFallbackTimer = setTimeout(revealWindow, reading ? 3000 : 4000);
   win.once('show', () => clearTimeout(revealFallbackTimer));
 
   win.on('focus', () => {
@@ -1146,6 +1155,12 @@ ipcMain.handle('mdzip:save-copy', async (event, payload) => {
   if (result.canceled || !result.filePath) return { canceled: true };
   await fs.writeFile(result.filePath, Buffer.from(copy.bytes));
   return { canceled: false, filePath: result.filePath };
+});
+
+// A help or reader window's document is drawn: show the window (see createWindow).
+ipcMain.on('mdzip:reading-window-ready', (event) => {
+  const state = windowState(BrowserWindow.fromWebContents(event.sender));
+  if (state?.help || state?.reader) state.reveal?.();
 });
 
 ipcMain.handle('mdzip:take-startup-action', (event) => {

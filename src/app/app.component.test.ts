@@ -114,11 +114,19 @@ describe('AppComponent', () => {
     expect(component.aboutOpen()).toBe(false);
   });
 
-  it("opens the help dialog's document in a new window on request", () => {
+  it('opens Known Issues and the Change Log in a help window, or the dialog outside the desktop app', async () => {
     const openHelpInNewWindow = vi.fn();
     vi.stubGlobal('mdzipStudio', { ...(window.mdzipStudio ?? {}), openHelpInNewWindow });
-    component.openHelpInNewWindow({ doc: 'studio-help', page: 'system-integration.md', anchor: 'explorer-previews' });
-    expect(openHelpInNewWindow).toHaveBeenCalledWith('studio-help', 'system-integration.md', 'explorer-previews');
+    const open = vi.fn().mockResolvedValue(undefined);
+    component.helpDialog = { open } as never;
+    await component.openHelpDocument('known-issues');
+    await component.openHelpDocument('changelog');
+    expect(openHelpInNewWindow.mock.calls).toEqual([['known-issues', null, null], ['changelog', null, null]]);
+    expect(open).not.toHaveBeenCalled();
+
+    vi.stubGlobal('mdzipStudio', undefined);
+    await component.openHelpDocument('changelog');
+    expect(open).toHaveBeenCalledWith('changelog', null, null);
   });
 
   it("sends a (?) and Help > MDZip Studio Help to the help window, or the dialog outside the desktop app", async () => {
@@ -242,6 +250,22 @@ describe('AppComponent', () => {
     await component.saveReaderCopy();
     expect(saveCopy.mock.calls[0][0].fileName).toBe('notes.md');
     expect(component.reader.strip()?.status).toBe('Could not save a copy: disk full');
+  });
+
+  it('lists the sections of Known Issues in its contents, under the name the help gives it', async () => {
+    const text = new TextEncoder().encode('# MDZip Studio Known Issues\n\n## Current Notes\n\n## Reporting Issues\n');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => text.slice().buffer }));
+    const app = component as unknown as { showHelpInThisWindow(kind: 'known-issues', page: string | null, anchor: string | null): Promise<void> };
+    await app.showHelpInThisWindow('known-issues', null, null);
+
+    expect(component.reader.contents()).toEqual([{
+      file: 'KNOWN_ISSUES.md',
+      title: 'Known Issues',
+      sections: [{ id: 'current-notes', text: 'Current Notes' }, { id: 'reporting-issues', text: 'Reporting Issues' }],
+    }]);
+    expect(component.documentTitleDisplay()).toBe('MDZip Studio Help: Known Issues');
+    // A .md file: there are no other files to show.
+    expect(component.sourceFormat()).toBe('markdown');
   });
 
   it('saves a copy of the help as it came, named for the version it describes', async () => {

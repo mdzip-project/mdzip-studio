@@ -27,6 +27,9 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
   // A help or reader window's Save a Copy: { bytes, fileName } written where
   // the user chooses. Resolves { canceled, filePath }.
   saveCopy: (copy) => ipcRenderer.invoke('mdzip:save-copy', copy),
+  // A help or reader window: its document is drawn, so the window can show
+  // (it stays hidden until then, rather than flash the start screen).
+  readingWindowReady: () => ipcRenderer.send('mdzip:reading-window-ready'),
   // A reader window: the document again ({ bytes, fileName, title, filePath })
   // when its editing window chooses Reading View again.
   onReaderUpdate: (callback) => {

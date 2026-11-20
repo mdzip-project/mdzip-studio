@@ -2,7 +2,7 @@ import { Component, computed, effect, ElementRef, NgZone, OnDestroy, signal, VER
 import { StateEffect } from '@codemirror/state';
 import { Decoration, EditorView, MatchDecorator, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view';
 import { APP_VERSION } from './app-version';
-import { HelpDialogComponent, HelpLocation } from './modules/help/help-dialog.component';
+import { HelpDialogComponent } from './modules/help/help-dialog.component';
 import { readHelpContents } from './modules/help/help-contents';
 import { HELP_DOCUMENTS, HelpDocumentKind, helpReaderSource, loadHelpDocument } from './modules/help/help-documents';
 import { readDocumentContents } from './modules/reader/document-contents';
@@ -313,6 +313,8 @@ interface ElectronBridge {
   // A reader window: the document again, when Reading View is chosen again.
   // A reading window's Save a Copy: a save dialog, then the bytes written as they are.
   saveCopy?: (copy: { bytes: Uint8Array; fileName: string }) => Promise<{ canceled: boolean; filePath?: string }>;
+  // A help or reader window: its document is drawn, so the window can show.
+  readingWindowReady?: () => void;
   onReaderUpdate?: (callback: (snapshot: ReaderSnapshot) => void) => () => void;
   onDocumentChangedExternally?: (callback: (data: { filePath: string }) => void) => () => void;
   onWindowCloseRequested?: (callback: (requestId: number) => void) => () => void;
@@ -516,6 +518,7 @@ interface ArchiveTreeData {
             [filesShown]="reader.filesShown()"
             (pageSelected)="reader.goTo($event.file, $event.anchor)"
             (filesToggled)="reader.toggleFiles()"
+            [canShowFiles]="sourceFormat() === 'mdz'"
             [canSaveCopy]="canSaveReaderCopy()"
             (saveCopyRequested)="saveReaderCopy()"
           />
@@ -913,7 +916,7 @@ interface ArchiveTreeData {
       </ng-template>
     </p-dialog>
 
-    <app-help-dialog [markdownExtensions]="markdownExtensions" [canOpenWindow]="isDesktopShell()" (openWindow)="openHelpInNewWindow($event)" />
+    <app-help-dialog [markdownExtensions]="markdownExtensions" />
 
     <p-dialog header="Default Markdown editor" [visible]="mdDefaultPromptOpen()" (visibleChange)="mdDefaultPromptOpen.set($event)" [modal]="true" [closable]="!mdDefaultBusy()" [style]="{ width: 'min(92vw, 460px)' }">
       <div class="dialog-form">
@@ -1567,9 +1570,15 @@ export class AppComponent implements OnDestroy {
       } else if (action?.kind === 'new-document') {
         this.ngZone.run(() => void this.createNewDocument(action.format));
       } else if (action?.kind === 'help') {
-        this.ngZone.run(() => void this.showHelpInThisWindow(action.doc, action.page, action.anchor));
+        this.ngZone.run(() => {
+          const drawn = this.nextPreviewRendered();
+          this.readingWindowDrawn(this.showHelpInThisWindow(action.doc, action.page, action.anchor), drawn);
+        });
       } else if (action?.kind === 'reader') {
-        this.ngZone.run(() => void this.showReaderInThisWindow(action));
+        this.ngZone.run(() => {
+          const drawn = this.nextPreviewRendered();
+          this.readingWindowDrawn(this.showReaderInThisWindow(action), drawn);
+        });
       }
     });
     this.removeReaderUpdateListener = window.mdzipStudio?.onReaderUpdate?.(
@@ -1670,21 +1679,20 @@ export class AppComponent implements OnDestroy {
     this.aboutOpen.set(true);
   }
 
-  // Opens a help document in the help dialog, at `page` of Studio's help and
-  // `anchor` (a heading id) when given. The dialog's Open in New Window shows
-  // it in a window of its own.
+  // Opens a help document, at `page` of Studio's help and `anchor` (a heading
+  // id) when given: in a help window of its own in the desktop app (the one
+  // already open for it, brought forward), else in the help dialog.
   async openHelpDocument(kind: HelpDocumentKind, anchor: string | null = null, page: string | null = null): Promise<void> {
+    if (window.mdzipStudio?.openHelpInNewWindow) {
+      window.mdzipStudio.openHelpInNewWindow(kind, page, anchor);
+      return;
+    }
     await this.helpDialog?.open(kind, anchor, page);
   }
 
-  // Studio's help at `page` and `anchor` (Help > MDZip Studio Help, a (?)):
-  // the help window in the desktop app, else the help dialog.
+  // Studio's help at `page` and `anchor` (Help > MDZip Studio Help, a (?)).
   showStudioHelp(page: string | null = null, anchor: string | null = null): void {
-    if (window.mdzipStudio?.openHelpInNewWindow) {
-      window.mdzipStudio.openHelpInNewWindow('studio-help', page, anchor);
-    } else {
-      void this.openHelpDocument('studio-help', anchor, page);
-    }
+    void this.openHelpDocument('studio-help', anchor, page);
   }
 
   // A (?) in System Integration: its section of the System Integration page.
@@ -1692,17 +1700,17 @@ export class AppComponent implements OnDestroy {
     this.showStudioHelp('system-integration.md', anchor);
   }
 
-  // The help dialog's Open in New Window: the same document, read-only, in its own Studio window.
-  openHelpInNewWindow(location: HelpLocation): void {
-    window.mdzipStudio?.openHelpInNewWindow?.(location.doc, location.page, location.anchor);
-  }
-
   // A window opened for help: the document fills it, read-only, kept out of
   // Recent Files, at `page` and `anchor`.
   private async showHelpInThisWindow(kind: HelpDocumentKind, page: string | null, anchor: string | null): Promise<void> {
     const doc = HELP_DOCUMENTS[kind];
     const loaded = await loadHelpDocument(kind);
-    const contents = doc.pages ? await readHelpContents(loaded.bytes).catch(() => []) : [];
+    // Studio's help pages, or a single document's sections (Known Issues, the
+    // Change Log), named as the help names it.
+    const contents = await (doc.pages
+      ? readHelpContents(loaded.bytes)
+      : readDocumentContents(loaded.bytes, doc.fileName, { titles: { [doc.fileName]: doc.title } })
+    ).catch(() => []);
     this.reader.show(helpReaderSource(kind, loaded.status), contents, doc.pages ? page : null, anchor);
     this.readerCopy = { bytes: loaded.bytes, fileName: doc.fileName };
     await this.openDocumentBytes(loaded.bytes, doc.fileName, undefined, true, false, !!doc.pages, true);
@@ -1742,6 +1750,24 @@ export class AppComponent implements OnDestroy {
     this.readerCopy = { bytes, fileName: snapshot.fileName };
     this.reader.showLoaded();
   }
+
+  // A new help or reader window, hidden until now: show it once the editor has
+  // drawn the document's preview (`drawn`, from nextPreviewRendered() taken
+  // before loading began), then two frames for the paint. Shown anyway after
+  // 2.5 seconds, or at once if loading failed.
+  private readingWindowDrawn(loading: Promise<void>, drawn: Promise<void>): void {
+    const reveal = () => requestAnimationFrame(() => requestAnimationFrame(() => window.mdzipStudio?.readingWindowReady?.()));
+    loading
+      .then(() => Promise.race([drawn, new Promise<void>((resolve) => setTimeout(resolve, 2500))]))
+      .catch(() => undefined)
+      .finally(reveal);
+  }
+
+  // Resolves the next time the editor finishes drawing its preview.
+  private nextPreviewRendered(): Promise<void> {
+    return new Promise((resolve) => this.previewRenderedWaiters.push(resolve));
+  }
+  private previewRenderedWaiters: Array<() => void> = [];
 
   canSaveReaderCopy(): boolean {
     return !!window.mdzipStudio?.saveCopy;
@@ -4146,6 +4172,7 @@ export class AppComponent implements OnDestroy {
   }
 
   onWorkspacePreviewRendered(snapshot: MdzipWorkspaceSnapshot): void {
+    for (const resolve of this.previewRenderedWaiters.splice(0)) resolve();
     void this.correctWorkspaceOrphansForHtmlImages(snapshot);
   }
 

@@ -1,4 +1,4 @@
-<p-dialog [header]="title()" [visible]="visible()" (visibleChange)="visible.set($event)" [modal]="true" [style]="{ width: 'min(94vw, 860px)' }" [contentStyle]="{ padding: '0' }">
+<p-dialog [header]="title()" [visible]="visible()" (visibleChange)="visible.set($event)" [modal]="true" [style]="{ width: 'min(94vw, 860px)' }" [contentStyle]="{ padding: '0' }" styleClass="help-doc-dialog-host">
   <div class="help-doc-dialog">
     <div class="help-doc-status" [class.error]="error()">
       @if (loading()) {
@@ -9,9 +9,6 @@
       <span class="help-doc-links">
         @if (onlineUrl(); as url) {
           <a [href]="url" target="_blank" rel="noopener">View the latest online</a>
-        }
-        @if (canOpenWindow()) {
-          <button type="button" class="help-doc-link-button" (click)="openInNewWindow()">Open in New Window</button>
         }
       </span>
     </div>

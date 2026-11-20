@@ -43,7 +43,8 @@ export const HELP_DOCUMENTS: Record<HelpDocumentKind, HelpDocument> = {
 
 export interface LoadedHelpDocument {
   bytes: Uint8Array;
-  // Where it came from, for the strip or dialog: "Updated from GitHub", the version it describes...
+  // For the strip or dialog: the version Studio's help describes, or that the
+  // latest copy couldn't be fetched. '' for the latest (nothing to say).
   status: string;
   error: boolean;
 }
@@ -54,14 +55,14 @@ export async function loadHelpDocument(kind: HelpDocumentKind): Promise<LoadedHe
   const doc = HELP_DOCUMENTS[kind];
   if (doc.remoteUrl) {
     try {
-      return { bytes: await fetchBytes(doc.remoteUrl), status: 'Updated from GitHub', error: false };
+      return { bytes: await fetchBytes(doc.remoteUrl), status: '', error: false };
     } catch {
       // Offline or unreachable: the bundled copy below.
     }
   }
   try {
     const bytes = await fetchBytes(doc.fallbackUrl);
-    return { bytes, status: doc.remoteUrl ? 'Showing bundled copy' : `For MDZip Studio ${APP_VERSION}`, error: false };
+    return { bytes, status: doc.remoteUrl ? "Couldn't get the latest copy" : `For MDZip Studio ${APP_VERSION}`, error: false };
   } catch {
     return {
       bytes: new TextEncoder().encode(`# ${doc.title}\n\nCould not load this help document.`),

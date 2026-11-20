@@ -55,5 +55,7 @@ describe('ReaderStripComponent contents', () => {
     });
     // No inputs bound: no contents.
     expect(strip.hasContents()).toBe(false);
+    // Nor a dropdown: no files to show (a .md file), no Save a Copy.
+    expect(strip.hasMenu()).toBe(false);
   });
 });
