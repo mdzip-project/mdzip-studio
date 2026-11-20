@@ -4,12 +4,12 @@ import { rewriteHelpLinks } from './help-links.mjs';
 const pages = [
   { slug: 'studio-help', file: 'index.md' },
   { slug: 'studio-getting-started', file: 'getting-started.md' },
-  { slug: 'system-integration', file: 'system-integration.md' },
+  { slug: 'studio-system-integration', file: 'system-integration.md' },
 ];
 
 describe('rewriteHelpLinks', () => {
   it('points links to other help pages at their files in the archive', () => {
-    expect(rewriteHelpLinks('See [System Integration](system-integration.html#opening-md-files).', pages))
+    expect(rewriteHelpLinks('See [System Integration](studio-system-integration.html#opening-md-files).', pages))
       .toBe('See [System Integration](system-integration.md#opening-md-files).');
     expect(rewriteHelpLinks('[Start](studio-getting-started.html)', pages)).toBe('[Start](getting-started.md)');
   });

@@ -50,7 +50,7 @@ describe('HelpDialogComponent', () => {
     expect(fetch).toHaveBeenCalledOnce();
     expect(fetch).toHaveBeenCalledWith('assets/help/mdzip-studio-help.mdz', { cache: 'no-store' });
     expect(dialog.status()).toMatch(/^For MDZip Studio \d/);
-    expect(dialog.onlineUrl()).toBe('https://mdzip.org/docs/system-integration.html#explorer-previews');
+    expect(dialog.onlineUrl()).toBe('https://mdzip.org/docs/studio-system-integration.html#explorer-previews');
 
     dialog.openInNewWindow();
     expect(moved).toEqual([{ doc: 'studio-help', page: 'system-integration.md', anchor: 'explorer-previews' }]);

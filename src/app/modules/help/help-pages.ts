@@ -16,7 +16,7 @@ export interface HelpPage {
 export const HELP_PAGES: readonly HelpPage[] = [
   { slug: 'studio-help', file: 'index.md', title: 'MDZip Studio Help' },
   { slug: 'studio-getting-started', file: 'getting-started.md', title: 'Getting Started' },
-  { slug: 'system-integration', file: 'system-integration.md', title: 'System Integration' },
+  { slug: 'studio-system-integration', file: 'system-integration.md', title: 'System Integration' },
 ];
 
 export const HELP_ARCHIVE_TITLE = 'MDZip Studio Help';

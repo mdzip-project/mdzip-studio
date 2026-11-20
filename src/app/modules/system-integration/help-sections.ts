@@ -1,5 +1,5 @@
 // Each card's section on the System Integration help page (mdzip.org's
-// docs/system-integration, bundled as assets/help/system-integration.mdz).
+// docs/studio-system-integration, system-integration.md in the bundled help).
 // A test checks every one is a heading id in the bundled copy.
 export const HELP_SECTIONS: Readonly<Record<string, string>> = {
   markdown: 'opening-md-files',

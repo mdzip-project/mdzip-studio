@@ -148,7 +148,7 @@ describe('AppComponent', () => {
     showHelpWindow('system-integration.md', 'outlook-attachments');
     expect(component.documentTitleDisplay()).toBe('MDZip Studio Help: System Integration');
     expect(component.reader.strip()).toMatchObject({ label: 'Help', title: 'System Integration', refreshable: false });
-    expect(component.reader.strip()?.onlineUrl).toBe('https://mdzip.org/docs/system-integration.html#outlook-attachments');
+    expect(component.reader.strip()?.onlineUrl).toBe('https://mdzip.org/docs/studio-system-integration.html#outlook-attachments');
 
     // Clicking Getting Started in the page list.
     component.onWorkspaceSelectionChanged({ currentPath: 'getting-started.md' } as never);
@@ -161,7 +161,7 @@ describe('AppComponent', () => {
 
     // Asked again for a page and section (another (?)).
     window.dispatchEvent(new CustomEvent('mdzip-studio:help-anchor', { detail: { page: 'system-integration.md', anchor: 'helper-programs' } }));
-    expect(component.reader.strip()?.onlineUrl).toBe('https://mdzip.org/docs/system-integration.html#helper-programs');
+    expect(component.reader.strip()?.onlineUrl).toBe('https://mdzip.org/docs/studio-system-integration.html#helper-programs');
 
     // Back to normal (Save As): the usual title.
     component.readerView.set(false);
@@ -175,7 +175,7 @@ describe('AppComponent', () => {
 
     component.reader.goTo('system-integration.md', 'outlook-attachments');
     expect(component.reader.page()).toBe('system-integration.md');
-    expect(component.reader.strip()?.onlineUrl).toBe('https://mdzip.org/docs/system-integration.html#outlook-attachments');
+    expect(component.reader.strip()?.onlineUrl).toBe('https://mdzip.org/docs/studio-system-integration.html#outlook-attachments');
 
     component.reader.toggleFiles();
     expect(component.reader.controls()).toEqual({ preset: 'preview', navigation: true });
