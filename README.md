@@ -8,6 +8,13 @@ Download the latest `MDZip-Studio-Setup-<version>.exe` from the
 [Releases page](https://github.com/mdzip-project/mdzip-studio/releases/latest)
 and run it.
 
+Or install it with [Chocolatey](https://community.chocolatey.org/packages/mdzip-studio):
+
+```powershell
+choco install mdzip-studio
+choco upgrade mdzip-studio
+```
+
 > **"Windows protected your PC" / "isn't commonly downloaded"** — the installer
 > is not signed with a reputation-bearing certificate, so Microsoft SmartScreen
 > warns on first download. This is expected and does not indicate a problem with
