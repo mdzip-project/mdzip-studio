@@ -147,7 +147,7 @@ describe('AppComponent', () => {
   it("names a help window after its page, and links to that page online as you move between pages", () => {
     showHelpWindow('system-integration.md', 'outlook-attachments');
     expect(component.documentTitleDisplay()).toBe('MDZip Studio Help: System Integration');
-    expect(component.reader.strip()).toMatchObject({ label: 'Help', title: 'System Integration', refreshable: false });
+    expect(component.reader.strip()).toMatchObject({ label: 'Help', title: 'System Integration', status: 'For MDZip Studio 1.7.0' });
     expect(component.reader.strip()?.onlineUrl).toBe('https://mdzip.org/docs/studio-system-integration.html#outlook-attachments');
 
     // Clicking Getting Started in the page list.
@@ -183,7 +183,7 @@ describe('AppComponent', () => {
     expect(component.reader.controls()).toBe('preview');
   });
 
-  it('says in the strip where the link under the pointer goes', () => {
+  it('shows where an outside link goes at the bottom of the window, as a browser does, and nothing for links within the document', () => {
     vi.stubGlobal('mdzipStudio', { ...(window.mdzipStudio ?? {}), isElectron: true });
     component.isDesktopShell.set(true);
     showHelpWindow('index.md');
@@ -192,34 +192,37 @@ describe('AppComponent', () => {
       link.setAttribute('href', href);
       document.body.append(link);
       link.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-      const said = component.reader.strip()?.hover;
+      const said = component.reader.linkStatus();
       link.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
       link.remove();
       return said;
     };
-    expect(hover('https://mdzip.org/studio.html')).toEqual({ text: 'Opens in your browser: mdzip.org/studio.html', external: true });
-    expect(hover('system-integration.md#opening-md-files')).toEqual({ text: 'Goes to the page System Integration', external: false });
-    expect(hover('#images')).toEqual({ text: 'Goes to a section of this page', external: false });
-    expect(component.reader.strip()?.hover).toBeNull();
+    expect(hover('https://mdzip.org/studio.html')).toBe('mdzip.org/studio.html');
+    expect(hover('mailto:info@example.com')).toBe('info@example.com');
+    expect(hover('system-integration.md#opening-md-files')).toBeNull();
+    expect(hover('#images')).toBeNull();
+    // The outline's links carry the app's own address (http://localhost:4200/#…).
+    const appPage = new URL(document.URL);
+    appPage.hash = 'images';
+    expect(hover(appPage.href)).toBeNull();
+    expect(component.reader.linkStatus()).toBeNull();
   });
 
-  it('sends the document, unsaved edits included, to a reader window (View > Read as Document)', async () => {
+  it('sends the document, unsaved edits included, to a reader window (View > Reading View)', async () => {
     const openReaderWindow = vi.fn();
     vi.stubGlobal('mdzipStudio', { ...(window.mdzipStudio ?? {}), openReaderWindow });
-    await component.readAsDocument();
+    await component.openReadingView();
     expect(openReaderWindow).not.toHaveBeenCalled(); // nothing open
 
     await component.createNewDocument('markdown');
-    await component.readAsDocument();
+    await component.openReadingView();
     expect(openReaderWindow).toHaveBeenCalledOnce();
     const snapshot = openReaderWindow.mock.calls[0][0];
     expect(snapshot).toMatchObject({ fileName: 'untitled.md', title: 'Untitled' });
     expect(ArrayBuffer.isView(snapshot.bytes)).toBe(true);
   });
 
-  it('shows a document in a reader window: its title, contents, Refresh, and nothing to save', async () => {
-    const refreshReader = vi.fn();
-    vi.stubGlobal('mdzipStudio', { ...(window.mdzipStudio ?? {}), refreshReader });
+  it('shows a document in a reader window: its title, contents, and nothing to save', async () => {
     const app = component as unknown as { showReaderInThisWindow(snapshot: { bytes: Uint8Array; fileName: string; title: string }): Promise<void> };
     await app.showReaderInThisWindow({
       bytes: new TextEncoder().encode('# Field Notes\n\n## Monday\n\n## Tuesday\n'),
@@ -228,14 +231,10 @@ describe('AppComponent', () => {
     });
 
     expect(component.readerView()).toBe(true);
-    expect(component.documentTitleDisplay()).toBe('Notes (reading)');
-    expect(component.reader.strip()).toMatchObject({ label: 'Notes', title: 'Field Notes', refreshable: true, onlineUrl: null });
-    expect(component.reader.strip()?.status).toMatch(/^As of /);
+    expect(component.documentTitleDisplay()).toBe('Notes (Reading View)');
+    expect(component.reader.strip()).toMatchObject({ label: 'Notes', title: 'Field Notes', status: '', onlineUrl: null });
     expect(component.reader.contents()[0].sections.map((section) => section.text)).toEqual(['Monday', 'Tuesday']);
     expect(component.needsSave()).toBe(false);
-
-    component.refreshReader();
-    expect(refreshReader).toHaveBeenCalled();
 
     // Save a Copy fails: the strip says so (there's no status bar).
     const saveCopy = vi.fn().mockRejectedValue(new Error('disk full'));

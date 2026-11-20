@@ -22,14 +22,13 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
   // A help document ('studio-help' | 'known-issues' | 'changelog') in a help window,
   // at a page of studio-help ('system-integration.md') and a heading id.
   openHelpInNewWindow: (doc, page, anchor) => ipcRenderer.send('mdzip:open-help-in-new-window', { doc, page, anchor }),
-  // View > Read as Document: { bytes, fileName, title } in this window's reader window.
+  // View > Reading View: { bytes, fileName, title } in this window's reader window.
   openReaderWindow: (snapshot) => ipcRenderer.send('mdzip:open-reader-window', snapshot),
-  // A reader window: Refresh asks its editing window for the document again,
-  // which arrives as an update ({ bytes, fileName, title, filePath }).
-  refreshReader: () => ipcRenderer.send('mdzip:refresh-reader'),
   // A help or reader window's Save a Copy: { bytes, fileName } written where
   // the user chooses. Resolves { canceled, filePath }.
   saveCopy: (copy) => ipcRenderer.invoke('mdzip:save-copy', copy),
+  // A reader window: the document again ({ bytes, fileName, title, filePath })
+  // when its editing window chooses Reading View again.
   onReaderUpdate: (callback) => {
     const listener = (_event, snapshot) => callback(snapshot);
     ipcRenderer.on('mdzip:reader-update', listener);

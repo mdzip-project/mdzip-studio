@@ -44,19 +44,12 @@
     <span class="help-strip-title"><ng-container [ngTemplateOutlet]="heading" /></span>
   }
   <span class="help-strip-meta">
-    @if (strip().hover; as hover) {
-      <!-- Where the link under the pointer goes (no status bar here). -->
-      <span class="help-strip-hover" [class.external]="hover.external">{{ hover.text }}</span>
-    } @else {
-      {{ strip().status }}
-      @if (strip().onlineUrl; as onlineUrl) {
+    {{ strip().status }}
+    @if (strip().onlineUrl; as onlineUrl) {
+      @if (strip().status) {
         <span class="help-strip-sep">·</span>
-        <a [href]="onlineUrl" target="_blank" rel="noopener">View the latest online</a>
       }
-      @if (strip().refreshable) {
-        <span class="help-strip-sep">·</span>
-        <button type="button" class="help-strip-action" title="Show the document as it is now in its editing window" (click)="refreshRequested.emit()">Refresh</button>
-      }
+      <a [href]="onlineUrl" target="_blank" rel="noopener">View the latest online</a>
     }
   </span>
 </div>

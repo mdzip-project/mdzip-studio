@@ -308,10 +308,9 @@ interface ElectronBridge {
     | null
   >;
   openHelpInNewWindow?: (doc: HelpDocumentKind, page: string | null, anchor: string | null) => void;
-  // View > Read as Document: this document, as it is now, in this window's reader window.
+  // View > Reading View: this document, as it is now, in this window's reader window.
   openReaderWindow?: (snapshot: { bytes: Uint8Array; fileName: string; title: string }) => void;
-  // A reader window: Refresh (its editing window sends the document again), and the update.
-  refreshReader?: () => void;
+  // A reader window: the document again, when Reading View is chosen again.
   // A reading window's Save a Copy: a save dialog, then the bytes written as they are.
   saveCopy?: (copy: { bytes: Uint8Array; fileName: string }) => Promise<{ canceled: boolean; filePath?: string }>;
   onReaderUpdate?: (callback: (snapshot: ReaderSnapshot) => void) => () => void;
@@ -517,10 +516,13 @@ interface ArchiveTreeData {
             [filesShown]="reader.filesShown()"
             (pageSelected)="reader.goTo($event.file, $event.anchor)"
             (filesToggled)="reader.toggleFiles()"
-            (refreshRequested)="refreshReader()"
             [canSaveCopy]="canSaveReaderCopy()"
             (saveCopyRequested)="saveReaderCopy()"
           />
+        }
+        @if (reader.linkStatus(); as link) {
+          <!-- Where an outside link goes, at the bottom left, as a browser shows it. -->
+          <div class="reader-link-status" role="status">{{ link }}</div>
         }
         <div class="toolbar" [style.display]="readerView() ? 'none' : null">
           <button class="tb-btn" type="button" [title]="'New (' + shortcut('N') + ')'" (click)="newArchive()"><ng-icon name="lucidePlus" size="15" /></button>
@@ -1248,7 +1250,7 @@ export class AppComponent implements OnDestroy {
   // Active tab of the manifest.json entry view (Settings form vs read-only JSON).
   readonly debugCopied = signal(false);
   // This window is for reading: Studio's help (Help > MDZip Studio Help, a
-  // (?)) or a document (View > Read as Document). Its document, page,
+  // (?)) or a document (View > Reading View). Its document, page,
   // contents and strip.
   readonly reader = new ReaderWindow(this.hoverUrl, (page, anchor) => this.goToReaderPage(page, anchor));
   // Read-only, preview only, no menu, toolbar or status bar.
@@ -1418,8 +1420,24 @@ export class AppComponent implements OnDestroy {
     // The help strip's own link: the strip shows where links go, not itself.
     if ((e.target as Element).closest('.help-strip')) return;
     const href = (e.target as Element).closest('a')?.getAttribute('href');
-    if (href) this.hoverUrl.set(href);
+    if (href) this.hoverUrl.set(this.linkWithinApp(href));
   };
+
+  // A link to a section of this page that carries the app's own address (the
+  // outline's: http://localhost:4200/#basic-syntax) as just its #section; the
+  // app's address means nothing to someone reading. Any other link as it is.
+  private linkWithinApp(href: string): string {
+    try {
+      const url = new URL(href, document.baseURI);
+      const page = new URL(document.URL);
+      if (url.hash && url.origin === page.origin && url.pathname === page.pathname && url.search === page.search) {
+        return url.hash;
+      }
+    } catch {
+      // Not a URL: as it is.
+    }
+    return href;
+  }
 
   private readonly handleLinkMouseOut = (e: MouseEvent) => {
     if (!this.isDesktopShell()) return;
@@ -1433,7 +1451,7 @@ export class AppComponent implements OnDestroy {
   private readonly handleCloseArchiveCommand = () => this.closeDocument();
   private readonly handleExportDraftCommand = () => this.exportDraft();
   private readonly handleShowAboutCommand = () => this.showAbout();
-  private readonly handleReadAsDocumentCommand = () => this.ngZone.run(() => void this.readAsDocument());
+  private readonly handleOpenReadingViewCommand = () => this.ngZone.run(() => void this.openReadingView());
   private readonly handleShowKnownIssuesCommand = () => void this.openHelpDocument('known-issues');
   private readonly handleShowChangelogCommand = () => void this.openHelpDocument('changelog');
   private readonly handleSetMdDefaultCommand = () => void this.promptMarkdownDefaultManually();
@@ -1526,7 +1544,7 @@ export class AppComponent implements OnDestroy {
     window.addEventListener('mdzip-studio:toggle-line-numbers', this.handleToggleLineNumbersCommand);
     window.addEventListener('mdzip-studio:outline-position', this.handleOutlinePositionCommand);
     window.addEventListener('mdzip-studio:print', this.handlePrintCommand);
-    window.addEventListener('mdzip-studio:read-as-document', this.handleReadAsDocumentCommand);
+    window.addEventListener('mdzip-studio:open-reading-view', this.handleOpenReadingViewCommand);
     document.addEventListener('keydown', this.handleKeyDown);
     document.addEventListener('click', this.closeMenuOnDocumentClick);
     document.addEventListener('mouseover', this.handleLinkMouseOver);
@@ -1615,7 +1633,7 @@ export class AppComponent implements OnDestroy {
     window.removeEventListener('mdzip-studio:toggle-line-numbers', this.handleToggleLineNumbersCommand);
     window.removeEventListener('mdzip-studio:outline-position', this.handleOutlinePositionCommand);
     window.removeEventListener('mdzip-studio:print', this.handlePrintCommand);
-    window.removeEventListener('mdzip-studio:read-as-document', this.handleReadAsDocumentCommand);
+    window.removeEventListener('mdzip-studio:open-reading-view', this.handleOpenReadingViewCommand);
     this.removeReaderUpdateListener?.();
     document.removeEventListener('keydown', this.handleKeyDown);
     document.removeEventListener('click', this.closeMenuOnDocumentClick);
@@ -1691,10 +1709,9 @@ export class AppComponent implements OnDestroy {
     this.reader.showLoaded();
   }
 
-  // View > Read as Document: the document as it is now, unsaved edits
-  // included, in this window's reader window (asking again, or the reader's
-  // Refresh, updates it).
-  async readAsDocument(): Promise<void> {
+  // View > Reading View: the document as it is now, unsaved edits
+  // included, in this window's reader window (asking again updates it).
+  async openReadingView(): Promise<void> {
     const archive = this.currentArchive();
     if (!archive || this.readerView() || !window.mdzipStudio?.openReaderWindow) return;
     // Same flush as Save and Print, so unsaved typing shows.
@@ -1709,27 +1726,21 @@ export class AppComponent implements OnDestroy {
   }
 
   // A reader window: the document from its editing window, read-only, kept
-  // out of Recent Files. On Refresh, stays on the page you were reading.
+  // out of Recent Files. Updated, it stays on the page you were reading.
   private async showReaderInThisWindow(snapshot: ReaderSnapshot): Promise<void> {
     const bytes = new Uint8Array(snapshot.bytes);
     const contents = await readDocumentContents(bytes, snapshot.fileName).catch(() => []);
     const current = this.readerView() ? this.reader.page() : null;
     const page = current && contents.some((candidate) => candidate.file === current) ? current : null;
-    const time = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     this.reader.show({
       label: snapshot.title,
       title: snapshot.title,
-      status: `As of ${time}`,
-      windowTitle: () => `${snapshot.title} (reading)`,
-      refreshable: true,
+      status: '',
+      windowTitle: () => `${snapshot.title} (Reading View)`,
     }, contents, page, null);
     await this.openDocumentBytes(bytes, snapshot.fileName, snapshot.filePath ?? undefined, true, false, /\.mdz$/i.test(snapshot.fileName), true);
     this.readerCopy = { bytes, fileName: snapshot.fileName };
     this.reader.showLoaded();
-  }
-
-  refreshReader(): void {
-    window.mdzipStudio?.refreshReader?.();
   }
 
   canSaveReaderCopy(): boolean {

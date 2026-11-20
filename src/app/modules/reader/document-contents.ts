@@ -9,6 +9,7 @@
 // something links to them. A document-mode .mdz is one page, its entry point,
 // and so is a .md file.
 import { MdzArchiveCore } from '@mdzip/core-js';
+import { parseFrontMatter } from '@mdzip/editor';
 import { collectMdzipHeadings, tokenizeMdzipMarkdown, walkMdzipTokens } from '@mdzip/renderer';
 import type { Token } from 'marked';
 
@@ -69,16 +70,30 @@ export async function readDocumentContents(
 }
 
 function describePage(file: string, text: string, options: DocumentContentsOptions): DocumentContentsPage {
-  const headings = collectMdzipHeadings(tokenizeMdzipMarkdown(text));
-  const first = headings.find((heading) => heading.level === 1) ?? headings[0];
+  // YAML front matter isn't part of the page, as in the preview (its closing
+  // --- would otherwise make its lines a ## heading). Its title names a page
+  // that has no # heading.
+  const frontMatter = parseFrontMatter(text);
+  const headings = collectMdzipHeadings(tokenizeMdzipMarkdown(frontMatter?.body ?? text));
+  const heading1 = headings.find((heading) => heading.level === 1);
+  const first = heading1 ?? headings[0];
   let sections = headings.filter((heading) => heading.level === 2);
   // A page without ## headings: its # headings after the title.
   if (!sections.length) sections = headings.filter((heading) => heading.level === 1 && heading !== first);
   return {
     file,
-    title: options.titles?.[file] ?? first?.text ?? file.replace(/^.*\//, '').replace(/\.(md|markdown|mdz)$/i, ''),
+    title: options.titles?.[file]
+      ?? heading1?.text
+      ?? frontMatterTitle(frontMatter)
+      ?? first?.text
+      ?? file.replace(/^.*\//, '').replace(/\.(md|markdown|mdz)$/i, ''),
     sections: sections.map(({ id, text: sectionText }) => ({ id, text: sectionText })),
   };
+}
+
+function frontMatterTitle(frontMatter: ReturnType<typeof parseFrontMatter>): string | null {
+  const title = frontMatter?.data['title'];
+  return typeof title === 'string' && title.trim() ? title.trim() : null;
 }
 
 // The archive pages `text` (the page at `from`) links to, in order: relative

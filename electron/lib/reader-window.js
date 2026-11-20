@@ -1,4 +1,4 @@
-// Reader windows (View > Read as Document): a document from its editing
+// Reader windows (View > Reading View): a document from its editing
 // window, as it is at that moment (unsaved edits included), read-only, with
 // the contents dropdown and no menu or toolbar. One per editing window; it
 // closes with it.

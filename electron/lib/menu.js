@@ -112,7 +112,7 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvai
       label: 'View',
       submenu: [
         // The document as it is now, in a reader window: contents, no menu or toolbar.
-        { label: 'Read as Document', enabled: documentOpen, click: handlers.readAsDocument },
+        { label: 'Reading View', enabled: documentOpen, click: handlers.openReadingView },
         { type: 'separator' },
         { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: handlers.reload },
         {

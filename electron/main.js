@@ -854,7 +854,7 @@ function createWindow({ pendingOpenPath = null, startupAction = null, readerSour
     // A help window (Help > Open in New Window): a read-only page, no menu.
     help: startupAction?.kind === 'help',
     helpDoc: startupAction?.kind === 'help' ? startupAction.doc : null,
-    // A reader window (View > Read as Document) and the editing window it reads.
+    // A reader window (View > Reading View) and the editing window it reads.
     reader: startupAction?.kind === 'reader',
     readerSource,
     // Set once the renderer has approved this window closing (X button or the
@@ -1107,9 +1107,8 @@ function openHelpWindow(payload) {
   createWindow({ startupAction });
 }
 
-// View > Read as Document: the sending window's document, in that window's
-// reader window. Asking again (or the reader's Refresh) updates it and brings
-// it forward.
+// View > Reading View: the sending window's document, in that window's
+// reader window. Asking again updates it and brings it forward.
 ipcMain.on('mdzip:open-reader-window', (event, payload) => {
   const source = BrowserWindow.fromWebContents(event.sender);
   const sourceState = windowState(source);
@@ -1128,13 +1127,6 @@ ipcMain.on('mdzip:open-reader-window', (event, payload) => {
     return;
   }
   createWindow({ startupAction: { kind: 'reader', ...update }, readerSource: source });
-});
-
-// A reader window's Refresh: its editing window sends the document again.
-ipcMain.on('mdzip:refresh-reader', (event) => {
-  const state = windowState(BrowserWindow.fromWebContents(event.sender));
-  const source = state?.reader ? state.readerSource : null;
-  if (source && !source.isDestroyed()) void dispatchAppEvent(source, 'mdzip-studio:read-as-document');
 });
 
 // A help or reader window's Save a Copy: the document it shows, written
@@ -2088,7 +2080,7 @@ function menuHandlersFor(win) {
     closeDocument: () => dispatchAppEvent(win, 'mdzip-studio:close-archive'),
     quit: () => app.quit(),
     reload: () => dispatchAppEvent(win, 'mdzip-studio:reload-document'),
-    readAsDocument: () => dispatchAppEvent(win, 'mdzip-studio:read-as-document'),
+    openReadingView: () => dispatchAppEvent(win, 'mdzip-studio:open-reading-view'),
     toggleLineNumbers: () => dispatchAppEvent(win, 'mdzip-studio:toggle-line-numbers'),
     toggleRemoteImages: () => toggleRemoteImages(),
     toggleOutlineSide: () => toggleOutlineSide(),

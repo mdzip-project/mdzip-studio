@@ -42,6 +42,15 @@ describe('readDocumentContents', () => {
     expect(contents).toEqual([{ file: 'notes.md', title: 'Notes', sections: [{ id: 'later', text: 'Later' }] }]);
   });
 
+  it('leaves out YAML front matter, and takes the title from it when there is no # heading', async () => {
+    const withHeading = '---\ntitle: Understanding Front Matter\nauthor: Someone\n---\n\n# Front Matter\n\n## Basic syntax\n';
+    expect(await readDocumentContents(new TextEncoder().encode(withHeading), 'front-matter.md')).toEqual([
+      { file: 'front-matter.md', title: 'Front Matter', sections: [{ id: 'basic-syntax', text: 'Basic syntax' }] },
+    ]);
+    const withoutHeading = '---\ntitle: Understanding Front Matter\n---\n\n## Basic syntax\n';
+    expect((await readDocumentContents(new TextEncoder().encode(withoutHeading), 'front-matter.md'))[0].title).toBe('Understanding Front Matter');
+  });
+
   it('uses the titles it is given', async () => {
     const contents = await readDocumentContents(new TextEncoder().encode('# Getting Started with Studio\n'), 'getting-started.md', {
       titles: { 'getting-started.md': 'Getting Started' },
