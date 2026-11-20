@@ -1,3 +1,4 @@
+const fs = require('fs');
 const path = require('path');
 
 // Help > System Integration… (studio#11): how MDZip fits into the rest of the
@@ -391,7 +392,12 @@ async function helperStatus(helper, run) {
 // found with it. Windows: the machine and user Path values from the registry,
 // with %VARIABLES% expanded. macOS: GUI apps get a minimal PATH, so add
 // Homebrew's and the user's usual bin folders.
-async function freshPath({ platform, reg, env }) {
+//
+// Everywhere: the folders `pip install --user` puts programs in
+// (markitdown-mdz), which pip doesn't add to PATH; it only warns, in a
+// terminal window that has usually closed. One per Python version, newest
+// first; `listDir(folder)` names a folder's entries ([] when it's missing).
+async function freshPath({ platform, reg, env, listDir = listDirectory }) {
   const current = env.PATH ?? env.Path ?? '';
   if (platform === 'win32') {
     const machine = await reg.read('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment', 'Path');
@@ -400,7 +406,7 @@ async function freshPath({ platform, reg, env }) {
       const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
       return key ? env[key] : whole;
     });
-    return uniquePathList([expand(machine), expand(user), current], ';');
+    return uniquePathList([expand(machine), expand(user), current, ...pipUserFolders(platform, env, listDir)], ';');
   }
   if (platform === 'darwin') {
     const home = env.HOME ?? '';
@@ -409,11 +415,42 @@ async function freshPath({ platform, reg, env }) {
       '/opt/homebrew/bin',
       '/usr/local/bin',
       home ? `${home}/.local/bin` : '',
-      home ? `${home}/Library/Python/3.13/bin` : '',
-      home ? `${home}/Library/Python/3.12/bin` : '',
+      ...pipUserFolders(platform, env, listDir),
     ], ':');
   }
-  return current;
+  return uniquePathList([current, ...pipUserFolders(platform, env, listDir)], ':');
+}
+
+// Where `pip install --user` puts programs: Windows
+// %APPDATA%\Python\Python314\Scripts, macOS ~/Library/Python/3.14/bin
+// (one per Python version that has any, newest first), Linux ~/.local/bin.
+function pipUserFolders(platform, env, listDir) {
+  const newestFirst = (names, pattern) => names
+    .map((name) => ({ name, version: pattern.exec(name) }))
+    .filter((entry) => entry.version)
+    .sort((a, b) => Number(b.version[2]) - Number(a.version[2]) || Number(b.version[1]) - Number(a.version[1]))
+    .map((entry) => entry.name);
+  if (platform === 'win32') {
+    const appData = env.APPDATA;
+    if (!appData) return [];
+    const base = path.win32.join(appData, 'Python');
+    return newestFirst(listDir(base), /^Python(\d)(\d+)$/i).map((name) => path.win32.join(base, name, 'Scripts'));
+  }
+  const home = env.HOME;
+  if (!home) return [];
+  if (platform === 'darwin') {
+    const base = `${home}/Library/Python`;
+    return newestFirst(listDir(base), /^(\d+)\.(\d+)$/).map((name) => `${base}/${name}/bin`);
+  }
+  return [`${home}/.local/bin`];
+}
+
+function listDirectory(folder) {
+  try {
+    return fs.readdirSync(folder);
+  } catch {
+    return [];
+  }
 }
 
 function uniquePathList(parts, separator) {

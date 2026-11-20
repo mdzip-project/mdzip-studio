@@ -303,7 +303,27 @@ describe('helper programs', () => {
     expect(await freshPath({ platform: 'win32', reg, env })).toBe(
       'C:\\Windows\\system32;C:\\Program Files\\Pandoc;C:\\Users\\me\\AppData\\Local\\Microsoft\\WinGet\\Links;C:\\old'
     );
-    expect(await freshPath({ platform: 'darwin', reg, env: { PATH: '/usr/bin', HOME: '/Users/me' } }))
-      .toBe(['/usr/bin', '/opt/homebrew/bin', '/usr/local/bin', '/Users/me/.local/bin', '/Users/me/Library/Python/3.13/bin', '/Users/me/Library/Python/3.12/bin'].join(path.posix.delimiter));
+    expect(await freshPath({ platform: 'darwin', reg, env: { PATH: '/usr/bin', HOME: '/Users/me' }, listDir: () => [] }))
+      .toBe(['/usr/bin', '/opt/homebrew/bin', '/usr/local/bin', '/Users/me/.local/bin'].join(path.posix.delimiter));
+  });
+
+  it("adds the folders pip install --user puts programs in, which aren't on PATH", async () => {
+    const reg = fakeRegistry({});
+    const folders = {
+      'C:\\Users\\me\\AppData\\Roaming\\Python': ['Python39', 'Python314', 'Python313', 'site-packages'],
+      '/Users/me/Library/Python': ['3.9', '3.14', '3.13', '.DS_Store'],
+    };
+    const listDir = (folder) => folders[folder] ?? [];
+    expect(await freshPath({ platform: 'win32', reg, env: { Path: 'C:\\old', APPDATA: 'C:\\Users\\me\\AppData\\Roaming' }, listDir })).toBe([
+      'C:\\old',
+      'C:\\Users\\me\\AppData\\Roaming\\Python\\Python314\\Scripts',
+      'C:\\Users\\me\\AppData\\Roaming\\Python\\Python313\\Scripts',
+      'C:\\Users\\me\\AppData\\Roaming\\Python\\Python39\\Scripts',
+    ].join(';'));
+    expect(await freshPath({ platform: 'darwin', reg, env: { PATH: '/usr/bin', HOME: '/Users/me' }, listDir }))
+      .toBe(['/usr/bin', '/opt/homebrew/bin', '/usr/local/bin', '/Users/me/.local/bin',
+        '/Users/me/Library/Python/3.14/bin', '/Users/me/Library/Python/3.13/bin', '/Users/me/Library/Python/3.9/bin'].join(':'));
+    expect(await freshPath({ platform: 'linux', reg, env: { PATH: '/usr/bin', HOME: '/home/me' }, listDir }))
+      .toBe('/usr/bin:/home/me/.local/bin');
   });
 });
