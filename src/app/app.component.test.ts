@@ -5,6 +5,7 @@ import { MdzipRenderingService } from '@mdzip/editor';
 import type { MdzipConversionContext } from '@mdzip/editor';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppComponent } from './app.component';
+import { APP_VERSION } from './app-version';
 import { helpReaderSource } from './modules/help/help-documents';
 import { HELP_PAGES } from './modules/help/help-pages';
 import { ArchiveService } from './core/services/archive.service';
@@ -136,7 +137,7 @@ describe('AppComponent', () => {
     expect(open).toHaveBeenCalledWith('studio-help', 'outlook-attachments', 'system-integration.md');
   });
 
-  // Studio's help, as a help window shows it (contents read from help.mdz in the real thing).
+  // Studio's help, as a help window shows it (contents read from the help archive in the real thing).
   const showHelpWindow = (page: string | null, anchor: string | null = null) => {
     const contents = HELP_PAGES.map((helpPage) => ({ file: helpPage.file, title: helpPage.title, sections: [] }));
     component.reader.show(helpReaderSource('studio-help', 'For MDZip Studio 1.7.0'), contents, page, anchor);
@@ -235,6 +236,35 @@ describe('AppComponent', () => {
 
     component.refreshReader();
     expect(refreshReader).toHaveBeenCalled();
+
+    // Save a Copy fails: the strip says so (there's no status bar).
+    const saveCopy = vi.fn().mockRejectedValue(new Error('disk full'));
+    vi.stubGlobal('mdzipStudio', { ...(window.mdzipStudio ?? {}), saveCopy });
+    await component.saveReaderCopy();
+    expect(saveCopy.mock.calls[0][0].fileName).toBe('notes.md');
+    expect(component.reader.strip()?.status).toBe('Could not save a copy: disk full');
+  });
+
+  it('saves a copy of the help as it came, named for the version it describes', async () => {
+    const built = await MdzPackagerCore.buildArchive([{ path: 'index.md', text: '# MDZip Studio Help\n' }], 'Help', {
+      createIndex: false, mapFiles: false, filters: ['**/*'], title: 'MDZip Studio Help', mode: 'project', entryPoint: 'index.md',
+    });
+    const bytes = new Uint8Array(await built.blob.arrayBuffer());
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => bytes.slice().buffer });
+    vi.stubGlobal('fetch', fetchMock);
+    const saveCopy = vi.fn().mockResolvedValue({ canceled: false, filePath: 'C:/docs/help.mdz' });
+    vi.stubGlobal('mdzipStudio', { ...(window.mdzipStudio ?? {}), saveCopy });
+    const app = component as unknown as { showHelpInThisWindow(kind: 'studio-help', page: string | null, anchor: string | null): Promise<void> };
+    await app.showHelpInThisWindow('studio-help', null, null);
+    expect(fetchMock).toHaveBeenCalledWith('assets/help/mdzip-studio-help.mdz', { cache: 'no-store' });
+
+    expect(component.canSaveReaderCopy()).toBe(true);
+    await component.saveReaderCopy();
+    const copy = saveCopy.mock.calls[0][0];
+    expect(copy.fileName).toBe(`mdzip-studio-help-${APP_VERSION}.mdz`);
+    expect(Array.from(copy.bytes)).toEqual(Array.from(bytes));
+    // Still a help window.
+    expect(component.readerView()).toBe(true);
   });
 
   it('gives a reading window the outline on the left without touching your setting, and no New/Open shortcuts', () => {

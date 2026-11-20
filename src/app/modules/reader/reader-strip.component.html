@@ -6,8 +6,9 @@
       <span class="help-strip-sep">·</span> {{ strip().title }}
     }
   </ng-template>
-  @if (hasContents()) {
-    <!-- The title opens a contents tree of every page and its sections. -->
+  @if (hasContents() || canSaveCopy()) {
+    <!-- The title opens a contents tree of every page and its sections,
+         then Show the files and Save a Copy. -->
     <button
       type="button"
       class="help-strip-title help-contents-button"
@@ -34,6 +35,9 @@
         <button type="button" class="help-contents-files" (click)="toggleFiles()">
           {{ filesShown() ? 'Hide the files in this document' : 'Show the files in this document' }}
         </button>
+        @if (canSaveCopy()) {
+          <button type="button" class="help-contents-files" (click)="saveCopy()">Save a Copy…</button>
+        }
       </nav>
     }
   } @else {

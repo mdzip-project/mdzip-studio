@@ -2,8 +2,8 @@
 // read-only, at a page and section. The renderer asks for one by name; only
 // these names, help-page file names and plain heading ids get through.
 
-// studio-help: the help pages (assets/help/help.mdz). known-issues and
-// changelog: the documents the help dialog also shows.
+// studio-help: the help pages (assets/help/mdzip-studio-help.mdz).
+// known-issues and changelog: the documents the help dialog also shows.
 const HELP_DOCUMENTS = Object.freeze(['studio-help', 'known-issues', 'changelog']);
 
 // The startup action for that window, or null when the request isn't one of

@@ -35,6 +35,15 @@ describe('ReaderStripComponent', () => {
     expect(strip.contentsOpen()).toBe(false);
     expect(toggled).toBe(1);
   });
+
+  it('closes the contents and asks for Save a Copy', () => {
+    let asked = 0;
+    strip.saveCopyRequested.subscribe(() => asked++);
+    strip.contentsOpen.set(true);
+    strip.saveCopy();
+    expect(strip.contentsOpen()).toBe(false);
+    expect(asked).toBe(1);
+  });
 });
 
 describe('ReaderStripComponent contents', () => {

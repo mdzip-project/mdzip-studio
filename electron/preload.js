@@ -27,6 +27,9 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
   // A reader window: Refresh asks its editing window for the document again,
   // which arrives as an update ({ bytes, fileName, title, filePath }).
   refreshReader: () => ipcRenderer.send('mdzip:refresh-reader'),
+  // A help or reader window's Save a Copy: { bytes, fileName } written where
+  // the user chooses. Resolves { canceled, filePath }.
+  saveCopy: (copy) => ipcRenderer.invoke('mdzip:save-copy', copy),
   onReaderUpdate: (callback) => {
     const listener = (_event, snapshot) => callback(snapshot);
     ipcRenderer.on('mdzip:reader-update', listener);

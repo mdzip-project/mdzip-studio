@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// Builds Studio's help archive, src/assets/help/help.mdz, from the mdzip.org
-// docs pages listed in src/app/modules/help/help-pages.ts: one project-mode
-// .mdz with each page as its own file and index.md as the contents page, so
-// the help window moves between pages with the editor's file list and links.
+// Builds Studio's help archive, src/assets/help/mdzip-studio-help.mdz, from
+// the mdzip.org docs pages listed in src/app/modules/help/help-pages.ts: one
+// project-mode .mdz with each page as its own file and index.md as the
+// contents page, so the help window moves between pages with the editor's
+// file list and links.
 // Links between help pages point inside the archive; other site links go to
 // mdzip.org (scripts/help-links.mjs).
 //
@@ -20,7 +21,7 @@ import { HELP_ARCHIVE_TITLE, HELP_PAGES } from '../src/app/modules/help/help-pag
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SITE = path.resolve(process.env.MDZIP_ORG_DIR || path.join(ROOT, '..', 'mdzip.org'));
-const TARGET = path.join(ROOT, 'src', 'assets', 'help', 'help.mdz');
+const TARGET = path.join(ROOT, 'src', 'assets', 'help', 'mdzip-studio-help.mdz');
 const check = process.argv.includes('--check');
 
 // Every file the help archive should hold: path → bytes.

@@ -312,6 +312,8 @@ interface ElectronBridge {
   openReaderWindow?: (snapshot: { bytes: Uint8Array; fileName: string; title: string }) => void;
   // A reader window: Refresh (its editing window sends the document again), and the update.
   refreshReader?: () => void;
+  // A reading window's Save a Copy: a save dialog, then the bytes written as they are.
+  saveCopy?: (copy: { bytes: Uint8Array; fileName: string }) => Promise<{ canceled: boolean; filePath?: string }>;
   onReaderUpdate?: (callback: (snapshot: ReaderSnapshot) => void) => () => void;
   onDocumentChangedExternally?: (callback: (data: { filePath: string }) => void) => () => void;
   onWindowCloseRequested?: (callback: (requestId: number) => void) => () => void;
@@ -516,6 +518,8 @@ interface ArchiveTreeData {
             (pageSelected)="reader.goTo($event.file, $event.anchor)"
             (filesToggled)="reader.toggleFiles()"
             (refreshRequested)="refreshReader()"
+            [canSaveCopy]="canSaveReaderCopy()"
+            (saveCopyRequested)="saveReaderCopy()"
           />
         }
         <div class="toolbar" [style.display]="readerView() ? 'none' : null">
@@ -997,6 +1001,9 @@ export class AppComponent implements OnDestroy {
     const name = archive ? this.toSafeFilename(archive.name) : 'document';
     return this.sourceFormat() === 'markdown' ? `${name}.md` : `${name}.mdz`;
   });
+  // A reading window's document as it arrived, for Save a Copy: written
+  // unchanged, under the name it came with (mdzip-studio-help-1.7.0.mdz).
+  private readerCopy: { bytes: Uint8Array; fileName: string } | null = null;
   readonly latestWorkspaceBytes = signal<Uint8Array | null>(null);
   readonly latestWorkspaceSnapshot = signal<MdzipWorkspaceSnapshot | null>(null);
 
@@ -1679,6 +1686,7 @@ export class AppComponent implements OnDestroy {
     const loaded = await loadHelpDocument(kind);
     const contents = doc.pages ? await readHelpContents(loaded.bytes).catch(() => []) : [];
     this.reader.show(helpReaderSource(kind, loaded.status), contents, doc.pages ? page : null, anchor);
+    this.readerCopy = { bytes: loaded.bytes, fileName: doc.fileName };
     await this.openDocumentBytes(loaded.bytes, doc.fileName, undefined, true, false, !!doc.pages, true);
     this.reader.showLoaded();
   }
@@ -1716,11 +1724,30 @@ export class AppComponent implements OnDestroy {
       refreshable: true,
     }, contents, page, null);
     await this.openDocumentBytes(bytes, snapshot.fileName, snapshot.filePath ?? undefined, true, false, /\.mdz$/i.test(snapshot.fileName), true);
+    this.readerCopy = { bytes, fileName: snapshot.fileName };
     this.reader.showLoaded();
   }
 
   refreshReader(): void {
     window.mdzipStudio?.refreshReader?.();
+  }
+
+  canSaveReaderCopy(): boolean {
+    return !!window.mdzipStudio?.saveCopy;
+  }
+
+  // A reading window's Save a Copy (in the strip's dropdown): the document it
+  // shows, written where you choose. The window stays as it is.
+  async saveReaderCopy(): Promise<void> {
+    const copy = this.readerCopy;
+    if (!copy || !window.mdzipStudio?.saveCopy) return;
+    try {
+      await window.mdzipStudio.saveCopy(copy);
+    } catch (error) {
+      // No status bar here: the strip says so.
+      const reason = error instanceof Error ? error.message : 'unknown error';
+      this.reader.source.update((source) => source && { ...source, status: `Could not save a copy: ${reason}` });
+    }
   }
 
   // In a reading window: show `page` at `anchor`.
@@ -2752,6 +2779,7 @@ export class AppComponent implements OnDestroy {
   private async openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly = false, recordRecent = true, showNavigation = false, reading = false): Promise<void> {
     this.readOnly.set(readOnly);
     this.readerView.set(reading);
+    if (!reading) this.readerCopy = null;
     // Decide nav-pane visibility before the workspace (re)mounts, so the freshly
     // created view picks it up. Off for normal opens, on for packed folders.
     this.navigationActive.set(showNavigation);

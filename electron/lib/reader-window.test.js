@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readerSnapshot, shouldCloseLeftoverReaders } from './reader-window';
+import { readerSnapshot, saveCopyFilters, shouldCloseLeftoverReaders } from './reader-window';
 
 describe('readerSnapshot', () => {
   it('takes the bytes, file name and title an editing window sends', () => {
@@ -20,6 +20,15 @@ describe('readerSnapshot', () => {
     expect(readerSnapshot({ bytes: 'text', fileName: 'a.mdz' })).toBeNull();
     expect(readerSnapshot({ bytes: new Uint8Array([1]), fileName: '../a.mdz' })).toBeNull();
     expect(readerSnapshot({ bytes: new Uint8Array([1]), fileName: 'a.exe' })).toBeNull();
+  });
+});
+
+describe('saveCopyFilters', () => {
+  it('offers only the kind of file the copy is', () => {
+    expect(saveCopyFilters('mdzip-studio-help-1.7.0.mdz')[0]).toEqual({ name: 'MDZip Documents', extensions: ['mdz'] });
+    expect(saveCopyFilters('KNOWN_ISSUES.md')[0]).toEqual({ name: 'Markdown Files', extensions: ['md'] });
+    expect(saveCopyFilters('notes.markdown')[0]).toEqual({ name: 'Markdown Files', extensions: ['markdown'] });
+    expect(saveCopyFilters('notes.md')).toHaveLength(2);
   });
 });
 

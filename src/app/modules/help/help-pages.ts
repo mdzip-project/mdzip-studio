@@ -1,12 +1,13 @@
 // Studio's help: these mdzip.org docs pages, packed into one project-mode
-// archive (src/assets/help/help.mdz) by scripts/sync-help-docs.mjs, so the
-// help window can move between them with the editor's file list and links.
+// archive (src/assets/help/mdzip-studio-help.mdz) by
+// scripts/sync-help-docs.mjs, so the help window can move between them with
+// the editor's file list and links.
 // Plain data, no Angular: the sync script and the Electron tests import it too.
 
 export interface HelpPage {
   // The page on mdzip.org: docs-src/<slug>.mdz, published at docs/<slug>.html.
   slug: string;
-  // Its file in help.mdz.
+  // Its file in the help archive.
   file: string;
   // Its name in the help window's strip.
   title: string;

@@ -1,4 +1,5 @@
-// Studio's bundled help (src/assets/help/help.mdz, from npm run sync:help):
+// Studio's bundled help (src/assets/help/mdzip-studio-help.mdz, from
+// npm run sync:help):
 // every help page is in it, and every (?) in Help > System Integration lands
 // on a heading of the System Integration page. A heading renamed on mdzip.org
 // changes its id, and fails here instead of opening the page at the top.
@@ -11,7 +12,7 @@ import { HELP_PAGES } from '../../src/app/modules/help/help-pages';
 import { readHelpContents } from '../../src/app/modules/help/help-contents';
 import { HELP_SECTIONS } from '../../src/app/modules/system-integration/help-sections';
 
-const HELP = path.join(__dirname, '..', '..', 'src', 'assets', 'help', 'help.mdz');
+const HELP = path.join(__dirname, '..', '..', 'src', 'assets', 'help', 'mdzip-studio-help.mdz');
 
 async function openHelp() {
   return MdzArchiveCore.open(new Uint8Array(fs.readFileSync(HELP)));

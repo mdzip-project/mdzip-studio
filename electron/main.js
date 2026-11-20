@@ -28,7 +28,7 @@ const {
 const { buildJumpList, wantsNewWindow, startupActionFromArgs, recentDocumentsForMac } = require('./lib/jump-list');
 const { createOpenFileQueue } = require('./lib/open-file-queue');
 const { helpStartupAction } = require('./lib/help-window');
-const { readerSnapshot, shouldCloseLeftoverReaders } = require('./lib/reader-window');
+const { readerSnapshot, saveCopyFilters, shouldCloseLeftoverReaders } = require('./lib/reader-window');
 const { statsDiffer } = require('./lib/file-watch');
 const {
   PORTABLE_DOWNLOAD_URL,
@@ -1135,6 +1135,25 @@ ipcMain.on('mdzip:refresh-reader', (event) => {
   const state = windowState(BrowserWindow.fromWebContents(event.sender));
   const source = state?.reader ? state.readerSource : null;
   if (source && !source.isDestroyed()) void dispatchAppEvent(source, 'mdzip-studio:read-as-document');
+});
+
+// A help or reader window's Save a Copy: the document it shows, written
+// unchanged where the user chooses. Not a Save: the window stays a reading
+// window and doesn't take on (or watch) the file it wrote.
+ipcMain.handle('mdzip:save-copy', async (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const state = windowState(win);
+  if (!state?.help && !state?.reader) return { canceled: true };
+  const copy = readerSnapshot({ bytes: payload?.bytes, fileName: payload?.fileName });
+  if (!copy) return { canceled: true };
+  const result = await dialog.showSaveDialog(win, {
+    title: 'Save a Copy',
+    defaultPath: path.join(app.getPath('documents'), copy.fileName),
+    filters: saveCopyFilters(copy.fileName),
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  await fs.writeFile(result.filePath, Buffer.from(copy.bytes));
+  return { canceled: false, filePath: result.filePath };
 });
 
 ipcMain.handle('mdzip:take-startup-action', (event) => {

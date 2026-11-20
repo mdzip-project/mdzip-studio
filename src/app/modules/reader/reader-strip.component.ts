@@ -1,7 +1,7 @@
 // The blue strip across the top of a reading window (Studio's help, or View >
 // Read as Document), in place of the menu and toolbar: the open book, the
 // label and page (with several pages, a contents dropdown of every page and
-// its sections), and on the right either where the link under the pointer
+// its sections, Show the files and Save a Copy), and on the right either where the link under the pointer
 // goes, or the status with the page online or Refresh.
 import { NgTemplateOutlet } from '@angular/common';
 import { Component, input, output, signal } from '@angular/core';
@@ -24,11 +24,14 @@ export class ReaderStripComponent {
   readonly contents = input<DocumentContentsPage[]>([]);
   readonly currentPage = input<string | null>(null);
   readonly filesShown = input(false);
+  // Desktop only: Save a Copy needs the save dialog.
+  readonly canSaveCopy = input(false);
 
   // A page (anchor null) or one of its sections.
   readonly pageSelected = output<{ file: string; anchor: string | null }>();
   readonly filesToggled = output<void>();
   readonly refreshRequested = output<void>();
+  readonly saveCopyRequested = output<void>();
 
   readonly contentsOpen = signal(false);
 
@@ -46,5 +49,10 @@ export class ReaderStripComponent {
   toggleFiles(): void {
     this.contentsOpen.set(false);
     this.filesToggled.emit();
+  }
+
+  saveCopy(): void {
+    this.contentsOpen.set(false);
+    this.saveCopyRequested.emit();
   }
 }

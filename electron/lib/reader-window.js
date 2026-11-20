@@ -21,6 +21,16 @@ function readerSnapshot(payload) {
   return { bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), fileName, title };
 }
 
+// The save dialog's file types for Save a Copy: only the copy's own kind,
+// since its bytes are written as they are (no .md to .mdz conversion).
+function saveCopyFilters(fileName) {
+  const extension = (/\.([^.]+)$/.exec(fileName)?.[1] ?? '').toLowerCase();
+  const kind = extension === 'mdz'
+    ? { name: 'MDZip Documents', extensions: ['mdz'] }
+    : { name: 'Markdown Files', extensions: [extension || 'md'] };
+  return [kind, { name: 'All Files', extensions: ['*'] }];
+}
+
 // After a window closes: true when only reading windows (help, readers) are
 // left, so they close too and Studio quits, rather than leaving one open with
 // no way back to a Studio window. Not on macOS, where Studio keeps running
@@ -30,4 +40,4 @@ function shouldCloseLeftoverReaders(remainingStates, platform) {
   return remainingStates.every((state) => state?.help || state?.reader);
 }
 
-module.exports = { readerSnapshot, shouldCloseLeftoverReaders };
+module.exports = { readerSnapshot, saveCopyFilters, shouldCloseLeftoverReaders };

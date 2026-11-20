@@ -48,7 +48,7 @@ describe('HelpDialogComponent', () => {
 
     // No GitHub fetch: the bundled copy describes this version of Studio.
     expect(fetch).toHaveBeenCalledOnce();
-    expect(fetch).toHaveBeenCalledWith('assets/help/help.mdz', { cache: 'no-store' });
+    expect(fetch).toHaveBeenCalledWith('assets/help/mdzip-studio-help.mdz', { cache: 'no-store' });
     expect(dialog.status()).toMatch(/^For MDZip Studio \d/);
     expect(dialog.onlineUrl()).toBe('https://mdzip.org/docs/system-integration.html#explorer-previews');
 

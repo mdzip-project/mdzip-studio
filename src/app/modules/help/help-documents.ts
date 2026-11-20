@@ -8,6 +8,8 @@ export type HelpDocumentKind = 'studio-help' | 'known-issues' | 'changelog';
 
 export interface HelpDocument {
   title: string;
+  // What Save a Copy suggests. Studio's help carries the version it
+  // describes, as the copies kept on mdzip.org will: mdzip-studio-help-1.7.0.mdz.
   fileName: string;
   // Fetched first, so the newest copy shows (Known Issues and the Change Log
   // only grow). Without one, the bundled copy shows, which describes this
@@ -21,8 +23,8 @@ export interface HelpDocument {
 export const HELP_DOCUMENTS: Record<HelpDocumentKind, HelpDocument> = {
   'studio-help': {
     title: HELP_ARCHIVE_TITLE,
-    fileName: 'help.mdz',
-    fallbackUrl: 'assets/help/help.mdz',
+    fileName: `mdzip-studio-help-${APP_VERSION}.mdz`,
+    fallbackUrl: 'assets/help/mdzip-studio-help.mdz',
     pages: true,
   },
   'known-issues': {
