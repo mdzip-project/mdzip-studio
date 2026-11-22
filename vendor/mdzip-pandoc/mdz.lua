@@ -627,6 +627,7 @@ local function reread_split_drawings(doc)
     warn("pictures sharing a line with a shape may be missing: " .. tostring(result))
     return nil
   end
+  word.unsplit = word.unsplit or word.xml
   word.xml = split
   return result
 end
@@ -668,6 +669,75 @@ local function word_picture_sizes()
     end
   end
   return next(found) and found or nil
+end
+
+-- A picture drawn on a shape (a white logo on a coloured banner): Pandoc
+-- keeps the picture but not the shape, so the logo would be white on white.
+-- For each such picture (media/image1.png), the shape's fill as a CSS
+-- background: its colour, or its gradient. Word puts the two in one run,
+-- the shape first (mc:AlternateContent), then the picture.
+local function shape_fill(shape)
+  local properties = shape:match("<wps:spPr[%s>].-</wps:spPr>")
+  if not properties then return nil end
+  local solid = properties:match('<a:solidFill>%s*<a:srgbClr val="(%x%x%x%x%x%x)"')
+  if solid then return "#" .. solid:upper() end
+  local gradient = properties:match("<a:gradFill[%s>].-</a:gradFill>")
+  if not gradient then return nil end
+  local stops = {}
+  for at, colour in gradient:gmatch('<a:gs pos="(%d+)">%s*<a:srgbClr val="(%x%x%x%x%x%x)"') do
+    stops[#stops + 1] = string.format("#%s %g%%", colour:upper(), tonumber(at) / 1000)
+  end
+  if #stops == 1 then return stops[1]:match("^#%x+") end
+  if #stops == 0 then return nil end
+  -- Word's angle (60000ths of a degree) runs from left to right at 0; CSS's
+  -- from bottom to top.
+  local angle = tonumber(gradient:match('<a:lin ang="(%d+)"') or "0") / 60000
+  return string.format("linear-gradient(%gdeg, %s)", (angle + 90) % 360, table.concat(stops, ", "))
+end
+
+local function word_picture_backdrops()
+  local word = word_input()
+  if not word or not word.rels then return nil end
+  local xml = word.unsplit or word.xml
+  local target = {}
+  for rel in word.rels:gmatch("<Relationship%s[^>]*>") do
+    local id, to = rel:match('%sId="([^"]+)"'), rel:match('%sTarget="([^"]+)"')
+    if id and to then target[id] = to:gsub("^/word/", ""):gsub("^%./", "") end
+  end
+  local found, at = {}, 1
+  while true do
+    local close, after = xml:find("</mc:AlternateContent>%s*<w:drawing[%s>]", at)
+    if not close then break end
+    at = after
+    -- The shape: from the last <mc:AlternateContent> before it.
+    local open, from = nil, 1
+    while true do
+      local s = xml:find("<mc:AlternateContent[%s>]", from)
+      if not s or s > close then break end
+      open, from = s, s + 1
+    end
+    local drawing = xml:match("<w:drawing[%s>].-</w:drawing>", xml:find("<w:drawing", close, true))
+    local fill = open and shape_fill(xml:sub(open, close))
+    local id = drawing and drawing:match('r:embed="([^"]+)"')
+    if fill and id and target[id] then found[target[id]] = fill end
+  end
+  return next(found) and found or nil
+end
+
+local function backdrop_word_pictures(doc)
+  local backdrops = word_picture_backdrops()
+  if not backdrops then return doc end
+  local function backdrop_of(block)
+    local fill
+    block:walk({ Image = function(img) fill = fill or backdrops[img.src] end })
+    return fill
+  end
+  local function wrap(block)
+    local fill = backdrop_of(block)
+    if not fill then return nil end
+    return pandoc.Div({ block }, pandoc.Attr("", { "mdz-backdrop" }, { style = "background:" .. fill .. ";padding:12pt" }))
+  end
+  return doc:walk({ Para = wrap, Plain = wrap })
 end
 
 local function size_word_pictures(doc)
@@ -837,7 +907,12 @@ local function drop_html_formatting(doc)
   local unwrap = function(el) return el.content end
   return doc:walk({
     Underline = unwrap, Superscript = unwrap, Subscript = unwrap, SmallCaps = unwrap,
-    Span = unwrap, Div = unwrap,
+    Span = unwrap,
+    -- A picture's backdrop is image_sizes' business, not formatting.
+    Div = function(div)
+      if div.classes:includes("mdz-backdrop") then return nil end
+      return div.content
+    end,
   })
 end
 
@@ -967,7 +1042,7 @@ function ByteStringWriter(doc, opts)
       return link
     end,
   })
-  if ext:includes("image_sizes") then doc = size_word_pictures(doc) else doc = drop_image_sizes(doc) end
+  if ext:includes("image_sizes") then doc = backdrop_word_pictures(size_word_pictures(doc)) else doc = drop_image_sizes(doc) end
   if ext:includes("table_look") then doc = add_table_look(doc) end
   if not ext:includes("html_tables") then doc = simplify_tables(doc) end
   if not ext:includes("html_formatting") then doc = drop_html_formatting(doc) end

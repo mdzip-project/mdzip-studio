@@ -321,6 +321,39 @@ function fontOf(props: Props, theme: Theme): string | null {
   return props['font'] ?? null;
 }
 
+// The font most of each paragraph style's text has set on it directly, by
+// style id ('' for paragraphs without one), when more than half of that
+// style's text has the same one. LibreOffice and some generators save the
+// font on every run and leave the styles' own (Times New Roman) unused.
+function directFonts(documentXml: string, theme: Theme, normalId: string | undefined): Map<string, string> {
+  const counts = new Map<string, Map<string, number>>();
+  for (const [paragraph] of documentXml.matchAll(/<w:p[\s>][\s\S]*?<\/w:p>/g)) {
+    const pStyle = /<w:pStyle w:val="([^"]+)"/.exec(paragraph)?.[1] ?? normalId ?? '';
+    const fonts = counts.get(pStyle) ?? new Map<string, number>();
+    counts.set(pStyle, fonts);
+    for (const [run] of paragraph.matchAll(/<w:r[\s>][\s\S]*?<\/w:r>/g)) {
+      let length = 0;
+      for (const t of run.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)) length += t[1].length;
+      if (!length) continue;
+      const font = fontOf(runProps(block(run, 'rPr')), theme) ?? '';
+      fonts.set(font, (fonts.get(font) ?? 0) + length);
+    }
+  }
+  const result = new Map<string, string>();
+  for (const [style, fonts] of counts) {
+    const total = [...fonts.values()].reduce((sum, n) => sum + n, 0);
+    const [font, count] = [...fonts.entries()].sort((a, b) => b[1] - a[1])[0] ?? ['', 0];
+    if (font && count * 2 > total) result.set(style, font);
+  }
+  return result;
+}
+
+function withFont(props: Props, font: string | undefined): Props {
+  if (!font) return props;
+  const { fontTheme: _, ...rest } = props;
+  return { ...rest, font };
+}
+
 // ---------------------------------------------------------------------------
 // Tables
 
@@ -457,7 +490,10 @@ export function wordStylesheet(docx: Uint8Array, source = 'a Word document'): st
 
   const normalStyle = [...styles.values()].find((style) => style.type === 'paragraph' && style.isDefault)
     ?? styleNamed(styles, 'paragraph', 'normal');
-  const normal = resolve(styles, defaults, normalStyle?.id);
+  const documentXml = text('word/document.xml') ?? '';
+  // Fonts set on the text itself, where most of a style's text has one.
+  const direct = directFonts(documentXml, theme, normalStyle?.id);
+  const normal = withFont(resolve(styles, defaults, normalStyle?.id), direct.get(normalStyle?.id ?? ''));
   const sheet = new Sheet();
 
   // The page: Normal text.
@@ -484,7 +520,7 @@ export function wordStylesheet(docx: Uint8Array, source = 'a Word document'): st
   // Headings.
   for (let level = 1; level <= 6; level++) {
     const style = styleNamed(styles, 'paragraph', `heading ${level}`);
-    if (style) textRule(sheet, `h${level}`, resolve(styles, defaults, style.id), theme, normal);
+    if (style) textRule(sheet, `h${level}`, withFont(resolve(styles, defaults, style.id), direct.get(style.id)), theme, normal);
   }
 
   // Links and quotes.
@@ -505,7 +541,7 @@ export function wordStylesheet(docx: Uint8Array, source = 'a Word document'): st
   }
 
   // Tables: the usual table's lines and header row.
-  const usual = usualTable(text('word/document.xml') ?? '');
+  const usual = usualTable(documentXml);
   const tableStyle = usual?.style ? styles.get(usual.style) : undefined;
   let borders = usual?.borders ?? null;
   const seen = new Set<string>();
@@ -559,6 +595,8 @@ export function wordStylesheet(docx: Uint8Array, source = 'a Word document'): st
     background: header ? darkFill(header) : undefined,
     color: headerColour ? darkText(headerColour) : undefined,
   });
+  // No stripes: a viewer's own may shade every other row; Word's don't.
+  sheet.rule('tbody tr:nth-child(even)', { background: 'transparent' });
   // Shaded cells keep their colour (it's in the document, on the cell) and
   // get dark text, so they stay readable on a dark page.
   sheet.rule('td[style*="background"], th[style*="background"]', {}, { color: '#1A1A1A' });

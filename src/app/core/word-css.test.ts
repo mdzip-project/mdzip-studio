@@ -71,6 +71,8 @@ describe('wordStylesheet', () => {
     expect(rule(css, 'th')).toContain('white-space: normal');
     expect(rule(css, 'th')).toContain('font-weight: normal');
     expect(rule(css, 'th')).toContain('background: transparent');
+    // No zebra stripes from the viewer: Word's rows aren't striped.
+    expect(rule(css, 'tbody tr:nth-child(even)')).toContain('background: transparent');
   });
 
   it('gives each colour a dark version that reads on the dark page', () => {
@@ -114,6 +116,22 @@ describe('wordStylesheet', () => {
     expect(rule(css, 'th')).toContain('color: #FFFFFF');
     expect(rule(css, 'th')).toContain('font-weight: bold');
     expect(rule(css, 'table', true)).toContain('border-top-color:');
+  });
+
+  it('uses the font most of the text has set on it, when that differs from its style (as LibreOffice saves)', () => {
+    const styles = `<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:rPr><w:rFonts w:ascii="Liberation Sans" w:hAnsi="Liberation Sans"/><w:b/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:rPr><w:b/></w:rPr></w:style>`;
+    const run = (text: string, font = '') => `<w:r>${font ? `<w:rPr><w:rFonts w:ascii="${font}" w:hAnsi="${font}"/></w:rPr>` : ''}<w:t>${text}</w:t></w:r>`;
+    const document = `<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>${run('Welcome', 'Open Sans')}</w:p>`
+      + `<w:p>${run('Most of the text is in Open Sans.', 'Open Sans')}${run('A little', 'Courier New')}</w:p>`
+      + `<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr>${run('Mixed', 'Open Sans')}${run('and mostly plain')}</w:p>`;
+    const css = wordStylesheet(docx(styles, { document }))!;
+    expect(rule(css, 'body')).toContain('font-family: "Open Sans"');
+    // Heading 1's own font is set aside, and it's the body's, so not repeated.
+    expect(rule(css, 'h1')).not.toContain('font-family');
+    // Heading 2's text is mostly the style's own font: the style's (Normal's) stays.
+    expect(rule(css, 'h2')).toContain('font-family: "Times New Roman"');
   });
 
   it("is null for a file that isn't a Word document", () => {

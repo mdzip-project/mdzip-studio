@@ -996,6 +996,12 @@ function createWindow({ pendingOpenPath = null, startupAction = null, readerSour
   }
   const revealFallbackTimer = setTimeout(revealWindow, reading ? 3000 : 4000);
   win.once('show', () => clearTimeout(revealFallbackTimer));
+  // Once Studio is up, ask the import and export programs their versions, so
+  // the first Import or Export doesn't wait for them (conversionTools).
+  if (!toolsWarmed) {
+    toolsWarmed = true;
+    win.once('show', () => setTimeout(() => conversionTools().catch(() => {}), 5000));
+  }
 
   win.on('focus', () => {
     lastFocusedWindow = win;
@@ -1689,46 +1695,67 @@ async function freshEnv(reg = createRegistry((file, args) => runProcess(file, ar
 // Where the Studio installer (with Windows Explorer integration) comes from.
 const STUDIO_DOWNLOAD_URL = 'https://mdzip.org/studio.html';
 
-// Every row's status. Windows rows only on Windows; helper programs everywhere.
-async function systemIntegrationStatus() {
+// Help > System Integration's cards, at once and without checking anything:
+// the Windows rows (on Windows) and the helper programs. Each card's state
+// comes from systemIntegrationCheck, so a slow one (markdown-mdz's Python)
+// doesn't hold up the rest.
+function systemIntegrationCards() {
   const platform = process.platform;
+  return {
+    platform,
+    portable: isPortable,
+    windows: platform === 'win32' ? ['markdown', 'preview', 'outlook'] : [],
+    helpers: HELPER_PROGRAMS.map((helper) => ({
+      id: helper.id,
+      name: helper.name,
+      purpose: helper.purpose,
+      url: helper.url,
+      installCommand: installCommandFor(helper, platform),
+    })),
+  };
+}
+
+// One PATH for the helper checks that start together (each asks the registry).
+let checkEnv = null;
+function envForChecks() {
+  if (!checkEnv || Date.now() - checkEnv.at > 5000) checkEnv = { at: Date.now(), env: freshEnv() };
+  return checkEnv.env;
+}
+
+// One card's state: 'markdown', 'preview' or 'outlook' (Windows), or a helper
+// program's id ({ installed, version }).
+async function systemIntegrationCheck(id) {
   const reg = createRegistry((file, args) => runProcess(file, args));
-  const windowsRows = platform === 'win32'
-    ? Promise.all([
-        isPortable
-          ? Promise.resolve({ state: 'unsupported' })
-          : Promise.all([
-              getMarkdownDefaultProgId(),
-              // Only an all-users install with Explorer integration registers
-              // Studio for .md; without it, Windows doesn't offer Studio there.
-              reg.keyExists(`HKCR\\${MD_PROGID}\\shell\\open\\command`),
-            ]).then(([progId, registered]) => ({
-              state: progId === MD_PROGID ? 'default' : registered ? 'not-default' : 'unregistered',
-              via: usesDefaultAppsSettings() ? 'settings' : 'dialog',
-            })),
-        previewHandlerStatus({
-          reg,
-          isPortable,
-          fileExists: (file) => existsSync(file),
-          listDir: (dir) => readdirSync(dir),
-          programFiles: process.env.ProgramW6432 || process.env.ProgramFiles,
-        }),
-        outlookStatus(reg),
-      ])
-    : Promise.resolve([null, null, null]);
-
-  const env = await freshEnv(reg);
-  const helpers = await Promise.all(HELPER_PROGRAMS.map(async (helper) => ({
-    id: helper.id,
-    name: helper.name,
-    purpose: helper.purpose,
-    url: helper.url,
-    installCommand: installCommandFor(helper, platform),
-    ...(await helperStatus(helper, (file, args) => runProcess(file, args, { env, shell: platform === 'win32' }))),
-  })));
-
-  const [markdownDefault, previewHandler, outlook] = await windowsRows;
-  return { platform, portable: isPortable, markdownDefault, previewHandler, outlook, helpers };
+  if (process.platform === 'win32') {
+    if (id === 'markdown') {
+      if (isPortable) return { state: 'unsupported' };
+      const [progId, registered] = await Promise.all([
+        getMarkdownDefaultProgId(),
+        // Only an all-users install with Explorer integration registers
+        // Studio for .md; without it, Windows doesn't offer Studio there.
+        reg.keyExists(`HKCR\\${MD_PROGID}\\shell\\open\\command`),
+      ]);
+      return {
+        state: progId === MD_PROGID ? 'default' : registered ? 'not-default' : 'unregistered',
+        via: usesDefaultAppsSettings() ? 'settings' : 'dialog',
+      };
+    }
+    if (id === 'preview') {
+      return previewHandlerStatus({
+        reg,
+        isPortable,
+        fileExists: (file) => existsSync(file),
+        listDir: (dir) => readdirSync(dir),
+        programFiles: process.env.ProgramW6432 || process.env.ProgramFiles,
+      });
+    }
+    if (id === 'outlook') return outlookStatus(reg);
+  }
+  const helper = HELPER_PROGRAMS.find((candidate) => candidate.id === id);
+  if (!helper) throw new Error(`Nothing to check called ${id}`);
+  const env = await envForChecks();
+  const { installed, version } = await helperStatus(helper, (file, args) => runProcess(file, args, { env, shell: process.platform === 'win32' }));
+  return { installed, version };
 }
 
 // Opens a terminal window running `command`, so the user sees the package
@@ -1756,7 +1783,8 @@ function runInTerminal(command, title) {
   return false;
 }
 
-ipcMain.handle('mdzip:system-integration-status', () => systemIntegrationStatus());
+ipcMain.handle('mdzip:system-integration-cards', () => systemIntegrationCards());
+ipcMain.handle('mdzip:system-integration-check', (_event, id) => systemIntegrationCheck(String(id)));
 
 // Each helper program's newest version, asked of its publisher (GitHub
 // releases, the npm registry, PyPI) only while System Integration is open, and
@@ -2146,16 +2174,35 @@ ipcMain.handle('mdzip:convert-cancel', (event) => {
 
 // Whether Pandoc and markitdown-mdz are here: { env, programs: { pandoc:
 // full path | null, ... }, statuses: { pandoc: { installed, version, usable },
-// ... } }. Asked each time it's needed, so a program installed meanwhile is found.
+// ... } }. Looked for each time it's needed, so a program installed meanwhile
+// is found. A program's `--version` is remembered until the program file
+// changes (an upgrade): markitdown-mdz's takes over a second (Python starting),
+// which made Import wait before its dialog.
+const toolVersions = new Map();
+let toolsWarmed = false;
+
+async function versionOf(helper, file, env) {
+  let key = null;
+  try {
+    const { size, mtimeMs } = await fs.stat(file);
+    key = `${file}|${size}|${mtimeMs}`;
+  } catch {
+    // Can't tell if it changed: ask it.
+  }
+  if (key && toolVersions.has(key)) return toolVersions.get(key);
+  const status = await helperStatus(helper, (_file, args) => runProcess(file, args, { env }));
+  // Not remembered when it didn't answer: it may have been busy.
+  if (key && status.installed) toolVersions.set(key, status);
+  return status;
+}
+
 async function conversionTools() {
   const env = await freshEnv();
   const programs = {};
   const entries = await Promise.all(CONVERT_TOOLS.map(async (id) => {
     const helper = HELPER_PROGRAMS.find((candidate) => candidate.id === id);
     programs[id] = convert.findProgram(helper.command, env.PATH, { exists: (file) => existsSync(file) });
-    const status = programs[id]
-      ? await helperStatus(helper, (_file, args) => runProcess(programs[id], args, { env }))
-      : { installed: false, version: null };
+    const status = programs[id] ? await versionOf(helper, programs[id], env) : { installed: false, version: null };
     return [id, { installed: status.installed, version: status.version, usable: convert.toolUsable(id, status) }];
   }));
   return { env, programs, statuses: Object.fromEntries(entries) };

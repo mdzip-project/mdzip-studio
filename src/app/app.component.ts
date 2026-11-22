@@ -80,7 +80,7 @@ import {
   SystemIntegrationActionResult,
   HelperLatestVersions,
   SystemIntegrationDialogComponent,
-  SystemIntegrationStatus,
+  SystemIntegrationCards,
 } from './modules/system-integration/system-integration-dialog.component';
 import { ImportDialogComponent, ImportedDocument } from './modules/convert/import-dialog.component';
 import { ExportDialogComponent } from './modules/convert/export-dialog.component';
@@ -419,7 +419,8 @@ interface ElectronBridge {
   printPreview?: (payload: { html: string; title: string }) => Promise<{ ok?: boolean; error?: string }>;
   getMarkdownDefaultStatus?: () => Promise<MarkdownDefaultStatus>;
   promptMarkdownDefault?: () => Promise<MarkdownDefaultStatus>;
-  getSystemIntegrationStatus?: () => Promise<SystemIntegrationStatus>;
+  getSystemIntegrationCards?: () => Promise<SystemIntegrationCards>;
+  checkSystemIntegration?: (id: string) => Promise<unknown>;
   getHelperLatestVersions?: () => Promise<HelperLatestVersions>;
   runSystemIntegrationAction?: (payload: { action: SystemIntegrationAction; id?: string }) => Promise<SystemIntegrationActionResult>;
   viewSettings?: {

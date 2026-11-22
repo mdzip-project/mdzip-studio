@@ -111,10 +111,12 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
   saveDocument: (payload) => ipcRenderer.invoke('mdzip:save-document', payload),
   getMarkdownDefaultStatus: () => ipcRenderer.invoke('mdzip:get-md-default-status'),
   promptMarkdownDefault: () => ipcRenderer.invoke('mdzip:prompt-md-default'),
-  // Help > System Integration...: every row's status, and its actions
-  // ({ action: 'markdown-default' | 'outlook-allow' | 'outlook-undo' |
+  // Help > System Integration...: its cards (at once), each card's state
+  // (checked separately, so the slow ones don't hold up the rest), and its
+  // actions ({ action: 'markdown-default' | 'outlook-allow' | 'outlook-undo' |
   // 'preview-off' | 'preview-on' | 'install-helper' | 'upgrade-helper' | 'open-page', id }).
-  getSystemIntegrationStatus: () => ipcRenderer.invoke('mdzip:system-integration-status'),
+  getSystemIntegrationCards: () => ipcRenderer.invoke('mdzip:system-integration-cards'),
+  checkSystemIntegration: (id) => ipcRenderer.invoke('mdzip:system-integration-check', id),
   // Each helper program's newest version: { [id]: { latest, upgradeCommand } }.
   getHelperLatestVersions: () => ipcRenderer.invoke('mdzip:system-integration-latest'),
   runSystemIntegrationAction: (payload) => ipcRenderer.invoke('mdzip:system-integration-action', payload),

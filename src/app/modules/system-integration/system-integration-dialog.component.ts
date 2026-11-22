@@ -7,14 +7,28 @@ import { lucideCircleArrowUp, lucideCircleCheck, lucideCircleHelp, lucideCircleX
 
 // What the main process reports for Help > System Integration… (studio#11);
 // see electron/lib/system-integration.js.
-export interface SystemIntegrationHelper {
+export interface SystemIntegrationHelperCard {
   id: string;
   name: string;
   purpose: string;
   url: string;
   installCommand: string | null;
+}
+
+export interface SystemIntegrationHelper extends SystemIntegrationHelperCard {
   installed: boolean;
   version: string | null;
+}
+
+export type WindowsCardId = 'markdown' | 'preview' | 'outlook';
+
+// The cards, at once; each one's state is checked on its own
+// (checkSystemIntegration), so a slow check doesn't hold up the others.
+export interface SystemIntegrationCards {
+  platform: string;
+  portable: boolean;
+  windows: WindowsCardId[];
+  helpers: SystemIntegrationHelperCard[];
 }
 
 export interface SystemIntegrationStatus {
@@ -60,14 +74,22 @@ export interface SystemIntegrationActionResult {
 }
 
 // good: a check; warn: a red X; off: a grey X; update: an arrow (a newer
-// version of a helper program is out). Each has its own icon shape.
-type Tone = 'good' | 'warn' | 'off' | 'update';
+// version of a helper program is out); checking: a spinner, until its check
+// answers. Each has its own shape.
+type Tone = 'good' | 'warn' | 'off' | 'update' | 'checking';
 
 const TONE_ICONS: Record<Tone, string> = {
   good: 'lucideCircleCheck',
   warn: 'lucideCircleX',
   off: 'lucideCircleX',
   update: 'lucideCircleArrowUp',
+  checking: '',
+};
+
+const WINDOWS_TITLES: Record<WindowsCardId, string> = {
+  markdown: 'Open .md files with MDZip Studio',
+  preview: 'Previews in File Explorer',
+  outlook: '.mdz attachments in Outlook',
 };
 
 interface HelperRow {
@@ -123,10 +145,16 @@ interface Row {
                       </button>
                     </div>
                     <div [class]="'si-status si-' + row.tone">
+                      @if (row.tone === 'checking') {
+                      <span class="si-spinner" aria-hidden="true"></span>
+                    } @else {
                       <ng-icon [name]="toneIcon(row.tone)" size="15" aria-hidden="true" />
+                    }
                       {{ row.status }}
                     </div>
-                    <p class="si-detail">{{ row.detail }}</p>
+                    @if (row.detail) {
+                      <p class="si-detail">{{ row.detail }}</p>
+                    }
                     @if (row.id === 'outlook' && outlookChanged()) {
                       <p class="si-note">Restart Outlook for this to take effect.</p>
                     }
@@ -170,7 +198,11 @@ interface Row {
                     </button>
                   </div>
                   <div [class]="'si-status si-' + row.tone">
-                    <ng-icon [name]="toneIcon(row.tone)" size="15" aria-hidden="true" />
+                    @if (row.tone === 'checking') {
+                      <span class="si-spinner" aria-hidden="true"></span>
+                    } @else {
+                      <ng-icon [name]="toneIcon(row.tone)" size="15" aria-hidden="true" />
+                    }
                     {{ row.status }}
                   </div>
                   <p class="si-detail">{{ helper.purpose }}</p>
@@ -257,13 +289,21 @@ interface Row {
       background: #ffffff; border: 1px solid #e3e6ea; font-size: 12px; user-select: all; overflow-wrap: anywhere;
     }
     .si-actions { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
-    .si-loading { color: #68717d; }
+    .si-loading, .si-checking { color: #68717d; }
+    /* A card still being checked: a small ring turning where its icon goes. */
+    .si-spinner {
+      flex: none; width: 11px; height: 11px; margin: 0 2px; border-radius: 50%;
+      border: 2px solid currentColor; border-right-color: transparent;
+      animation: si-spin 0.8s linear infinite;
+    }
+    @keyframes si-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .si-spinner { animation-duration: 2.4s; } }
     .si-error { color: #b42318; }
     @media (prefers-color-scheme: dark) {
       .si h3 { color: #e6e8ec; }
       .si-help { color: #6ea8fe; }
       .si-help:hover { background: rgba(110, 168, 254, 0.15); }
-      .si-off, .si-loading { color: #9aa0a6; }
+      .si-off, .si-loading, .si-checking { color: #9aa0a6; }
       .si-row { border-color: #3c3c3c; background: #262628; }
       ::ng-deep .si-dialog .p-dialog-footer { border-top-color: #3c3c3c; }
       .si-detail, .si-intro { color: #c4cad2; }
@@ -281,7 +321,30 @@ export class SystemIntegrationDialogComponent implements OnChanges, OnDestroy {
   // A card's "Learn more": the heading id of its section on the help page.
   @Output() readonly learnMore = new EventEmitter<string | null>();
 
-  readonly status = signal<SystemIntegrationStatus | null>(null);
+  readonly cards = signal<SystemIntegrationCards | null>(null);
+  // Each card's last answer, by id ('markdown', 'pandoc'...). Kept while it's
+  // checked again, so Check Again doesn't blank the cards.
+  readonly results = signal<Readonly<Record<string, unknown>>>({});
+  // Everything known so far, as one status; a card not checked yet is null
+  // (Windows) or not installed (helpers), and shows a spinner instead.
+  readonly status = computed<SystemIntegrationStatus | null>(() => {
+    const cards = this.cards();
+    if (!cards) return null;
+    const results = this.results();
+    const field = <T>(id: WindowsCardId) => (cards.windows.includes(id) ? (results[id] as T | undefined) ?? null : null);
+    return {
+      platform: cards.platform,
+      portable: cards.portable,
+      markdownDefault: field<SystemIntegrationStatus['markdownDefault']>('markdown'),
+      previewHandler: field<SystemIntegrationStatus['previewHandler']>('preview'),
+      outlook: field<SystemIntegrationStatus['outlook']>('outlook'),
+      helpers: cards.helpers.map((helper) => ({
+        ...helper,
+        ...((results[helper.id] as { installed: boolean; version: string | null } | undefined) ?? { installed: false, version: null }),
+      })),
+    };
+  });
+  private round = 0;
   readonly loading = signal(false);
   readonly busy = signal(false);
   readonly error = signal<string | null>(null);
@@ -291,13 +354,28 @@ export class SystemIntegrationDialogComponent implements OnChanges, OnDestroy {
   readonly copyHint = signal<string | null>(null);
   readonly latestVersions = signal<HelperLatestVersions>({});
 
-  readonly helperRows = computed<HelperRow[]>(() =>
-    (this.status()?.helpers ?? []).map((helper) => this.helperRow(helper, this.latestVersions()[helper.id])));
+  readonly helperRows = computed<HelperRow[]>(() => {
+    const results = this.results();
+    return (this.status()?.helpers ?? []).map((helper) => results[helper.id] === undefined
+      ? { helper, tone: 'checking', status: 'Checking…', command: null, action: null }
+      : this.helperRow(helper, this.latestVersions()[helper.id]));
+  });
 
   readonly windowsRows = computed<Row[]>(() => {
     const s = this.status();
-    if (!s || s.platform !== 'win32') return [];
-    return [this.markdownRow(s), this.previewRow(s), this.outlookRow(s)].filter((row): row is Row => row !== null);
+    const cards = this.cards();
+    if (!s || !cards) return [];
+    const results = this.results();
+    const rowFor: Record<WindowsCardId, (status: SystemIntegrationStatus) => Row | null> = {
+      markdown: (status) => this.markdownRow(status),
+      preview: (status) => this.previewRow(status),
+      outlook: (status) => this.outlookRow(status),
+    };
+    return cards.windows
+      .map((id) => (results[id] === undefined
+        ? { id, title: WINDOWS_TITLES[id], tone: 'checking' as const, status: 'Checking…', detail: '' }
+        : rowFor[id](s)))
+      .filter((row): row is Row => row !== null);
   });
 
   // Choices made outside Studio (Windows Settings, an installer's terminal
@@ -325,21 +403,38 @@ export class SystemIntegrationDialogComponent implements OnChanges, OnDestroy {
 
   async refresh(): Promise<void> {
     const bridge = window.mdzipStudio;
-    if (!bridge?.getSystemIntegrationStatus) {
+    const getCards = bridge?.getSystemIntegrationCards;
+    const check = bridge?.checkSystemIntegration;
+    if (!getCards || !check) {
       this.error.set('System integration is available in the desktop app.');
       return;
     }
+    // A newer round (Check Again, the window's focus) wins over a slower old one.
+    const round = ++this.round;
     this.loading.set(true);
     this.error.set(null);
     try {
-      this.status.set(await bridge.getSystemIntegrationStatus());
-      // Newest versions come from the internet, after the local checks, so a
-      // slow or missing network never holds up the dialog.
+      const cards = await getCards();
+      if (round !== this.round) return;
+      this.cards.set(cards);
+      // Newest versions come from the internet, alongside the local checks;
+      // a slow or missing network holds up nothing.
       void this.loadLatestVersions();
+      // Every card at once; each fills in when its own check answers.
+      const answer = (id: string, value: unknown) => {
+        if (round === this.round) this.results.update((results) => ({ ...results, [id]: value }));
+      };
+      await Promise.all([
+        ...cards.windows.map((id) => check(id).then((value) => answer(id, value ?? null), () => answer(id, null))),
+        ...cards.helpers.map((helper) => check(helper.id).then(
+          (value) => answer(helper.id, value),
+          () => answer(helper.id, { installed: false, version: null }),
+        )),
+      ]);
     } catch (error) {
-      this.error.set(error instanceof Error ? error.message : 'Could not check this computer.');
+      if (round === this.round) this.error.set(error instanceof Error ? error.message : 'Could not check this computer.');
     } finally {
-      this.loading.set(false);
+      if (round === this.round) this.loading.set(false);
     }
   }
 
