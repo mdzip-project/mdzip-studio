@@ -12,16 +12,19 @@ const DEFAULT_SETTINGS = Object.freeze({
   outlineVisible: false,
   outlinePosition: 'right',
   outlineWidth: null,
+  documentStyles: true,
 });
 
 // The editor's own choices Studio remembers: the color scheme and page width
 // menus, and the outline panel (shown or not, its side, the width it was
-// dragged to). Each window starts with the saved values.
+// dragged to); and View > Document Style (a document's own stylesheet, on or
+// off). Each window starts with the saved values.
 const VIEW_SETTING_VALUES = Object.freeze({
   colorScheme: Object.freeze(['light', 'dark', 'system']),
   previewWidth: Object.freeze(['narrow', 'default', 'wide', 'full']),
   outlineVisible: Object.freeze([true, false]),
   outlinePosition: Object.freeze(['left', 'right']),
+  documentStyles: Object.freeze([true, false]),
 });
 
 // The editor keeps a dragged outline between 160px and half the window; this
@@ -37,8 +40,8 @@ function isValidViewSetting(key, value) {
 
 // The view settings a window starts with.
 function viewSettingsOf(settings) {
-  const { colorScheme, previewWidth, outlineVisible, outlinePosition, outlineWidth } = settings;
-  return { colorScheme, previewWidth, outlineVisible, outlinePosition, outlineWidth };
+  const { colorScheme, previewWidth, outlineVisible, outlinePosition, outlineWidth, documentStyles } = settings;
+  return { colorScheme, previewWidth, outlineVisible, outlinePosition, outlineWidth, documentStyles };
 }
 
 // Whether an image request may go ahead. `appOrigin` is the origin the UI itself
@@ -74,6 +77,7 @@ function loadSettings(file) {
         outlineVisible: isValidViewSetting('outlineVisible', parsed.outlineVisible) ? parsed.outlineVisible : DEFAULT_SETTINGS.outlineVisible,
         outlinePosition: isValidViewSetting('outlinePosition', parsed.outlinePosition) ? parsed.outlinePosition : DEFAULT_SETTINGS.outlinePosition,
         outlineWidth: isValidViewSetting('outlineWidth', parsed.outlineWidth) ? parsed.outlineWidth : DEFAULT_SETTINGS.outlineWidth,
+        documentStyles: isValidViewSetting('documentStyles', parsed.documentStyles) ? parsed.documentStyles : DEFAULT_SETTINGS.documentStyles,
       };
     }
   } catch {

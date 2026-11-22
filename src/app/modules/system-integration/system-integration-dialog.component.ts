@@ -156,7 +156,7 @@ interface Row {
             </button>
           </h3>
           <p class="si-intro">
-            Studio works without these. Export and Import, coming in later versions, use them when they're installed.
+            Studio works without these. File &gt; Import… and File &gt; Export… use them when they're installed.
           </p>
           <ul class="si-rows">
             @for (row of helperRows(); track row.helper.id) {

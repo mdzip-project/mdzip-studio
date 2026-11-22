@@ -36,6 +36,10 @@ export interface Manifest {
 })
 export class ArchiveService {
   readonly currentArchive = signal<MDZipArchive | null>(null);
+  // Goes up each time another archive is created or loaded, or it's closed
+  // (not on edits to the same one): what "this document" means to things that
+  // outlive an edit, such as files open in another app.
+  readonly opened = signal(0);
   readonly recentFiles = signal<string[]>([]);
   readonly documents = computed(() => this.currentArchive()?.documents ?? []);
   readonly assets = computed(() => this.currentArchive()?.assets ?? []);
@@ -54,11 +58,13 @@ export class ArchiveService {
     };
 
     this.currentArchive.set(archive);
+    this.opened.update((count) => count + 1);
     return archive;
   }
 
   loadArchive(archive: MDZipArchive): void {
     this.currentArchive.set(archive);
+    this.opened.update((count) => count + 1);
   }
 
   openArchive(path: string): Promise<MDZipArchive> {
@@ -164,6 +170,7 @@ export class ArchiveService {
 
   closeArchive(): void {
     this.currentArchive.set(null);
+    this.opened.update((count) => count + 1);
   }
 
   addToRecentFiles(path: string): void {

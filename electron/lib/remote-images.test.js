@@ -36,13 +36,13 @@ describe('settings file', () => {
   });
 
   it('defaults to remote images on, System colors, the default page width and a closed outline on the right when there is no file', () => {
-    expect(loadSettings(path.join(dir, 'missing.json'))).toEqual({ remoteImages: true, colorScheme: 'system', previewWidth: 'default', outlineVisible: false, outlinePosition: 'right', outlineWidth: null });
+    expect(loadSettings(path.join(dir, 'missing.json'))).toEqual({ remoteImages: true, colorScheme: 'system', previewWidth: 'default', outlineVisible: false, outlinePosition: 'right', outlineWidth: null, documentStyles: true });
   });
 
   it('round-trips and keeps unknown keys', () => {
     const file = path.join(dir, 'settings.json');
     saveSettings(file, { remoteImages: false, colorScheme: 'dark', previewWidth: 'full', theme: 'dark' });
-    expect(loadSettings(file)).toEqual({ remoteImages: false, colorScheme: 'dark', previewWidth: 'full', outlineVisible: false, outlinePosition: 'right', outlineWidth: null, theme: 'dark' });
+    expect(loadSettings(file)).toEqual({ remoteImages: false, colorScheme: 'dark', previewWidth: 'full', outlineVisible: false, outlinePosition: 'right', outlineWidth: null, documentStyles: true, theme: 'dark' });
     saveSettings(file, { outlineVisible: true, outlinePosition: 'left', outlineWidth: 320 });
     expect(loadSettings(file)).toMatchObject({ outlineVisible: true, outlinePosition: 'left', outlineWidth: 320 });
   });
@@ -51,7 +51,7 @@ describe('settings file', () => {
     const file = path.join(dir, 'settings.json');
     fs.writeFileSync(file, '{ nope');
     expect(loadSettings(file)).toEqual({ ...DEFAULT_SETTINGS });
-    fs.writeFileSync(file, '{"remoteImages": "no", "colorScheme": "blue", "previewWidth": 900, "outlineVisible": "yes", "outlinePosition": "top", "outlineWidth": -5}');
+    fs.writeFileSync(file, '{"remoteImages": "no", "colorScheme": "blue", "previewWidth": 900, "outlineVisible": "yes", "outlinePosition": "top", "outlineWidth": -5, "documentStyles": "no"}');
     expect(loadSettings(file)).toEqual({ ...DEFAULT_SETTINGS });
   });
 });
@@ -64,6 +64,8 @@ describe('isValidViewSetting', () => {
     expect(isValidViewSetting('previewWidth', 900)).toBe(false);
     expect(isValidViewSetting('remoteImages', true)).toBe(false);
     expect(isValidViewSetting('outlineVisible', true)).toBe(true);
+    expect(isValidViewSetting('documentStyles', false)).toBe(true);
+    expect(isValidViewSetting('documentStyles', 'off')).toBe(false);
     expect(isValidViewSetting('outlineVisible', 'true')).toBe(false);
     expect(isValidViewSetting('outlinePosition', 'left')).toBe(true);
     expect(isValidViewSetting('outlinePosition', 'top')).toBe(false);

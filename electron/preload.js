@@ -37,6 +37,36 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
     ipcRenderer.on('mdzip:reader-update', listener);
     return () => ipcRenderer.removeListener('mdzip:reader-update', listener);
   },
+  // File > Import...: pick a file ({ canceled } or { fileName, formatName,
+  // choices: [{ tool, name, usable, recommended, commandLine }], defaultTool }),
+  // then convert it with one of the programs ({ bytes, fileName, warnings } or
+  // { error: true, message, fix }).
+  importPick: () => ipcRenderer.invoke('mdzip:import-pick'),
+  importRun: (tool, options) => ipcRenderer.invoke('mdzip:import-run', { tool, ...(options ?? {}) }),
+  // File > Export...: whether Pandoc is here and each format's command
+  // ({ fileName, sourceFormat, document }); then export with Pandoc ({ format,
+  // bytes, fileName, sourceFormat, combine, document }) or as PDF from the preview ({ html,
+  // fileName }): { filePath, warnings } | { canceled } | { error: true, message, fix }.
+  exportOptions: (payload) => ipcRenderer.invoke('mdzip:export-options', payload),
+  exportRun: (payload) => ipcRenderer.invoke('mdzip:export-run', payload),
+  wordTemplate: () => ipcRenderer.invoke('mdzip:word-template'),
+  exportPdf: (payload) => ipcRenderer.invoke('mdzip:export-pdf', payload),
+  // Stops this window's Pandoc or markitdown-mdz run (the dialogs' Cancel).
+  cancelConversion: () => ipcRenderer.invoke('mdzip:convert-cancel'),
+  // Opens the file this window last exported in its usual app.
+  openExport: () => ipcRenderer.invoke('mdzip:open-export'),
+  // Opens the file (or folder) this window last extracted to.
+  openExtracted: () => ipcRenderer.invoke('mdzip:open-extracted'),
+  // Open in <app> / Open With… on a file in the document, with its saves coming back (#29).
+  appForFile: (extension) => ipcRenderer.invoke('mdzip:app-for-file', { extension }),
+  editExternally: (payload) => ipcRenderer.invoke('mdzip:edit-externally', payload),
+  stopExternalEdits: () => ipcRenderer.invoke('mdzip:stop-external-edits'),
+  confirmExternalReplace: (payload) => ipcRenderer.invoke('mdzip:confirm-external-replace', payload),
+  onExternalFileChanged: (callback) => {
+    const listener = (_event, change) => callback(change);
+    ipcRenderer.on('mdzip:external-file-changed', listener);
+    return () => ipcRenderer.removeListener('mdzip:external-file-changed', listener);
+  },
   setRecentFiles: (paths) => ipcRenderer.send('mdzip:set-recent-files', { paths }),
   // Tell the main process whether a document is open so it can enable/disable
   // document-only menu items (Save, Save As, Close, Show in File Manager).

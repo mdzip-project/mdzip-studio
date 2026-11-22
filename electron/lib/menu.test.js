@@ -1,9 +1,9 @@
 const { buildMenuTemplate, buildPreviewMenuTemplate, buildDockMenuTemplate, recentLabel, shortenFolder } = require('./menu');
 
 const HANDLER_NAMES = [
-  'newDocument', 'newWindow', 'openDocument', 'openRecentPath', 'packFolder', 'unpackMdz',
-  'save', 'saveAs', 'print', 'showInFolder', 'insertAgentsGuide', 'insertReadme', 'closeDocument', 'quit',
-  'reload', 'openReadingView', 'toggleLineNumbers', 'toggleRemoteImages', 'toggleOutlineSide', 'toggleDevTools',
+  'newDocument', 'newWindow', 'openDocument', 'openRecentPath', 'importDocument', 'packFolder', 'unpackMdz',
+  'save', 'saveAs', 'exportDocument', 'print', 'showInFolder', 'insertAgentsGuide', 'insertReadme', 'insertWordTemplate', 'closeDocument', 'quit',
+  'reload', 'openReadingView', 'toggleLineNumbers', 'toggleRemoteImages', 'toggleOutlineSide', 'toggleDocumentStyles', 'toggleDevTools',
   'showHelp', 'showSystemIntegration', 'showKnownIssues', 'showChangelog', 'checkForUpdates', 'showAbout',
   'exportDraft',
 ];
@@ -29,7 +29,7 @@ describe('buildMenuTemplate', () => {
     });
     const fileLabels = labelsOf(findMenu(template, 'File').submenu);
     expect(fileLabels).toEqual([
-      'New Document', 'New Window', 'Open Document...', 'Open Recent', 'Pack Folder to .mdz...', 'Unpack .mdz to Folder...',
+      'New Document', 'New Window', 'Open Document...', 'Open Recent', 'Import...', 'Pack Folder to .mdz...', 'Unpack .mdz to Folder...',
       '[separator]', 'Exit',
     ]);
   });
@@ -42,6 +42,7 @@ describe('buildMenuTemplate', () => {
     expect(fileLabels).toContain('Save');
     expect(fileLabels).toContain('Save As...');
     expect(fileLabels).toContain('Print...');
+    expect(fileLabels).toContain('Export...');
     expect(fileLabels).toContain('Show in File Manager');
     expect(fileLabels).toContain('Copy File Path');
     expect(fileLabels).toContain('Copy Folder Path');
@@ -90,6 +91,7 @@ describe('buildMenuTemplate', () => {
     findMenu(template, 'File').submenu.find((i) => i.label === 'New Window').click();
     findMenu(template, 'File').submenu.find((i) => i.label === 'Insert AGENTS.md').click();
     findMenu(template, 'File').submenu.find((i) => i.label === 'Insert README.md').click();
+    findMenu(template, 'File').submenu.find((i) => i.label === 'Insert Word Template').click();
     findMenu(template, 'Help').submenu.find((i) => i.label === 'Check for Updates...').click();
     findMenu(template, 'Developer').submenu.find((i) => i.label === 'Export Studio JSON Draft').click();
 
@@ -98,6 +100,7 @@ describe('buildMenuTemplate', () => {
     expect(handlers.newWindow).toHaveBeenCalledTimes(1);
     expect(handlers.insertAgentsGuide).toHaveBeenCalledTimes(1);
     expect(handlers.insertReadme).toHaveBeenCalledTimes(1);
+    expect(handlers.insertWordTemplate).toHaveBeenCalledTimes(1);
     expect(handlers.checkForUpdates).toHaveBeenCalledTimes(1);
     expect(handlers.exportDraft).toHaveBeenCalledTimes(1);
   });
@@ -320,6 +323,18 @@ describe('View > Outline on the Left', () => {
     expect(entry.checked).toBe(true);
     entry.click();
     expect(handlers.toggleOutlineSide).toHaveBeenCalled();
+  });
+});
+
+describe('View > Document Style', () => {
+  it('is a checkbox reflecting the setting, on by default, and calls the toggle handler', () => {
+    const handlers = stubHandlers();
+    const find = (template) => findMenu(template, 'View').submenu.find((i) => i.label === 'Document Style');
+    expect(find(buildMenuTemplate({ documentOpen: false, isDev: false, platform: 'win32', handlers }))).toMatchObject({ type: 'checkbox', checked: true });
+    const entry = find(buildMenuTemplate({ documentOpen: false, isDev: false, platform: 'win32', handlers, documentStyles: false }));
+    expect(entry.checked).toBe(false);
+    entry.click();
+    expect(handlers.toggleDocumentStyles).toHaveBeenCalled();
   });
 });
 

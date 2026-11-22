@@ -1,0 +1,65 @@
+// Shared by the Import and Export dialogs (the look of System Integration).
+.cv { display: grid; gap: 12px; padding-bottom: 4px; }
+.cv-file { margin: 0; font-size: 13.5px; }
+.cv-file strong { font-weight: 600; }
+.cv-kind { color: #68717d; }
+.cv-heading { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: #4c5663; }
+.cv-options { display: grid; gap: 4px; margin: 0; padding: 0; border: 0; }
+.cv-option {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  border: 1px solid #e3e6ea; border-radius: 6px; background: #f6f7f9; cursor: pointer;
+}
+.cv-option.selected { border-color: #2563c9; background: #eef4fc; }
+.cv-option.disabled { cursor: default; opacity: 0.6; }
+.cv-option input { margin: 0; }
+// A checkbox with its name and a line under it.
+.cv-check { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.cv-check input { margin: 3px 0 0; flex: none; }
+.cv-check > span { display: flex; flex-direction: column; gap: 2px; }
+.cv-option-name { flex: 1; }
+.cv-option-meta { font-size: 12px; color: #68717d; }
+.cv-check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.cv-note, .cv-warn, .cv-error, .cv-ok { margin: 0; font-size: 12.5px; line-height: 1.45; }
+.cv-note { color: #4c5663; }
+.cv-warn { color: #9a6700; }
+.cv-error { color: #b42318; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cv-ok { color: #1a7f37; font-weight: 600; }
+.cv-warnings { margin: 0; padding-left: 18px; font-size: 12px; color: #68717d; max-height: 7em; overflow: auto; }
+.cv-link {
+  padding: 0; border: 0; background: none; color: #2563c9; font: inherit; text-decoration: underline; cursor: pointer;
+}
+.cv-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.cv-loading { margin: 0; color: #68717d; }
+// Context help: a small blue (?) opening the Import and Export help page (as in System Integration).
+.cv-help {
+  display: inline-flex; vertical-align: -3px; margin-left: 4px; padding: 1px; border: 0; border-radius: 50%;
+  background: none; color: #2563c9; cursor: pointer; opacity: 0.85;
+}
+.cv-help:hover { opacity: 1; background: rgba(37, 99, 201, 0.1); }
+.cv-help:focus-visible { outline: 2px solid #2563c9; outline-offset: 1px; }
+// Formats two to a row when there's room, so the dialog stays short.
+.cv-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.cv-grid .cv-option { padding: 5px 10px; font-size: 13.5px; }
+.cv-feedback { display: grid; gap: 8px; }
+.cv-feedback:empty { display: none; }
+// The footer: the outcome on the left, the buttons on the right.
+.cv-footer { display: flex; align-items: center; gap: 10px; width: 100%; flex-wrap: wrap; }
+.cv-footer-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; font-size: 13px; }
+.cv-footer-spacer { flex: 1; }
+.cv-footer .cv-link { font-size: 13px; }
+// A line between the dialog's content and its buttons.
+::ng-deep .cv-dialog .p-dialog-footer { border-top: 1px solid #e3e6ea; padding-top: 12px; }
+
+@media (prefers-color-scheme: dark) {
+  .cv-kind, .cv-option-meta, .cv-loading, .cv-warnings { color: #9aa0a6; }
+  .cv-heading, .cv-note { color: #c4cad2; }
+  .cv-option { border-color: #3c3c3c; background: #262628; }
+  .cv-option.selected { border-color: #6ea8fe; background: #1d2a3d; }
+  .cv-warn { color: #d29922; }
+  .cv-error { color: #f97066; }
+  .cv-ok { color: #4ac26b; }
+  .cv-link { color: #6ea8fe; }
+  .cv-help { color: #6ea8fe; }
+  .cv-help:hover { background: rgba(110, 168, 254, 0.15); }
+  ::ng-deep .cv-dialog .p-dialog-footer { border-top-color: #3c3c3c; }
+}

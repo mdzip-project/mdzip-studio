@@ -468,6 +468,13 @@ p {
   grid-template-columns: 1fr;
 }
 
+// Insert Word Template's notice when Pandoc couldn't make it.
+.dialog-error {
+  color: #b42318;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .image-destination-dialog {
   display: grid;
   gap: 10px;
@@ -864,6 +871,23 @@ button.destination-option:hover:not(:disabled),
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.statusbar-links {
+  display: inline-flex;
+  gap: 10px;
+  margin-left: 10px;
+  flex: none;
+}
+
+.statusbar-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #2563c9;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .statusbar-document {
@@ -1397,6 +1421,14 @@ p-button {
    rendered in overlays. Palette matches the editor's VS Code-style dark theme. */
 
 @media (prefers-color-scheme: dark) {
+  .statusbar-link {
+    color: #6ea8fe;
+  }
+
+  .dialog-error {
+    color: #f97066;
+  }
+
   .app-shell { background: #1e1e1e; color: #d4d4d4; }
 
   .panel-header p,

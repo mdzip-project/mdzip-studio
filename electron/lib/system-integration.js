@@ -287,7 +287,9 @@ const HELPER_PROGRAMS = Object.freeze([
     name: 'markitdown-mdz',
     purpose: 'Imports Word, PowerPoint and PDF files as MDZip documents. Needs Python.',
     command: 'markitdown-mdz',
-    install: { all: { pip: 'markitdown-mdzip' } },
+    // [all]: MarkItDown's readers for Word, PowerPoint, Excel and PDF, which
+    // plain markitdown-mdzip leaves out.
+    install: { all: { pip: 'markitdown-mdzip', extras: 'all' } },
     url: 'https://pypi.org/project/markitdown-mdzip/',
     latest: { pypi: 'markitdown-mdzip' },
   },
@@ -302,6 +304,12 @@ const HELPER_PROGRAMS = Object.freeze([
   },
 ]);
 
+// A pip package with its extras, quoted so zsh doesn't read the brackets as a
+// file pattern: "markitdown-mdzip[all]".
+function pipPackage(spec) {
+  return spec.extras ? `"${spec.pip}[${spec.extras}]"` : spec.pip;
+}
+
 // The terminal command that installs `helper` on `platform`, or null when
 // there's no package to install (the row links to the download page instead).
 function installCommandFor(helper, platform) {
@@ -310,7 +318,7 @@ function installCommandFor(helper, platform) {
   if (spec.winget) return `winget install --id ${spec.winget} --exact --source winget`;
   if (spec.brew) return `brew install ${spec.brew}`;
   if (spec.npm) return `npm install -g ${spec.npm}`;
-  if (spec.pip) return platform === 'win32' ? `py -m pip install --user ${spec.pip}` : `python3 -m pip install --user ${spec.pip}`;
+  if (spec.pip) return platform === 'win32' ? `py -m pip install --user ${pipPackage(spec)}` : `python3 -m pip install --user ${pipPackage(spec)}`;
   return null;
 }
 
@@ -321,7 +329,7 @@ function upgradeCommandFor(helper, platform) {
   if (spec.winget) return `winget upgrade --id ${spec.winget} --exact --source winget`;
   if (spec.brew) return `brew upgrade ${spec.brew}`;
   if (spec.npm) return `npm install -g ${spec.npm}@latest`;
-  if (spec.pip) return platform === 'win32' ? `py -m pip install --user --upgrade ${spec.pip}` : `python3 -m pip install --user --upgrade ${spec.pip}`;
+  if (spec.pip) return platform === 'win32' ? `py -m pip install --user --upgrade ${pipPackage(spec)}` : `python3 -m pip install --user --upgrade ${pipPackage(spec)}`;
   return null;
 }
 

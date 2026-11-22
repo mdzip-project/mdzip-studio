@@ -83,4 +83,10 @@ describe('PrintService', () => {
     expect(html).toContain('width="10"');
     expect(html).toContain('height="20"');
   });
+  it("adds the document's own stylesheet after Studio's, and it can't end the style element", async () => {
+    const html = await service.buildPrintDocument(previewRoot('<p>x</p>'), 'Doc', undefined, '.print-root p { color: red } /* </style><script>x</script> */');
+    expect(html.indexOf('.print-root p { color: red }')).toBeGreaterThan(html.indexOf('box-sizing'));
+    expect(html).not.toContain('</style><script>');
+    expect((await service.buildPrintDocument(previewRoot('<p>x</p>'), 'Doc')).match(/<style>/g)).toHaveLength(1);
+  });
 });

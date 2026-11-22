@@ -767,7 +767,7 @@ describe('AppComponent', () => {
       expect(markdown).toContain('![Photo](images/photo.png)');
       expect(component.statusMessage()).toContain('Unpacked 3 files');
     } finally {
-      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
+      window.mdzipStudio = originalBridge;
     }
   });
 
@@ -969,6 +969,275 @@ describe('AppComponent', () => {
     const opened = await MdzArchiveCore.open(component.workspaceBytes() ?? new Uint8Array());
     expect(opened.listPaths().filter((entry) => entry.toLowerCase() === 'agents.md')).toHaveLength(1);
     expect(await opened.readText('AGENTS.md')).toContain('New guidance.');
+  });
+
+  describe('Extract… then Open / Show in Folder', () => {
+    let originalBridge: typeof window.mdzipStudio;
+    beforeEach(() => {
+      originalBridge = window.mdzipStudio;
+    });
+    afterEach(() => {
+      window.mdzipStudio = originalBridge;
+    });
+
+    function appWith(bridge: Record<string, unknown>): AppComponent {
+      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = bridge;
+      let app!: AppComponent;
+      runInInjectionContext(TestBed.inject(Injector), () => {
+        app = new AppComponent(
+          TestBed.inject(ArchiveService),
+          TestBed.inject(PrintService),
+          TestBed.inject(StorageService),
+          TestBed.inject(ValidationService),
+          TestBed.inject(NgZone),
+        );
+      });
+      return app;
+    }
+    const docx = { path: 'styles/reference.docx', bytes: new Uint8Array([1, 2]) };
+
+    it('one file: remembers it for Open and Show in Folder while the status bar names it', async () => {
+      const openExtracted = vi.fn().mockResolvedValue({ ok: true });
+      const showInFolder = vi.fn().mockResolvedValue({ ok: true });
+      const extractFiles = vi.fn().mockResolvedValue({ canceled: false, targetPath: 'C:/out/reference.docx', fileCount: 1 });
+      const app = appWith({ extractFiles, openExtracted, showInFolder });
+      try {
+        await app.handleExtractFiles!({ files: [docx], selection: { files: [docx.path], folders: [] } } as never);
+        expect(app.statusMessage()).toBe('Extracted to C:/out/reference.docx');
+        expect(app.lastExtract()).toEqual({ path: 'C:/out/reference.docx', folder: false, message: 'Extracted to C:/out/reference.docx' });
+        await app.openExtracted();
+        expect(openExtracted).toHaveBeenCalledTimes(1);
+        await app.showExtracted();
+        expect(showInFolder).toHaveBeenCalledWith('C:/out/reference.docx');
+      } finally {
+        app.ngOnDestroy();
+      }
+    });
+
+    it('a folder: Open Folder only; nothing remembered when canceled', async () => {
+      const extractFiles = vi.fn()
+        .mockResolvedValueOnce({ canceled: false, targetPath: 'C:/out', fileCount: 2 })
+        .mockResolvedValueOnce({ canceled: true });
+      const app = appWith({ extractFiles });
+      try {
+        await app.handleExtractFiles!({ files: [docx, docx], selection: { files: [], folders: ['styles'] } } as never);
+        expect(app.lastExtract()).toEqual({ path: 'C:/out', folder: true, message: 'Extracted 2 files to C:/out' });
+        await app.handleExtractFiles!({ files: [docx], selection: { files: [docx.path], folders: [] } } as never);
+        expect(app.lastExtract()?.path).toBe('C:/out');
+      } finally {
+        app.ngOnDestroy();
+      }
+    });
+  });
+
+  describe('Open in <app> with the saves coming back (#29)', () => {
+    let originalBridge: typeof window.mdzipStudio;
+    beforeEach(() => {
+      originalBridge = window.mdzipStudio;
+    });
+    afterEach(() => {
+      window.mdzipStudio = originalBridge;
+    });
+
+    type ExternalApp = {
+      workspaceEditor: unknown;
+      applyExternalChange(change: { token: string; path: string; bytes: Uint8Array }): Promise<void>;
+      externalEditToken: string;
+    };
+    const target = { path: 'styles/reference.docx', isMarkdown: false, isImage: false, isManifest: false, isEntryPoint: false };
+    const v1 = new Uint8Array([1, 1]);
+    const v2 = new Uint8Array([2, 2]);
+
+    function setup(bridge: Record<string, unknown> = {}) {
+      let inDocument: Uint8Array = v1;
+      const editExternally = vi.fn().mockResolvedValue({ ok: true, filePath: 'C:/tmp/reference.docx' });
+      const stopExternalEdits = vi.fn().mockResolvedValue({ ok: true });
+      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = {
+        platform: 'win32',
+        appForFile: vi.fn().mockResolvedValue({ name: 'Word' }),
+        editExternally,
+        stopExternalEdits,
+        onExternalFileChanged: () => () => {},
+        ...bridge,
+      };
+      let app!: AppComponent;
+      runInInjectionContext(TestBed.inject(Injector), () => {
+        app = new AppComponent(
+          TestBed.inject(ArchiveService),
+          TestBed.inject(PrintService),
+          TestBed.inject(StorageService),
+          TestBed.inject(ValidationService),
+          TestBed.inject(NgZone),
+        );
+      });
+      const editor = {
+        extractFiles: vi.fn(async (paths: string[]) => paths.map((path) => ({ path, bytes: inDocument }))),
+        replaceAsset: vi.fn(async (_path: string, bytes: Uint8Array) => { inDocument = bytes; return true; }),
+        refreshFileActions: vi.fn(),
+      };
+      (app as unknown as ExternalApp).workspaceEditor = editor;
+      return {
+        app, editor, editExternally, stopExternalEdits,
+        external: app as unknown as ExternalApp,
+        setInDocument: (bytes: Uint8Array) => { inDocument = bytes; },
+      };
+    }
+    const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const label = (app: AppComponent, id: string) => {
+      const action = app.hostFileActions.find((item) => item.id === id)!;
+      return typeof action.label === 'function' ? action.label(target) : action.label;
+    };
+
+    it("names the app the system opens the file with, once Windows has said", async () => {
+      const { app, editor } = setup();
+      try {
+        expect(label(app, 'open-in-app')).toBe('Open in Default App');
+        await flush();
+        expect(editor.refreshFileActions).toHaveBeenCalled();
+        expect(label(app, 'open-in-app')).toBe('Open in Word');
+        expect(app.hostFileActions.find((item) => item.primary)?.id).toBe('open-in-app');
+        expect(app.hostFileActions.every((item) => !item.appliesTo?.({ ...target, path: 'index.md', isMarkdown: true }))).toBe(true);
+      } finally {
+        app.ngOnDestroy();
+      }
+    });
+
+    it("sends the file's bytes out, and each save there replaces it in the document", async () => {
+      const { app, editor, editExternally, external } = setup();
+      try {
+        label(app, 'open-in-app');
+        await flush();
+        await app.editExternally(target.path, 'open');
+        expect(editExternally).toHaveBeenCalledWith(expect.objectContaining({
+          path: target.path, bytes: v1, watchChanges: true, how: 'open', token: external.externalEditToken,
+        }));
+        expect(app.fileNote(target)).toBe('Open in Word. Each time you save there, the change comes back here.');
+
+        await external.applyExternalChange({ token: external.externalEditToken, path: target.path, bytes: v2 });
+        expect(editor.replaceAsset).toHaveBeenCalledWith(target.path, v2);
+        expect(app.statusMessage()).toBe('Updated styles/reference.docx from Word. Save the document to keep it');
+        expect(app.fileNote(target)).toMatch(/^Open in Word\. Brought back at .+; save the document to keep it\.$/);
+      } finally {
+        app.ngOnDestroy();
+      }
+    });
+
+    it('asks before a save there replaces a file that also changed in the document', async () => {
+      const confirmExternalReplace = vi.fn().mockResolvedValue({ replace: false });
+      const { app, editor, external, setInDocument } = setup({ confirmExternalReplace });
+      try {
+        await app.editExternally(target.path, 'open');
+        setInDocument(new Uint8Array([9])); // Replace… in Studio meanwhile
+        await external.applyExternalChange({ token: external.externalEditToken, path: target.path, bytes: v2 });
+        expect(confirmExternalReplace).toHaveBeenCalledWith({ path: target.path, app: 'Word' });
+        expect(editor.replaceAsset).not.toHaveBeenCalled();
+        expect(app.statusMessage()).toBe("Kept this document's styles/reference.docx");
+      } finally {
+        app.ngOnDestroy();
+      }
+    });
+
+    it('another document in the window stops the saves coming back', async () => {
+      const { app, editor, external, stopExternalEdits } = setup();
+      try {
+        await app.editExternally(target.path, 'open');
+        const oldToken = external.externalEditToken;
+        TestBed.inject(ArchiveService).closeArchive();
+        TestBed.tick();
+        expect(stopExternalEdits).toHaveBeenCalled();
+        expect(external.externalEditToken).not.toBe(oldToken);
+        expect(app.fileNote(target)).toBeNull();
+        await external.applyExternalChange({ token: oldToken, path: target.path, bytes: v2 });
+        expect(editor.replaceAsset).not.toHaveBeenCalled();
+      } finally {
+        app.ngOnDestroy();
+      }
+    });
+  });
+
+  describe('Insert Word Template', () => {
+    type WordApp = {
+      openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly?: boolean, recordRecent?: boolean): Promise<void>;
+      insertTemplateFile(kind: 'agents' | 'readme' | 'word'): Promise<void>;
+    };
+    const docx = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]);
+    let originalBridge: typeof window.mdzipStudio;
+
+    beforeEach(() => {
+      originalBridge = window.mdzipStudio;
+    });
+    afterEach(() => {
+      window.mdzipStudio = originalBridge;
+    });
+
+    async function openDemo(extra: { path: string; text: string }[] = [], manifest: Record<string, unknown> = {}): Promise<WordApp> {
+      const built = await MdzPackagerCore.buildArchive(
+        [{ path: 'index.md', text: '# Demo\n' }, ...extra],
+        'demo',
+        { createIndex: false, mapFiles: false, filters: ['**/*'], title: 'Demo', mode: 'document', entryPoint: 'index.md' }
+      );
+      let bytes = new Uint8Array(await built.blob.arrayBuffer());
+      if (Object.keys(manifest).length) {
+        const current = (await (await MdzArchiveCore.open(bytes)).readManifest()) ?? {};
+        const updated = await MdzArchiveCore.updateFiles(bytes, [], [], { manifest: { ...current, ...manifest } as never });
+        bytes = new Uint8Array(await updated.blob.arrayBuffer());
+      }
+      const app = component as unknown as WordApp;
+      await app.openDocumentBytes(bytes, 'demo.mdz', 'C:/docs/demo.mdz', false, false);
+      return app;
+    }
+
+    it("adds Pandoc's Word styles and names them in the manifest, keeping its other fields", async () => {
+      const wordTemplate = vi.fn().mockResolvedValue({ bytes: docx, command: 'pandoc -o reference.docx --print-default-data-file reference.docx' });
+      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = { wordTemplate };
+      const app = await openDemo([], { pandoc: { other: 'kept' }, custom: 1 });
+
+      await app.insertTemplateFile('word');
+
+      expect(wordTemplate).toHaveBeenCalledTimes(1);
+      expect(component.insertTemplateDialogOpen()).toBe(false);
+      expect(component.isDirty()).toBe(true);
+      expect(component.statusMessage()).toContain('Added styles/reference.docx');
+      expect(component.wordTemplateNotice()).toEqual({
+        kind: 'added',
+        path: 'styles/reference.docx',
+        command: 'pandoc -o reference.docx --print-default-data-file reference.docx',
+      });
+      const opened = await MdzArchiveCore.open(component.workspaceBytes() ?? new Uint8Array());
+      expect(await opened.readBytes('styles/reference.docx')).toEqual(docx);
+      const manifest = (await opened.readManifest()) as unknown as { pandoc: Record<string, unknown>; custom: number; title: string };
+      expect(manifest.pandoc).toEqual({ other: 'kept', referenceDoc: 'styles/reference.docx' });
+      expect(manifest.custom).toBe(1);
+      expect(manifest.title).toBe('Demo');
+    });
+
+    it('asks before replacing the Word styles the manifest already names', async () => {
+      const wordTemplate = vi.fn().mockResolvedValue({ bytes: docx, command: null });
+      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = { wordTemplate };
+      const app = await openDemo([{ path: 'styles/company.dotx', text: 'x' }], { pandoc: { referenceDoc: 'styles/company.dotx' } });
+
+      await app.insertTemplateFile('word');
+
+      expect(component.insertTemplateDialogOpen()).toBe(true);
+      expect(component.insertTemplateDialogTitle()).toBe('Insert Word Template');
+      expect(component.insertTemplateDialogMessage()).toContain('styles/company.dotx');
+      expect(component.insertTemplateDialogMessage()).toContain('stays in the document');
+      expect(wordTemplate).not.toHaveBeenCalled();
+    });
+
+    it("says why when Pandoc can't make the template, and leaves the document alone", async () => {
+      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = {
+        wordTemplate: vi.fn().mockResolvedValue({ error: true, message: "Pandoc isn't ready on this computer." }),
+      };
+      const app = await openDemo();
+      const before = component.workspaceBytes();
+
+      await app.insertTemplateFile('word');
+
+      expect(component.wordTemplateNotice()).toEqual({ kind: 'error', message: "Pandoc isn't ready on this computer.", fix: null });
+      expect(component.workspaceBytes()).toBe(before);
+      expect(component.isDirty()).toBe(false);
+    });
   });
 
   it('inserts a relative image reference through the library conversion context', async () => {
@@ -1471,7 +1740,7 @@ describe('AppComponent', () => {
       expect(component.currentArchive()?.path).toBe('C:/docs/Next.md');
       expect(setCurrentDocumentPath).toHaveBeenCalledWith('C:/docs/Next.md');
     } finally {
-      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
+      window.mdzipStudio = originalBridge;
     }
   });
 
@@ -1504,7 +1773,7 @@ describe('AppComponent', () => {
         expect(setCurrentDocumentPath).toHaveBeenCalledWith('C:/docs/current.md');
       });
     } finally {
-      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
+      window.mdzipStudio = originalBridge;
     }
   });
 
@@ -1524,7 +1793,7 @@ describe('AppComponent', () => {
       // Still the original document — nothing here was replaced.
       expect(component.currentArchive()?.path).toBe('C:/docs/current.md');
     } finally {
-      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
+      window.mdzipStudio = originalBridge;
     }
   });
 
@@ -1547,7 +1816,7 @@ describe('AppComponent', () => {
       expect(openDocumentByPath).not.toHaveBeenCalled();
       expect(component.currentArchive()?.path).toBe('C:/docs/current.md');
     } finally {
-      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
+      window.mdzipStudio = originalBridge;
     }
   });
 
@@ -1591,7 +1860,7 @@ describe('AppComponent', () => {
         saveAs: false,
       });
     } finally {
-      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
+      window.mdzipStudio = originalBridge;
     }
   });
 
@@ -1633,7 +1902,7 @@ describe('AppComponent', () => {
       expect(component.currentArchive()?.name).toBe('Renamed');
       expect(Array.from(component.workspaceBytes() ?? [])).toEqual(savedBytes);
     } finally {
-      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
+      window.mdzipStudio = originalBridge;
     }
   });
 
@@ -1672,7 +1941,7 @@ describe('AppComponent', () => {
       expect(component.currentArchive()?.name).toBe('Patio');
       expect(component.workspaceBytes()).toBe(before);
     } finally {
-      (window as typeof window & { mdzipStudio?: unknown }).mdzipStudio = originalBridge;
+      window.mdzipStudio = originalBridge;
     }
   });
 

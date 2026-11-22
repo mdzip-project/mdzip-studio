@@ -29,7 +29,9 @@ const { buildJumpList, wantsNewWindow, startupActionFromArgs, recentDocumentsFor
 const { createOpenFileQueue } = require('./lib/open-file-queue');
 const { helpStartupAction } = require('./lib/help-window');
 const { readerSnapshot, saveCopyFilters, shouldCloseLeftoverReaders } = require('./lib/reader-window');
+const convert = require('./lib/convert');
 const { statsDiffer } = require('./lib/file-watch');
+const externalEdit = require('./lib/external-edit');
 const {
   PORTABLE_DOWNLOAD_URL,
   HOMEBREW_UPGRADE_COMMAND,
@@ -100,6 +102,10 @@ if (process.platform === 'darwin') {
 const windows = new Map();
 let lastFocusedWindow = null;
 const isDev = !app.isPackaged;
+// Development: no HTTP cache. Vite serves dependencies as immutable URLs whose
+// ?v= tag comes from the lockfile, so after node_modules changes without it (a
+// local editor build copied in) a cached window kept running the old code.
+if (isDev) app.commandLine.appendSwitch('disable-http-cache');
 // Mirrors the renderer's recent-files list (see mdzip:set-recent-files) so the
 // native "Open Recent" submenu can be built without round-tripping to a window.
 let latestRecentFiles = [];
@@ -632,6 +638,25 @@ function toggleOutlineSide() {
   }
 }
 
+// View > Document Style: saved for new windows, and turned on or off in every
+// open one.
+function toggleDocumentStyles() {
+  const documentStyles = getSettings().documentStyles === false;
+  studioSettings = { ...getSettings(), documentStyles };
+  try {
+    saveSettings(settingsFile(), studioSettings);
+  } catch (error) {
+    console.error('Could not save settings:', error);
+  }
+  refreshAllWindowMenus();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    win.webContents.executeJavaScript(
+      `window.dispatchEvent(new CustomEvent('mdzip-studio:document-styles', { detail: ${JSON.stringify(documentStyles)} }))`
+    ).catch(() => {});
+  }
+}
+
 function toggleRemoteImages() {
   const settings = { ...getSettings(), remoteImages: !getSettings().remoteImages };
   studioSettings = settings;
@@ -690,6 +715,8 @@ function getMarkdownDefaultProgId() {
 // default (the only sanctioned way to set the protected UserChoice), while
 // omitting OAIF_EXEC means the throwaway file is never actually opened. Runs in
 // the (unelevated) user session, so the choice lands in the real user's hive.
+// options.flags: OAIF_* (default 0x03, as above); Open With… on a file in a
+// document passes OAIF_ALLOW_REGISTRATION | OAIF_EXEC (0x05) to open it.
 function showMarkdownOpenWithDialog(options) {
   const script = [
     "$ErrorActionPreference = 'Stop'",
@@ -707,10 +734,13 @@ function showMarkdownOpenWithDialog(options) {
     '$info.FileName = $env:MDZIP_OPENAS_PATH',
     '$info.ClassName = $null',
     '# OAIF_ALLOW_REGISTRATION (0x01) | OAIF_REGISTER_EXT (0x02)',
-    '$info.InFlags = 0x03',
+    '$info.InFlags = [int]$env:MDZIP_OPENAS_FLAGS',
     '$h = [long]0',
     '[void][long]::TryParse($env:MDZIP_OWNER_HWND, [ref]$h)',
     '[void][MdzipStudio.Shell]::SHOpenWithDialog([IntPtr]::new($h), [ref]$info)',
+    // OAIF_EXEC: the app picked may take the file over DDE (Word does), which
+    // dies with this process; stay and pump messages until it has it.
+    'if ($info.InFlags -band 4) { Add-Type -AssemblyName System.Windows.Forms; for ($i = 0; $i -lt 60; $i++) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 250 } }',
   ].join('\n');
 
   return new Promise((resolve) => {
@@ -723,12 +753,72 @@ function showMarkdownOpenWithDialog(options) {
           ...process.env,
           MDZIP_OPENAS_PATH: options.filePath,
           MDZIP_OWNER_HWND: options.hwnd,
+          MDZIP_OPENAS_FLAGS: String(options.flags ?? 0x03),
         },
       },
       () => resolve()
     );
     child.on('error', () => resolve());
   });
+}
+
+// A window's native handle as a decimal string, for dialogs shown by PowerShell.
+function nativeHandleOf(win) {
+  if (!win || win.isDestroyed()) return '0';
+  try {
+    return win.getNativeWindowHandle().readBigUInt64LE(0).toString();
+  } catch {
+    return '0';
+  }
+}
+
+// Open in <app> / Open With… on a file in a document (#29; lib/external-edit.js).
+// Copies live under the temp folder; each save there goes back to the window.
+const externalEdits = externalEdit.createExternalEdits({
+  root: path.join(os.tmpdir(), 'mdzip-studio-edit'),
+  onChange: (owner, change) => {
+    const win = BrowserWindow.fromId(owner);
+    if (win && !win.isDestroyed()) win.webContents.send('mdzip:external-file-changed', change);
+  },
+});
+// Opens a file in its usual app, as double-clicking it does; resolves to ''
+// or what went wrong (shell.openPath's contract). On Windows not through
+// shell.openPath, which loses Word's DDE handoff (see SHELL_OPEN_SCRIPT).
+function openInDefaultApp(filePath) {
+  if (process.platform !== 'win32') return shell.openPath(filePath);
+  const run = (verb) => new Promise((resolve) => {
+    const child = execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', externalEdit.SHELL_OPEN_SCRIPT],
+      { windowsHide: true, timeout: 60000, env: { ...process.env, MDZ_OPEN_PATH: filePath, MDZ_OPEN_VERB: verb ?? '' } },
+      (error, stdout) => resolve(error ? (String(stdout ?? '').trim() || error.message) : ''),
+    );
+    child.on('error', (error) => resolve(error.message));
+  });
+  // A template (.dotx) asks for Open, so it's edited rather than used for a
+  // new document; if its app has no Open, the default it is.
+  const verb = externalEdit.openVerbFor(filePath);
+  return run(verb).then((problem) => (problem && verb ? run(null) : problem));
+}
+
+// Extension → the app Windows opens it with ("Word"), or null; asked once each.
+const appNameCache = new Map();
+
+function appNameForExtension(ext) {
+  if (process.platform !== 'win32' || !externalEdit.isFileExtension(ext)) return Promise.resolve(null);
+  const key = ext.toLowerCase();
+  if (!appNameCache.has(key)) {
+    appNameCache.set(key, new Promise((resolve) => {
+      const child = execFile(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', externalEdit.ASSOC_SCRIPT],
+        { windowsHide: true, timeout: 15000, env: { ...process.env, MDZ_EXT: key } },
+        (error, stdout) => resolve(error ? null : externalEdit.parseAssocOutput(stdout)),
+      );
+      child.on('error', () => resolve(null));
+    }));
+  }
+  return appNameCache.get(key);
 }
 
 const toPosixRelative = (root, abs) => path.relative(root, abs).split(path.sep).join('/');
@@ -857,6 +947,15 @@ function createWindow({ pendingOpenPath = null, startupAction = null, readerSour
     // A reader window (View > Reading View) and the editing window it reads.
     reader: startupAction?.kind === 'reader',
     readerSource,
+    // Import: the file picked to import, and the folder the picker opens in.
+    importPath: null,
+    lastImportFolder: null,
+    // Export: the file last exported, for its Open button.
+    lastExportPath: null,
+    // Extract…: the file or folder last extracted to, for the status bar's Open.
+    lastExtractPath: null,
+    // The Pandoc or markitdown-mdz run in progress, for Cancel.
+    conversion: null,
     // Shows the window (set below); a reading window calls it once its
     // document is drawn (mdzip:reading-window-ready).
     reveal: null,
@@ -916,7 +1015,9 @@ function createWindow({ pendingOpenPath = null, startupAction = null, readerSour
     });
   });
 
+  const windowId = win.id;
   win.on('closed', () => {
+    void externalEdits.stop(windowId);
     unwatchDocument(win);
     windows.delete(win);
     if (lastFocusedWindow === win) lastFocusedWindow = null;
@@ -999,6 +1100,9 @@ if (!hasSingleInstanceLock) {
   });
 
   app.on('ready', () => {
+    // Copies an app still had open when Studio last quit. Safe: this is the
+    // only Studio (single-instance lock).
+    void externalEdits.sweep();
     if (process.platform === 'darwin') {
       // A launch by double-click delivers the file via 'open-file' (queued), not
       // argv: open it in place of an empty window.
@@ -1446,6 +1550,7 @@ ipcMain.handle('mdzip:extract-files', async (event, payload) => {
       return { canceled: true };
     }
     await fs.writeFile(result.filePath, Buffer.from(files[0].bytes ?? []));
+    if (windowState(win)) windowState(win).lastExtractPath = result.filePath;
     return { canceled: false, targetPath: result.filePath, fileCount: 1 };
   }
 
@@ -1479,6 +1584,7 @@ ipcMain.handle('mdzip:extract-files', async (event, payload) => {
     }
   }
   const fileCount = await writeFilesInto(folder, files);
+  if (windowState(win)) windowState(win).lastExtractPath = folder;
   return { canceled: false, targetPath: folder, fileCount };
 });
 
@@ -1553,20 +1659,31 @@ async function promptMarkdownDefault(win) {
 // stderr }, with code -1 when it couldn't start or timed out. With `shell`, the
 // command line goes through cmd.exe, which Windows needs for npm's and pip's
 // .cmd shims; only Studio's own fixed commands are run this way.
-function runProcess(file, args, { env = process.env, shell = false } = {}) {
+function runProcess(file, args, { env = process.env, shell = false, timeout = 10000, cwd } = {}) {
   return new Promise((resolve) => {
     const done = (error, stdout, stderr) => resolve({
       code: error ? (typeof error.code === 'number' ? error.code : -1) : 0,
       stdout: String(stdout ?? ''),
       stderr: String(stderr ?? ''),
     });
-    const options = { env, timeout: 10000, windowsHide: true, maxBuffer: 1024 * 1024 };
+    const options = { env, cwd, timeout, windowsHide: true, maxBuffer: 16 * 1024 * 1024 };
     if (shell) {
       exec([file, ...args].join(' '), options, done);
     } else {
       execFile(file, args, options, done);
     }
   });
+}
+
+// Studio's environment with a fresh PATH, so programs installed since Studio
+// started are found.
+async function freshEnv(reg = createRegistry((file, args) => runProcess(file, args))) {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'path') delete env[key];
+  }
+  env.PATH = await freshPath({ platform: process.platform, reg, env: process.env });
+  return env;
 }
 
 // Where the Studio installer (with Windows Explorer integration) comes from.
@@ -1600,12 +1717,7 @@ async function systemIntegrationStatus() {
       ])
     : Promise.resolve([null, null, null]);
 
-  // A fresh PATH, so programs installed since Studio started are found.
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key.toLowerCase() === 'path') delete env[key];
-  }
-  env.PATH = await freshPath({ platform, reg, env: process.env });
+  const env = await freshEnv(reg);
   const helpers = await Promise.all(HELPER_PROGRAMS.map(async (helper) => ({
     id: helper.id,
     name: helper.name,
@@ -1634,7 +1746,8 @@ function runInTerminal(command, title) {
   }
   if (process.platform === 'darwin') {
     const child = spawn('osascript', [
-      '-e', `tell application "Terminal" to do script "${command}"`,
+      // An AppleScript string: escape the command's own quotes ("markitdown-mdzip[all]").
+      '-e', `tell application "Terminal" to do script "${command.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
       '-e', 'tell application "Terminal" to activate',
     ], { detached: true, stdio: 'ignore' });
     child.unref();
@@ -1818,7 +1931,8 @@ async function renderHtmlToPdf(htmlPath) {
     await Promise.race([
       renderWindow.loadFile(htmlPath),
       new Promise((_resolve, reject) =>
-        setTimeout(() => reject(new Error('Timed out preparing the document.')), 20000)
+        // Generous: a long document carries every picture inside the page.
+        setTimeout(() => reject(new Error('Timed out preparing the document.')), 120000)
       ),
     ]);
     // Let webfonts settle so text measures at its final metrics before layout
@@ -1980,6 +2094,404 @@ ipcMain.handle('mdzip:print-preview', async (_event, payload) => {
   }
 });
 
+// --- File > Import... and File > Export... (studio#33, studio#41) ------------
+// Pandoc (with mdzip-pandoc's scripts, shipped with Studio) and markitdown-mdz,
+// found the way System Integration finds them. Programs run with their
+// arguments as an array, never through a shell: the file names are the user's.
+
+// mdzip-pandoc's mdz.lua, docx.lua and mdzip-core-lua: next to the app when
+// installed (outside app.asar, so Pandoc can read them), vendor/ in development.
+function mdzipPandocScripts() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'mdzip-pandoc')
+    : path.join(__dirname, '..', 'vendor', 'mdzip-pandoc');
+}
+
+const CONVERT_TOOLS = ['pandoc', 'markitdown-mdz'];
+
+// Runs a conversion with no time limit (a long document can take a while);
+// the dialog's Cancel stops it (mdzip:convert-cancel). Resolves { code,
+// stdout, stderr, canceled, startError }: startError is why the program
+// couldn't be started at all.
+function runConversion(state, file, args, { env, cwd }) {
+  return new Promise((resolve) => {
+    const child = execFile(file, args, { env, cwd, windowsHide: true, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (state.conversion === child) state.conversion = null;
+      const started = !error || typeof error.code === 'number' || error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || child.canceledByUser;
+      resolve({
+        code: error ? (typeof error.code === 'number' ? error.code : -1) : 0,
+        stdout: String(stdout ?? ''),
+        stderr: String(stderr ?? ''),
+        canceled: child.canceledByUser === true,
+        startError: started ? null : error.message,
+      });
+    });
+    state.conversion = child;
+  });
+}
+
+// The dialog's Cancel: stop this window's conversion. On Windows the whole
+// process tree, since markitdown-mdz's launcher runs Python as a child.
+ipcMain.handle('mdzip:convert-cancel', (event) => {
+  const child = windowState(BrowserWindow.fromWebContents(event.sender))?.conversion;
+  if (!child || child.exitCode !== null) return { ok: false };
+  child.canceledByUser = true;
+  if (process.platform === 'win32' && child.pid) {
+    execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
+  } else {
+    child.kill();
+  }
+  return { ok: true };
+});
+
+// Whether Pandoc and markitdown-mdz are here: { env, programs: { pandoc:
+// full path | null, ... }, statuses: { pandoc: { installed, version, usable },
+// ... } }. Asked each time it's needed, so a program installed meanwhile is found.
+async function conversionTools() {
+  const env = await freshEnv();
+  const programs = {};
+  const entries = await Promise.all(CONVERT_TOOLS.map(async (id) => {
+    const helper = HELPER_PROGRAMS.find((candidate) => candidate.id === id);
+    programs[id] = convert.findProgram(helper.command, env.PATH, { exists: (file) => existsSync(file) });
+    const status = programs[id]
+      ? await helperStatus(helper, (_file, args) => runProcess(programs[id], args, { env }))
+      : { installed: false, version: null };
+    return [id, { installed: status.installed, version: status.version, usable: convert.toolUsable(id, status) }];
+  }));
+  return { env, programs, statuses: Object.fromEntries(entries) };
+}
+
+async function convertTempFolder() {
+  return fs.mkdtemp(path.join(app.getPath('temp'), 'mdzip-studio-convert-'));
+}
+
+// Import: pick a file, then the dialog shows the programs that can read it and
+// the command each would run.
+ipcMain.handle('mdzip:import-pick', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const state = windowState(win);
+  if (!state) return { canceled: true };
+  const result = await dialog.showOpenDialog(win, {
+    title: 'Import',
+    defaultPath: state.lastImportFolder ?? app.getPath('documents'),
+    properties: ['openFile'],
+    filters: convert.importDialogFilters(),
+  });
+  const filePath = result.filePaths?.[0];
+  if (result.canceled || !filePath) return { canceled: true };
+  state.lastImportFolder = path.dirname(filePath);
+  const format = convert.importFormatFor(filePath);
+  if (!format) return { canceled: false, error: true, message: `Studio can't import ${path.extname(filePath) || 'this kind of'} files.` };
+  // Only the file picked here can be imported (mdzip:import-run).
+  state.importPath = filePath;
+  const { statuses } = await conversionTools();
+  const choices = convert.importChoices(filePath, statuses);
+  const fileName = path.basename(filePath);
+  const output = convert.withExtension(fileName, 'mdz');
+  return {
+    canceled: false,
+    fileName,
+    folder: path.dirname(filePath),
+    formatName: format.name,
+    defaultTool: convert.defaultImportTool(choices),
+    choices: choices.map((choice) => ({
+      ...choice,
+      commandLine: convert.commandLine(convert.importCommand({ tool: choice.tool, input: fileName, output })),
+    })),
+  };
+});
+
+// Import: convert the picked file into a temporary folder and hand back the
+// .mdz, which opens unsaved (Save asks where to keep it).
+ipcMain.handle('mdzip:import-run', async (event, payload) => {
+  const state = windowState(BrowserWindow.fromWebContents(event.sender));
+  const filePath = state?.importPath;
+  const tool = payload?.tool;
+  if (!filePath || !CONVERT_TOOLS.includes(tool)) return { error: true, message: 'Pick a file to import first.' };
+  const { env, programs, statuses } = await conversionTools();
+  const choice = convert.importChoices(filePath, statuses).find((candidate) => candidate.tool === tool);
+  if (!choice?.usable) return { error: true, message: `${convert.TOOL_NAMES[tool]} isn't ready on this computer. Set it up in Help > System Integration.` };
+  const work = await convertTempFolder();
+  try {
+    const fileName = convert.withExtension(path.basename(filePath), 'mdz');
+    const output = path.join(work, fileName);
+    const look = payload?.look && typeof payload.look === 'object' ? payload.look : null;
+    const { args } = convert.importCommand({ tool, input: filePath, output, scripts: mdzipPandocScripts(), look });
+    // In the file's folder, so a web page's pictures are found next to it.
+    const run = await runConversion(state, programs[tool], args, { env, cwd: path.dirname(filePath) });
+    if (run.canceled) return { canceled: true };
+    let bytes = null;
+    try {
+      bytes = await fs.readFile(output);
+    } catch {
+      // Not written: the run failed.
+    }
+    if (run.code !== 0 || !bytes) return { ...convert.describeFailure(tool, run), error: true };
+    const imported = { bytes: new Uint8Array(bytes), fileName, warnings: convert.warningsFrom(run.stderr) };
+    // A Word document's Import options: the renderer adds its styles and/or
+    // the file itself to the .mdz (imported-word.ts), so it gets the file too.
+    const keepStyles = payload?.keepStyles === true;
+    const keepOriginal = payload?.keepOriginal === true;
+    const documentStyle = payload?.documentStyle === true;
+    if ((keepStyles || keepOriginal || documentStyle) && /\.(docx|docm|dotx|dotm)$/i.test(filePath)) {
+      try {
+        imported.original = {
+          fileName: path.basename(filePath),
+          bytes: new Uint8Array(await fs.readFile(filePath)),
+          keepStyles,
+          keepOriginal,
+          documentStyle,
+        };
+      } catch {
+        // Gone since the import read it: the document comes without them.
+      }
+    }
+    // Never in place of a document that's open: in a new window instead.
+    if (state.documentOpen) {
+      createWindow({ startupAction: { kind: 'imported', ...imported } });
+      return { openedInNewWindow: true, fileName };
+    }
+    return imported;
+  } finally {
+    fs.rm(work, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+// An .mdz's document to export instead of its entry point (the page being
+// viewed), or null. mdz.lua checks it names a document in the archive.
+function exportDocumentPath(value) {
+  return typeof value === 'string' && value.trim() && value.length < 1024 ? value.trim() : null;
+}
+
+// Export: whether Pandoc is here, and the command each format would run for
+// this document (fileName, sourceFormat 'mdz' | 'markdown', document).
+ipcMain.handle('mdzip:export-options', async (_event, payload) => {
+  const fileName = path.basename(String(payload?.fileName ?? '')) || 'Document.mdz';
+  const sourceFormat = payload?.sourceFormat === 'markdown' ? 'markdown' : 'mdz';
+  const document = exportDocumentPath(payload?.document);
+  const { statuses } = await conversionTools();
+  const commands = {};
+  for (const combine of [false, true]) {
+    for (const format of convert.EXPORT_FORMATS) {
+      commands[`${format.id}${combine ? '+combine' : ''}`] = convert.commandLine(convert.exportCommand({
+        format: format.id,
+        input: fileName,
+        output: convert.withExtension(fileName, format.extension),
+        sourceFormat,
+        combine,
+        document,
+      }));
+    }
+  }
+  return {
+    pandoc: statuses.pandoc,
+    formats: convert.EXPORT_FORMATS.map(({ id, name, extension, tool }) => ({ id, name, extension, tool })),
+    commands,
+  };
+});
+
+// Export's save dialog: in the document's folder (or Documents), named after it.
+async function chooseExportPath(win, { fileName, documentPath, format }) {
+  const name = convert.withExtension(fileName, format.extension);
+  const folder = documentPath ? path.dirname(documentPath) : app.getPath('documents');
+  const result = await dialog.showSaveDialog(win, {
+    title: `Export as ${format.name}`,
+    defaultPath: path.join(folder, name),
+    filters: [{ name: format.name, extensions: [format.extension] }],
+  });
+  return result.canceled || !result.filePath ? null : result.filePath;
+}
+
+// Export with Pandoc: { format, bytes, fileName, sourceFormat, combine } →
+// { filePath, warnings } | { canceled } | { error, message }. The bytes are
+// the document as it is now, unsaved edits included.
+ipcMain.handle('mdzip:export-run', async (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const state = windowState(win);
+  const format = convert.exportFormat(payload?.format);
+  if (!state || !format || format.tool !== 'pandoc' || !payload?.bytes) return { error: true, message: 'Nothing to export.' };
+  const fileName = path.basename(String(payload.fileName ?? '')) || 'Document.mdz';
+  const sourceFormat = payload.sourceFormat === 'markdown' ? 'markdown' : 'mdz';
+  const outputPath = await chooseExportPath(win, { fileName, documentPath: state.documentPath, format });
+  if (!outputPath) return { canceled: true };
+  const { env, programs, statuses } = await conversionTools();
+  if (!statuses.pandoc.usable) return { error: true, message: "Pandoc isn't ready on this computer. Set it up in Help > System Integration." };
+  const work = await convertTempFolder();
+  try {
+    const input = path.join(work, sourceFormat === 'markdown' ? convert.withExtension(fileName, 'md') : convert.withExtension(fileName, 'mdz'));
+    await fs.writeFile(input, Buffer.from(payload.bytes));
+    const { args, env: documentEnv } = convert.exportCommand({
+      format: format.id,
+      input,
+      output: outputPath,
+      sourceFormat,
+      combine: !!payload.combine,
+      document: exportDocumentPath(payload.document),
+      scripts: mdzipPandocScripts(),
+    });
+    // A plain .md's pictures are found next to it.
+    const cwd = sourceFormat === 'markdown' && state.documentPath ? path.dirname(state.documentPath) : work;
+    // docx.lua writes the archive's reference document to a temporary folder.
+    // MDZ_DOCUMENT only as asked: never one left in Studio's own environment.
+    const runEnv = { ...env, TMPDIR: work, TEMP: work, TMP: work };
+    delete runEnv.MDZ_DOCUMENT;
+    const run = await runConversion(state, programs.pandoc, args, { env: { ...runEnv, ...documentEnv }, cwd });
+    if (run.canceled) {
+      fs.rm(outputPath, { force: true }).catch(() => {});
+      return { canceled: true };
+    }
+    if (run.code !== 0) return { error: true, ...convert.describeFailure('pandoc', run) };
+    state.lastExportPath = outputPath;
+    return { filePath: outputPath, warnings: convert.warningsFrom(run.stderr) };
+  } finally {
+    fs.rm(work, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+// Insert Word Template: Pandoc's own Word styles, as the bytes of a .docx.
+// → { bytes, command } | { error, message }. `command` is the Pandoc command
+// that made them, with "reference.docx" for where they went.
+ipcMain.handle('mdzip:word-template', async () => {
+  const { env, programs, statuses } = await conversionTools();
+  if (!statuses.pandoc.usable) {
+    return { error: true, message: "Studio makes the template with Pandoc, which isn't ready on this computer. Set it up in Help > System Integration." };
+  }
+  const work = await convertTempFolder();
+  try {
+    const output = path.join(work, 'reference.docx');
+    const { args } = convert.wordTemplateCommand(output);
+    const run = await runConversion({}, programs.pandoc, args, { env, cwd: work });
+    if (run.code !== 0) return { error: true, ...convert.describeFailure('pandoc', run) };
+    const bytes = new Uint8Array(await fs.readFile(output));
+    return { bytes, command: convert.commandLine(convert.wordTemplateCommand('reference.docx')) };
+  } catch (error) {
+    return { error: true, message: `Couldn't make the Word template: ${error.message}` };
+  } finally {
+    fs.rm(work, { recursive: true, force: true }).catch(() => {});
+  }
+});
+
+// Export as PDF: Studio's own preview, made into a PDF as Print does.
+// { html, fileName } → { filePath } | { canceled } | { error, message }.
+ipcMain.handle('mdzip:export-pdf', async (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const state = windowState(win);
+  const html = typeof payload?.html === 'string' ? payload.html : '';
+  if (!state || !html) return { error: true, message: 'Nothing to export.' };
+  const fileName = path.basename(String(payload?.fileName ?? '')) || 'Document.mdz';
+  const outputPath = await chooseExportPath(win, { fileName, documentPath: state.documentPath, format: convert.exportFormat('pdf') });
+  if (!outputPath) return { canceled: true };
+  const htmlPath = printTempPath('.html');
+  try {
+    await fs.writeFile(htmlPath, html, 'utf8');
+    await fs.writeFile(outputPath, await renderHtmlToPdf(htmlPath));
+    state.lastExportPath = outputPath;
+    return { filePath: outputPath, warnings: [] };
+  } catch (error) {
+    return { error: true, message: error?.message ?? 'Could not make the PDF.' };
+  } finally {
+    fs.unlink(htmlPath).catch(() => {});
+  }
+});
+
+// The app that opens files like this one ("Word"), for "Open in Word"; null
+// when Studio can't tell (not Windows) or nothing is registered.
+ipcMain.handle('mdzip:app-for-file', async (_event, payload) => ({
+  name: await appNameForExtension(String(payload?.extension ?? '')),
+}));
+
+// Open in <app> (how: 'open') or Open With… (how: 'open-with') on a file in
+// the document: a copy under the temp folder, watched unless watchChanges is
+// false (a read-only document), so each save there comes back
+// (mdzip:external-file-changed). token names the window's current document.
+ipcMain.handle('mdzip:edit-externally', async (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return { error: 'No window.' };
+  if (externalEdit.isRunnable(String(payload?.path ?? ''))) {
+    return { error: "it's a program or script, and Studio doesn't run those from a document" };
+  }
+  let filePath;
+  try {
+    ({ filePath } = await externalEdits.start(win.id, {
+      token: payload?.token,
+      path: String(payload?.path ?? ''),
+      bytes: payload?.bytes,
+      watchChanges: payload?.watchChanges !== false,
+    }));
+  } catch (error) {
+    return { error: error?.message ?? 'Could not copy the file out.' };
+  }
+  if (payload?.how === 'open-with') {
+    if (process.platform === 'win32') {
+      // Windows' own Open With: the app picked opens the copy (OAIF_EXEC);
+      // "Always use this app" applies as it does in Explorer.
+      // Not awaited: the process stays a while after the pick (see the script).
+      void showMarkdownOpenWithDialog({ filePath, hwnd: nativeHandleOf(win), flags: 0x05 });
+      return { ok: true, filePath };
+    }
+    if (process.platform === 'darwin') {
+      const picked = await dialog.showOpenDialog(win, {
+        title: 'Open With',
+        buttonLabel: 'Open',
+        defaultPath: '/Applications',
+        properties: ['openFile'],
+        filters: [{ name: 'Applications', extensions: ['app'] }],
+      });
+      if (picked.canceled || !picked.filePaths.length) return { canceled: true };
+      const child = spawn('open', ['-a', picked.filePaths[0], filePath], { detached: true, stdio: 'ignore' });
+      child.on('error', () => {});
+      child.unref();
+      return { ok: true, filePath };
+    }
+  }
+  const problem = await openInDefaultApp(filePath);
+  return problem ? { error: problem } : { ok: true, filePath };
+});
+
+// The window's document changed (another opened, or it closed): its copies
+// stop coming back and are removed.
+ipcMain.handle('mdzip:stop-external-edits', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win) await externalEdits.stop(win.id);
+  return { ok: true };
+});
+
+// A save from the app would replace a file that has also changed in the
+// document since it went out (Replace…, say): ask which to keep.
+ipcMain.handle('mdzip:confirm-external-replace', async (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const app = String(payload?.app ?? 'the other app');
+  const file = String(payload?.path ?? 'This file');
+  const answer = await dialog.showMessageBox(win, {
+    type: 'warning',
+    title: 'Replace File?',
+    message: `${file} was saved in ${app}, but it has also changed in this document since you opened it there.`,
+    detail: `Replace it with the version saved in ${app}?`,
+    buttons: [`Use ${app}'s Version`, "Keep the Document's Version"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  return { replace: answer.response === 0 };
+});
+
+// Export's Open button: the file this window last exported, in its usual app.
+ipcMain.handle('mdzip:open-export', async (event) => {
+  const filePath = windowState(BrowserWindow.fromWebContents(event.sender))?.lastExportPath;
+  if (!filePath) return { error: 'no-path' };
+  const problem = await openInDefaultApp(filePath);
+  return problem ? { error: problem } : { ok: true };
+});
+
+// The status bar's Open after Extract…: the file (in its usual app) or the
+// folder this window last extracted to. Only that path, never one the page names.
+ipcMain.handle('mdzip:open-extracted', async (event) => {
+  const filePath = windowState(BrowserWindow.fromWebContents(event.sender))?.lastExtractPath;
+  if (!filePath) return { error: 'no-path' };
+  const problem = await openInDefaultApp(filePath);
+  return problem ? { error: problem } : { ok: true };
+});
+
 // Sweep print temp files on exit — covers PDFs Windows kept locked while the
 // viewer had them open, plus strays from any earlier crashed session.
 app.on('will-quit', () => {
@@ -2084,6 +2596,8 @@ function menuHandlersFor(win) {
     },
     packFolder: () => dispatchOrOpenWindow(win, 'mdzip-studio:pack-folder'),
     unpackMdz: () => dispatchOrOpenWindow(win, 'mdzip-studio:unpack-mdz'),
+    importDocument: () => dispatchOrOpenWindow(win, 'mdzip-studio:import-document'),
+    exportDocument: () => dispatchAppEvent(win, 'mdzip-studio:export-document'),
     save: () => dispatchAppEvent(win, 'mdzip-studio:save-archive'),
     saveAs: () => dispatchAppEvent(win, 'mdzip-studio:save-archive-as'),
     print: () => dispatchAppEvent(win, 'mdzip-studio:print'),
@@ -2092,6 +2606,7 @@ function menuHandlersFor(win) {
     copyFolderPath: () => dispatchAppEvent(win, 'mdzip-studio:copy-folder-path'),
     insertAgentsGuide: () => dispatchAppEvent(win, 'mdzip-studio:insert-agents'),
     insertReadme: () => dispatchAppEvent(win, 'mdzip-studio:insert-readme'),
+    insertWordTemplate: () => dispatchAppEvent(win, 'mdzip-studio:insert-word-template'),
     closeDocument: () => dispatchAppEvent(win, 'mdzip-studio:close-archive'),
     quit: () => app.quit(),
     reload: () => dispatchAppEvent(win, 'mdzip-studio:reload-document'),
@@ -2099,6 +2614,7 @@ function menuHandlersFor(win) {
     toggleLineNumbers: () => dispatchAppEvent(win, 'mdzip-studio:toggle-line-numbers'),
     toggleRemoteImages: () => toggleRemoteImages(),
     toggleOutlineSide: () => toggleOutlineSide(),
+    toggleDocumentStyles: () => toggleDocumentStyles(),
     toggleDevTools: () => win?.webContents.toggleDevTools(),
     showSystemIntegration: () => dispatchOrOpenWindow(win, 'mdzip-studio:show-system-integration'),
     showHelp: () => openHelpWindow({ doc: 'studio-help' }),
@@ -2133,6 +2649,7 @@ function refreshWindowMenu(win) {
     recentFiles: latestRecentFiles,
     remoteImages: getSettings().remoteImages,
     outlineLeft: getSettings().outlinePosition === 'left',
+    documentStyles: getSettings().documentStyles !== false,
   });
   win.setMenu(Menu.buildFromTemplate(template));
 }
@@ -2181,6 +2698,7 @@ function applyDarwinMenu(win) {
       recentFiles: latestRecentFiles,
       remoteImages: getSettings().remoteImages,
       outlineLeft: getSettings().outlinePosition === 'left',
+      documentStyles: getSettings().documentStyles !== false,
     });
   }
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));

@@ -1,4 +1,4 @@
-import { Component, computed, effect, ElementRef, NgZone, OnDestroy, signal, VERSION as NG_VERSION, ViewChild } from '@angular/core';
+import { Component, computed, effect, ElementRef, NgZone, OnDestroy, signal, untracked, VERSION as NG_VERSION, ViewChild } from '@angular/core';
 import { StateEffect } from '@codemirror/state';
 import { Decoration, EditorView, MatchDecorator, ViewPlugin, type DecorationSet, type ViewUpdate } from '@codemirror/view';
 import { APP_VERSION } from './app-version';
@@ -28,6 +28,9 @@ import {
   MdzipDocumentStats,
   MdzipEditorSnapshot,
   MdzipExtractRequest,
+  MdzipFileAction,
+  MdzipFileActionTarget,
+  MdzipFileCardHelp,
   MdzipMarkdownRenderContext,
   MdzipMarkdownRenderExtension,
   MdzipOutlinePosition,
@@ -56,6 +59,7 @@ import {
   lucideImage,
   lucideLayoutGrid,
   lucideList,
+  lucidePalette,
   lucideDownload,
   lucideInfo,
   lucidePlus,
@@ -78,6 +82,13 @@ import {
   SystemIntegrationDialogComponent,
   SystemIntegrationStatus,
 } from './modules/system-integration/system-integration-dialog.component';
+import { ImportDialogComponent, ImportedDocument } from './modules/convert/import-dialog.component';
+import { ExportDialogComponent } from './modules/convert/export-dialog.component';
+import { CommandBoxComponent } from './modules/convert/command-box.component';
+import { markAsCurrentWord } from './core/word-template';
+import { documentStylePath, PREVIEW_SCOPE, scopeDocumentStyle } from './core/document-style';
+import { addImportedWordFiles } from './modules/convert/imported-word';
+import { ConvertTool, ExportChoice, ExportOptions, ExportResult, ImportPick, ImportResult } from './modules/convert/convert-types';
 
 type AssetViewMode = 'tiles' | 'list';
 // A document sent to a reader window: its bytes and name, the title its
@@ -94,14 +105,28 @@ const MARKDOWN_IMAGE_SOURCE_ATTR = 'mdzip-studio-src';
 // Marks a preview container once its copy listener is bound, so a re-mount
 // (same node reused across renders) doesn't stack duplicate listeners.
 const COPY_IMAGES_BOUND_ATTR = 'data-mdzip-copy-bound';
-type TemplateFileKind = 'agents' | 'readme';
+type TemplateFileKind = 'agents' | 'readme' | 'word';
 // Insert AGENTS.md / README.md (issue #12) — same fixed, bundled-asset templates
 // as mdzip-vscode's `mdzip.addAgentsGuide` (mdzTemplates.ts), reused here for
 // the same reasons: static, tool-agnostic guidance, no picker needed.
-const TEMPLATE_FILES: Record<TemplateFileKind, { path: string; assetUrl: string }> = {
+// Insert Word Template has no bundled asset: Pandoc makes it (see
+// wordTemplateContent), and the manifest names it (pandoc.referenceDoc).
+const TEMPLATE_FILES: Record<TemplateFileKind, { path: string; assetUrl: string | null }> = {
   agents: { path: 'AGENTS.md', assetUrl: 'assets/templates/embedded-agents-guide.md' },
   readme: { path: 'README.md', assetUrl: 'assets/templates/embedded-readme.md' },
+  word: { path: 'styles/reference.docx', assetUrl: null },
 };
+// What Insert Word Template tells you afterwards: how to change the styles,
+// and the Pandoc command that made them; or why it couldn't.
+type WordTemplateNotice =
+  | { kind: 'added'; path: string; command: string | null }
+  | { kind: 'error'; message: string; fix: string | null };
+// The Word reference document an .mdz's manifest names (mdzip-pandoc's
+// pandoc.referenceDoc), if any.
+function manifestReferenceDoc(manifest: unknown): string | null {
+  const pandoc = (manifest as { pandoc?: { referenceDoc?: unknown } } | null)?.pandoc;
+  return typeof pandoc?.referenceDoc === 'string' && pandoc.referenceDoc ? pandoc.referenceDoc : null;
+}
 const STUDIO_FORMATTING_CONTROLS: NonNullable<MdzipControlPolicy['formatting']> = {
   bold: true,
   italic: true,
@@ -170,6 +195,34 @@ function loadStudioMermaid(): Promise<MdzipMermaidApi> {
     };
   });
   return studioMermaidPromise;
+}
+
+// Open in <app> (#29): a file's extension (".docx"), or null.
+function extensionOf(path: string): string | null {
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot).toLowerCase() : null;
+}
+
+// Files that run rather than open (electron/lib/external-edit.js has the same list).
+const RUNNABLE_FILE = /\.(exe|com|scr|pif|msi|msp|bat|cmd|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|hta|cpl|lnk|url|reg|jar|appref-ms|sh|command|app|desktop)$/i;
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+// Names the window's current document to the main process, so a save that
+// arrives after another document opened is dropped.
+function newEditToken(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `t${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+}
+
+interface ExternalFileChange {
+  token: string;
+  path: string;
+  bytes: Uint8Array;
 }
 
 interface StatusbarDisplay {
@@ -305,6 +358,7 @@ interface ElectronBridge {
     | { kind: 'new-document'; format: 'markdown' | 'mdz' }
     | { kind: 'help'; doc: HelpDocumentKind; page: string | null; anchor: string | null }
     | ({ kind: 'reader' } & ReaderSnapshot)
+    | ({ kind: 'imported' } & ImportedDocument)
     | null
   >;
   openHelpInNewWindow?: (doc: HelpDocumentKind, page: string | null, anchor: string | null) => void;
@@ -315,6 +369,28 @@ interface ElectronBridge {
   saveCopy?: (copy: { bytes: Uint8Array; fileName: string }) => Promise<{ canceled: boolean; filePath?: string }>;
   // A help or reader window: its document is drawn, so the window can show.
   readingWindowReady?: () => void;
+  // File > Import... and File > Export... (see modules/convert).
+  importPick?: () => Promise<ImportPick>;
+  importRun?: (tool: ConvertTool) => Promise<ImportResult>;
+  exportOptions?: (payload: { fileName: string; sourceFormat: 'mdz' | 'markdown'; document: string | null }) => Promise<ExportOptions>;
+  exportRun?: (payload: { format: string; bytes: Uint8Array; fileName: string; sourceFormat: 'mdz' | 'markdown'; combine: boolean; document: string | null }) => Promise<ExportResult>;
+  exportPdf?: (payload: { html: string; fileName: string }) => Promise<ExportResult>;
+  // File > Insert Word Template: Pandoc's own Word styles, as .docx bytes.
+  wordTemplate?: () => Promise<{ bytes?: Uint8Array; command?: string; error?: boolean; message?: string; fix?: string }>;
+  openExport?: () => Promise<{ ok?: boolean; error?: string }>;
+  openExtracted?: () => Promise<{ ok?: boolean; error?: string }>;
+  // Open in <app> / Open With… on a file in the document, with its saves coming back (#29).
+  appForFile?: (extension: string) => Promise<{ name: string | null }>;
+  editExternally?: (payload: {
+    token: string;
+    path: string;
+    bytes: Uint8Array;
+    watchChanges: boolean;
+    how: 'open' | 'open-with';
+  }) => Promise<{ ok?: boolean; canceled?: boolean; error?: string; filePath?: string }>;
+  stopExternalEdits?: () => Promise<unknown>;
+  confirmExternalReplace?: (payload: { path: string; app: string }) => Promise<{ replace: boolean }>;
+  onExternalFileChanged?: (callback: (change: ExternalFileChange) => void) => () => void;
   onReaderUpdate?: (callback: (snapshot: ReaderSnapshot) => void) => () => void;
   onDocumentChangedExternally?: (callback: (data: { filePath: string }) => void) => () => void;
   onWindowCloseRequested?: (callback: (requestId: number) => void) => () => void;
@@ -352,6 +428,7 @@ interface ElectronBridge {
     outlineVisible?: boolean;
     outlinePosition?: MdzipOutlinePosition;
     outlineWidth?: number | null;
+    documentStyles?: boolean;
   };
   setViewSetting?: (
     key: 'colorScheme' | 'previewWidth' | 'outlineVisible' | 'outlinePosition' | 'outlineWidth',
@@ -380,6 +457,9 @@ interface ArchiveTreeData {
     DialogModule,
     TabsModule,
     SystemIntegrationDialogComponent,
+    ImportDialogComponent,
+    ExportDialogComponent,
+    CommandBoxComponent,
     ReaderStripComponent,
     HelpDialogComponent,
     TreeModule,
@@ -400,6 +480,7 @@ interface ArchiveTreeData {
       lucideFileArchive,
       lucideFilePen,
       lucideFileText,
+      lucidePalette,
       lucideFolder,
       lucideFolderOpen,
       lucideImage,
@@ -464,6 +545,9 @@ interface ArchiveTreeData {
                   <li class="menu-sep" role="separator"></li>
                   <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!canInsertTemplateFile()" (click)="insertAgentsGuide(); closeMenu()"><ng-icon name="lucideBot" size="13" /><span>Insert AGENTS.md</span></button></li>
                   <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!canInsertTemplateFile()" (click)="insertReadme(); closeMenu()"><ng-icon name="lucideFileText" size="13" /><span>Insert README.md</span></button></li>
+                  @if (isDesktopShell()) {
+                    <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!canInsertTemplateFile()" (click)="insertWordTemplate(); closeMenu()"><ng-icon name="lucidePalette" size="13" /><span>Insert Word Template</span></button></li>
+                  }
                   <li class="menu-sep" role="separator"></li>
                   <li role="none"><button class="menu-item" type="button" role="menuitem" [disabled]="!currentArchive()" (click)="closeDocument(); closeMenu()"><ng-icon name="lucideX" size="13" /><span>Close Document</span><kbd>{{ shortcut('W') }}</kbd></button></li>
                   <li class="menu-sep" role="separator"></li>
@@ -611,7 +695,7 @@ interface ArchiveTreeData {
           }
 
           @if (currentArchive()) {
-            <section class="panel workspace-panel" [class.reader-view]="readerView()">
+            <section class="panel workspace-panel" [class.reader-view]="readerView()" [class.studio-document-style]="documentStyleActive()">
               <mdzip-workspace
                 #workspaceEditor
                 [bytes]="workspaceBytes()"
@@ -630,6 +714,9 @@ interface ArchiveTreeData {
                 [previewMaxWidth]="previewWidth()"
                 [outline]="readerView() ? helpOutlineOptions() : outlineOptions()"
                 [onExtractFiles]="handleExtractFiles"
+                [fileCardHelp]="fileCardHelp"
+                [hostFileActions]="hostFileActions"
+                [fileNote]="fileNote"
                 (colorSchemePreferenceChanged)="onColorSchemePreferenceChanged($event)"
                 (previewWidthChanged)="onPreviewWidthChanged($event)"
                 (outlineVisibilityChanged)="onOutlineVisibilityChanged($event)"
@@ -669,6 +756,16 @@ interface ArchiveTreeData {
             </span>
           } @else {
             <span class="statusbar-message" [class.statusbar-url]="displayStatus().kind === 'url'">{{ displayStatus().text }}</span>
+            @if (displayStatus().kind === 'message' && lastExtract(); as extracted) {
+              @if (extracted.message === statusMessage()) {
+                <span class="statusbar-links">
+                  <button type="button" class="statusbar-link" (mousedown)="$event.preventDefault()" (click)="openExtracted()">{{ extracted.folder ? 'Open Folder' : 'Open' }}</button>
+                  @if (!extracted.folder) {
+                    <button type="button" class="statusbar-link" (mousedown)="$event.preventDefault()" (click)="showExtracted()">Show in Folder</button>
+                  }
+                </span>
+              }
+            }
           }
         </span>
         <span class="statusbar-right">
@@ -749,11 +846,61 @@ interface ArchiveTreeData {
 
     <p-dialog [header]="insertTemplateDialogTitle()" [visible]="insertTemplateDialogOpen()" (visibleChange)="onInsertTemplateDialogVisibleChange($event)" [modal]="true" [style]="{ width: 'min(92vw, 440px)' }">
       <div class="dialog-form">
-        <p>{{ insertTemplateDialogName() }} already exists in this document. Replace it with the built-in version?</p>
+        <p>{{ insertTemplateDialogMessage() }}</p>
       </div>
       <ng-template pTemplate="footer">
         <p-button label="Cancel" severity="secondary" [text]="true" (onClick)="cancelInsertTemplate()" />
         <p-button label="Replace" (onClick)="confirmInsertTemplate()" />
+      </ng-template>
+    </p-dialog>
+
+    <p-dialog header="Word Template" [visible]="!!wordTemplateNotice()" (visibleChange)="$event || wordTemplateNotice.set(null)" [modal]="true" [style]="{ width: 'min(92vw, 520px)' }">
+      @if (wordTemplateNotice(); as notice) {
+        <div class="dialog-form">
+          @if (notice.kind === 'added') {
+            <p>
+              Added <strong>{{ notice.path }}</strong>, Pandoc's own Word styles. File &gt; Export… as Word now uses
+              its styles; the manifest names it (<code>pandoc.referenceDoc</code>).
+            </p>
+            @if (canOpenInApp()) {
+              <p>
+                To make exported documents look your way, choose <strong>{{ openInAppLabel(notice.path) }}</strong>
+                and change its styles (not its text). Each time you save it there, the change comes back here;
+                then save the document.
+              </p>
+            } @else {
+              <p>
+                To make exported documents look your way: in the contents pane, right-click it and choose
+                <strong>Extract…</strong>; open it in Word, change its styles (not its text) and save it; then
+                right-click it again and choose <strong>Replace…</strong>. Save the document.
+              </p>
+            }
+            @if (notice.command) {
+              <app-command-box label="Made with" [command]="notice.command" />
+            }
+          } @else {
+            <p class="dialog-error" role="alert">{{ notice.message }}</p>
+            @if (notice.fix) {
+              <app-command-box label="To fix it, run" [command]="notice.fix" note="Run it in a terminal, then try again." />
+            }
+          }
+        </div>
+      }
+      <ng-template pTemplate="footer">
+        @if (wordTemplateNotice(); as notice) {
+          @if (notice.kind === 'added') {
+            <p-button label="How to change the styles" severity="secondary" [text]="true" (onClick)="wordTemplateNotice.set(null); showStudioHelp('import-export.md', 'word-styles')" />
+            @if (canOpenInApp()) {
+              <p-button label="Close" severity="secondary" [text]="true" (onClick)="wordTemplateNotice.set(null)" />
+              <p-button [label]="openInAppLabel(notice.path)" (onClick)="wordTemplateNotice.set(null); editExternally(notice.path, 'open')" />
+            } @else {
+              <p-button label="OK" (onClick)="wordTemplateNotice.set(null)" />
+            }
+          } @else {
+            <p-button label="System Integration…" severity="secondary" [text]="true" (onClick)="wordTemplateNotice.set(null); systemIntegrationOpen.set(true)" />
+            <p-button label="OK" (onClick)="wordTemplateNotice.set(null)" />
+          }
+        }
       </ng-template>
     </p-dialog>
 
@@ -929,6 +1076,15 @@ interface ArchiveTreeData {
     </p-dialog>
 
     <app-system-integration-dialog [visible]="systemIntegrationOpen()" (visibleChange)="systemIntegrationOpen.set($event)" (learnMore)="showSystemIntegrationHelp($any($event))" />
+    <app-import-dialog
+      (imported)="openImported($event)"
+      (importedElsewhere)="statusMessage.set('Imported ' + $event + ' in a new window')"
+      (showSystemIntegration)="systemIntegrationOpen.set(true)"
+      (help)="showStudioHelp('import-export.md', $event)" />
+    <app-export-dialog
+      [runExport]="runExport"
+      (showSystemIntegration)="systemIntegrationOpen.set(true)"
+      (help)="showStudioHelp('import-export.md', $event)" />
 
     <!-- Hidden print-capture workspace. Off-screen but laid out (not
          display:none): Mermaid needs real geometry to measure its diagrams.
@@ -962,6 +1118,8 @@ export class AppComponent implements OnDestroy {
   @ViewChild('folderInput') private folderInput?: ElementRef<HTMLInputElement>;
   @ViewChild('workspaceEditor') private workspaceEditor?: MdzipWorkspaceComponent;
   @ViewChild(HelpDialogComponent) helpDialog?: HelpDialogComponent;
+  @ViewChild(ImportDialogComponent) importDialog?: ImportDialogComponent;
+  @ViewChild(ExportDialogComponent) exportDialog?: ExportDialogComponent;
   @ViewChild('printWorkspace', { read: ElementRef }) private printWorkspaceRef?: ElementRef<HTMLElement>;
 
   readonly currentArchive = this.archiveService.currentArchive;
@@ -972,6 +1130,9 @@ export class AppComponent implements OnDestroy {
   readonly selectedAssetId = signal<string | null>(null);
   readonly assetViewMode = signal<AssetViewMode>('tiles');
   readonly statusMessage = signal('Ready');
+  // What Extract… last wrote, for the status bar's Open and Show in Folder.
+  // They show only while the status bar still says what was extracted.
+  readonly lastExtract = signal<{ path: string; folder: boolean; message: string } | null>(null);
   private readonly hoverUrl = signal<string | null>(null);
   readonly displayStatus = computed<StatusbarDisplay>(() => {
     const url = this.hoverUrl();
@@ -1266,6 +1427,9 @@ export class AppComponent implements OnDestroy {
   // assetsHydrated fires once per preview render, so a re-render of the capture
   // workspace could re-enter the handler; this makes the capture one-shot.
   private printCaptureHandled = false;
+  // Export as PDF: the print capture's PDF goes to a file, and this hears how
+  // it went (null: an ordinary print, to the print preview).
+  private pdfExportDone: ((result: ExportResult) => void) | null = null;
   private printCaptureTimer: ReturnType<typeof setTimeout> | null = null;
   readonly mdDefaultPromptOpen = signal(false);
   // Help > System Integration... (studio#11).
@@ -1278,8 +1442,23 @@ export class AppComponent implements OnDestroy {
   // a visibility signal plus a pending-kind field set synchronously before it opens.
   readonly insertTemplateDialogOpen = signal(false);
   private pendingInsertTemplate: TemplateFileKind | null = null;
-  readonly insertTemplateDialogName = computed(() => TEMPLATE_FILES[this.pendingInsertTemplate ?? 'agents'].path);
-  readonly insertTemplateDialogTitle = computed(() => `Insert ${this.insertTemplateDialogName()}`);
+  // The signal, not pendingInsertTemplate, so the prompt names the file asked for.
+  readonly insertTemplateDialogName = computed(() => TEMPLATE_FILES[this.pendingInsertTemplateKind() ?? 'agents'].path);
+  readonly insertTemplateDialogTitle = computed(() =>
+    this.pendingInsertTemplateKind() === 'word' ? 'Insert Word Template' : `Insert ${this.insertTemplateDialogName()}`);
+  // The Word styles the document already has (the file its manifest names, or
+  // styles/reference.docx), when Insert Word Template asks to replace them.
+  private readonly existingWordStyles = signal<string | null>(null);
+  private readonly pendingInsertTemplateKind = signal<TemplateFileKind | null>(null);
+  readonly insertTemplateDialogMessage = computed(() => {
+    if (this.pendingInsertTemplateKind() !== 'word') {
+      return `${this.insertTemplateDialogName()} already exists in this document. Replace it with the built-in version?`;
+    }
+    const existing = this.existingWordStyles() ?? TEMPLATE_FILES.word.path;
+    const kept = existing.toLowerCase() === TEMPLATE_FILES.word.path.toLowerCase() ? '' : ` (${existing} stays in the document.)`;
+    return `This document already has Word styles: ${existing}. Replace them with Pandoc's own, in ${TEMPLATE_FILES.word.path}?${kept}`;
+  });
+  readonly wordTemplateNotice = signal<WordTemplateNotice | null>(null);
   // Insert AGENTS.md/README.md on a plain .md document routes through this same
   // "Convert to MDZip" prompt (set just before opening it) instead of a dead
   // disabled menu item or a separate prompt — see confirmConvertToMdz.
@@ -1384,6 +1563,16 @@ export class AppComponent implements OnDestroy {
   // app chrome follows Windows via CSS media query.
   readonly initialColorScheme: MdzipColorSchemePreference = window.mdzipStudio?.viewSettings?.colorScheme ?? 'system';
   readonly previewWidth = signal<MdzipPreviewWidthChoice>(window.mdzipStudio?.viewSettings?.previewWidth ?? 'default');
+  // The document's own stylesheet: its manifest's "styles" (the one-file form
+  // proposed in mdzip-spec#19), fitted to the preview and to print
+  // (document-style.ts). View > Document Style turns it off.
+  readonly documentStylesOn = signal(window.mdzipStudio?.viewSettings?.documentStyles !== false);
+  readonly documentStyle = signal<{ path: string; preview: string; print: string } | null>(null);
+  // It's for the document's pages, not a picture, the manifest or a file card.
+  private readonly viewingMarkdown = signal(true);
+  readonly documentStyleActive = computed(() => this.documentStylesOn() && !!this.documentStyle()?.preview && this.viewingMarkdown());
+  private documentStyleKey = '';
+  private documentStyleRun = 0;
   // The outline panel as last left: shown or not (the toolbar button), its
   // side (View > Outline on the Left) and the width it was dragged to. Read
   // when an editor is created (each document opened gets one), so it follows
@@ -1403,15 +1592,222 @@ export class AppComponent implements OnDestroy {
   // says Extract… instead of Download, and Studio writes the files through a
   // Save dialog (one file) or a folder picker (see electron/main.js). Not set
   // outside Electron, where the editor offers browser downloads.
+  // The link on the card of a file the preview can't show (a Word document).
+  readonly fileCardHelp: MdzipFileCardHelp = {
+    label: 'More about files in a document',
+    run: () => this.ngZone.run(() => this.showStudioHelp('getting-started.md', 'other-kinds-of-files')),
+  };
+  // ── Open in <app> / Open With… (#29) ──
+  // A file of this document opened in another app: a copy goes out (see
+  // electron/lib/external-edit.js) and each save there comes back through
+  // replaceAsset, which leaves the document unsaved, like any edit.
+  // Archive path → the app (null when Open With… picked one), what the
+  // document had when the file last went out or came back, when it last came
+  // back, and whether the document was read-only (nothing comes back then).
+  private readonly externalEdits = new Map<string, {
+    app: string | null;
+    synced: Uint8Array;
+    updatedAt: Date | null;
+    readOnly: boolean;
+  }>();
+  private externalEditToken = newEditToken();
+  // Extension → the app that opens it ("Word"); null when there's none or
+  // Studio can't tell (not Windows). Asked once each.
+  private readonly appNames = new Map<string, string | null>();
+  private readonly appNameAsks = new Map<string, Promise<string | null>>();
+  // Goes up as app names arrive, for the template's labels (openInAppLabel).
+  private readonly appNamesKnown = signal(0);
+  private readonly removeExternalFileListener: (() => void) | null;
+
+  // The app's name if known; undefined while it's being asked (the card's
+  // label is drawn again when the answer comes).
+  private appNameFor(path: string): string | null | undefined {
+    const extension = extensionOf(path);
+    if (!extension) return null;
+    if (this.appNames.has(extension)) return this.appNames.get(extension);
+    if (!window.mdzipStudio?.appForFile) return null;
+    void this.askAppName(extension);
+    return undefined;
+  }
+
+  private askAppName(extension: string): Promise<string | null> {
+    const ask = window.mdzipStudio?.appForFile;
+    if (!ask) return Promise.resolve(null);
+    let asking = this.appNameAsks.get(extension);
+    if (!asking) {
+      asking = ask(extension)
+        .then((result) => result?.name ?? null, () => null)
+        .then((name) => {
+          this.appNames.set(extension, name);
+          this.appNamesKnown.update((count) => count + 1);
+          this.workspaceEditor?.refreshFileActions();
+          return name;
+        });
+      this.appNameAsks.set(extension, asking);
+    }
+    return asking;
+  }
+
+  // "Open in Word" for a file, as on its card; for the Word Template dialog.
+  readonly canOpenInApp = (): boolean => !!window.mdzipStudio?.editExternally;
+  openInAppLabel(path: string): string {
+    this.appNamesKnown();
+    const app = this.appNameFor(path);
+    return app ? `Open in ${app}` : 'Open in Default App';
+  }
+
+  // Not Markdown or the manifest (Studio edits those), and not a program or
+  // script: those run instead of opening (the main process refuses them too).
+  private canOpenOutside(file: MdzipFileActionTarget): boolean {
+    return !file.isMarkdown && !file.isManifest && !RUNNABLE_FILE.test(file.path);
+  }
+
+  readonly hostFileActions: readonly MdzipFileAction[] = window.mdzipStudio?.editExternally
+    ? [
+        {
+          id: 'open-in-app',
+          primary: true,
+          label: (file) => {
+            const app = this.appNameFor(file.path);
+            return app ? `Open in ${app}` : 'Open in Default App';
+          },
+          appliesTo: (file) => this.canOpenOutside(file),
+          description: (file) => {
+            const app = this.appNameFor(file.path) ?? 'the app your system uses for it';
+            return this.readerView()
+              ? `Opens a copy in ${app}. This document is read-only, so changes made there stay in the copy.`
+              : `Opens it in ${app}. Each time you save there, the change comes back here; save the document to keep it.`;
+          },
+          run: (file) => this.ngZone.run(() => this.editExternally(file.path, 'open')),
+        },
+        {
+          id: 'open-with',
+          label: 'Open With…',
+          appliesTo: (file) => this.canOpenOutside(file)
+            && (window.mdzipStudio?.platform === 'win32' || window.mdzipStudio?.platform === 'darwin'),
+          description: 'Lets you pick the app to open it in. Saves there come back the same way.',
+          run: (file) => this.ngZone.run(() => this.editExternally(file.path, 'open-with')),
+        },
+      ]
+    : [];
+
+  // A line on the file's card while it's open in another app.
+  readonly fileNote = (file: MdzipFileActionTarget): string | null => {
+    const entry = this.externalEdits.get(file.path);
+    if (!entry) return null;
+    const app = entry.app ?? 'another app';
+    if (entry.readOnly) {
+      return `Open in ${app} as a copy. This document is read-only, so changes made there don't come back.`;
+    }
+    if (entry.updatedAt) {
+      const time = entry.updatedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      return `Open in ${app}. Brought back at ${time}; save the document to keep it.`;
+    }
+    return `Open in ${app}. Each time you save there, the change comes back here.`;
+  };
+
+  async editExternally(path: string, how: 'open' | 'open-with'): Promise<void> {
+    const bridge = window.mdzipStudio;
+    const editor = this.workspaceEditor;
+    if (!bridge?.editExternally || !editor) return;
+    const [file] = await editor.extractFiles([path], { includeFolders: false });
+    if (!file) {
+      this.statusMessage.set(`Could not open ${path}: it isn't in this document`);
+      return;
+    }
+    const token = this.externalEditToken;
+    const readOnly = this.readerView();
+    let result: Awaited<ReturnType<NonNullable<ElectronBridge['editExternally']>>>;
+    try {
+      result = await bridge.editExternally({ token, path, bytes: file.bytes, watchChanges: !readOnly, how });
+    } catch (error) {
+      result = { error: error instanceof Error ? error.message : String(error) };
+    }
+    if (token !== this.externalEditToken) return;
+    if (result?.error) {
+      this.statusMessage.set(`Could not open ${path}: ${result.error}`);
+      return;
+    }
+    if (result?.canceled) return;
+    const extension = extensionOf(path);
+    const app = how === 'open' && extension ? await this.askAppName(extension) : null;
+    if (token !== this.externalEditToken) return;
+    const previous = this.externalEdits.get(path);
+    this.externalEdits.set(path, {
+      app: app ?? (how === 'open' ? null : previous?.app ?? null),
+      synced: file.bytes.slice(),
+      updatedAt: previous?.updatedAt ?? null,
+      readOnly,
+    });
+    const named = app ?? 'the app';
+    this.statusMessage.set(readOnly
+      ? `Opened a copy of ${path} in ${named}`
+      : `Opened ${path} in ${named}. Saves there come back here`);
+    editor.refreshFileActions();
+  }
+
+  // A save in the other app: put it in the document, unless the document's
+  // own copy has changed since it went out and the user keeps that one.
+  private async applyExternalChange(change: ExternalFileChange): Promise<void> {
+    if (change.token !== this.externalEditToken) return;
+    const entry = this.externalEdits.get(change.path);
+    const editor = this.workspaceEditor;
+    if (!entry || entry.readOnly || !editor) return;
+    const app = entry.app ?? 'the other app';
+    const bytes = new Uint8Array(change.bytes);
+    const [current] = await editor.extractFiles([change.path], { includeFolders: false });
+    if (!current) {
+      this.statusMessage.set(`${change.path} is no longer in this document, so the change saved in ${app} wasn't brought back`);
+      return;
+    }
+    if (sameBytes(current.bytes, bytes)) {
+      entry.synced = bytes;
+      return;
+    }
+    if (!sameBytes(current.bytes, entry.synced)) {
+      const answer = await window.mdzipStudio?.confirmExternalReplace?.({ path: change.path, app });
+      if (change.token !== this.externalEditToken) return;
+      if (!answer?.replace) {
+        // Kept: the next save there replaces it without asking again.
+        entry.synced = current.bytes.slice();
+        this.statusMessage.set(`Kept this document's ${change.path}`);
+        return;
+      }
+    }
+    if (!(await editor.replaceAsset(change.path, bytes))) {
+      this.statusMessage.set(`Could not bring back ${change.path} from ${app}`);
+      return;
+    }
+    entry.synced = bytes;
+    entry.updatedAt = new Date();
+    this.statusMessage.set(`Updated ${change.path} from ${app}. Save the document to keep it`);
+    editor.refreshFileActions();
+  }
+
+  // Another document opened, or this one closed: files out in other apps
+  // stop coming back (their copies are removed).
+  private resetExternalEdits(): void {
+    this.externalEditToken = newEditToken();
+    const hadEdits = this.externalEdits.size > 0;
+    this.externalEdits.clear();
+    if (hadEdits) void window.mdzipStudio?.stopExternalEdits?.();
+  }
+
   readonly handleExtractFiles = window.mdzipStudio?.extractFiles
     ? async (request: MdzipExtractRequest): Promise<void> => {
         try {
           const result = await window.mdzipStudio!.extractFiles!({ files: request.files, selection: request.selection });
           if (!result || result.canceled) return;
           const count = result.fileCount ?? request.files.length;
-          this.statusMessage.set(count === 1
+          // One file goes through a Save dialog; several (or a folder) into a folder.
+          const folder = request.files.length > 1 || request.selection.folders.length > 0;
+          const message = count === 1 && !folder
             ? `Extracted to ${result.targetPath}`
-            : `Extracted ${count} files to ${result.targetPath}`);
+            : `Extracted ${count} file${count === 1 ? '' : 's'} to ${result.targetPath}`;
+          this.ngZone.run(() => {
+            this.lastExtract.set(result.targetPath ? { path: result.targetPath, folder, message } : null);
+            this.statusMessage.set(message);
+          });
         } catch (error) {
           this.statusMessage.set(error instanceof Error ? error.message : 'Could not extract the files');
         }
@@ -1459,6 +1855,8 @@ export class AppComponent implements OnDestroy {
   private readonly handleShowChangelogCommand = () => void this.openHelpDocument('changelog');
   private readonly handleSetMdDefaultCommand = () => void this.promptMarkdownDefaultManually();
   private readonly handleShowSystemIntegrationCommand = () => this.systemIntegrationOpen.set(true);
+  private readonly handleImportCommand = () => this.ngZone.run(() => void this.importDialog?.start());
+  private readonly handleExportCommand = () => this.ngZone.run(() => void this.openExportDialog());
   // Main process: the help window already open was asked for another section.
   private readonly handleHelpAnchorCommand = (event: Event) => {
     const detail = (event as CustomEvent<{ page?: string | null; anchor?: string | null }>).detail;
@@ -1468,6 +1866,7 @@ export class AppComponent implements OnDestroy {
   private readonly handlePackFolderCommand = () => void this.packFolder();
   private readonly handleInsertAgentsCommand = () => this.insertAgentsGuide();
   private readonly handleInsertReadmeCommand = () => this.insertReadme();
+  private readonly handleInsertWordTemplateCommand = () => this.ngZone.run(() => this.insertWordTemplate());
   private readonly handleUnpackMdzCommand = () => void this.unpackMdzToFolder();
   private readonly handleShowInFolderCommand = () => void this.showInFileManager();
   private readonly handleCopyPathCommand = () => void this.runPathAction('copy-path');
@@ -1481,6 +1880,10 @@ export class AppComponent implements OnDestroy {
     }
   };
   private readonly handlePrintCommand = () => void this.printDocument();
+  private readonly handleDocumentStylesCommand = (event: Event) => {
+    const on = (event as CustomEvent<unknown>).detail;
+    if (typeof on === 'boolean') this.documentStylesOn.set(on);
+  };
 
   private readonly handleKeyDown = (e: KeyboardEvent): void => {
     // Cmd on macOS, Ctrl elsewhere.
@@ -1518,11 +1921,38 @@ export class AppComponent implements OnDestroy {
       document.title = this.documentTitleDisplay() || 'MDZip Studio';
     });
 
+    // The document's own stylesheet, in the page; it applies only while the
+    // preview's panel has the studio-document-style class (documentStyleActive).
+    effect(() => {
+      const css = this.documentStyle()?.preview ?? '';
+      let element = document.getElementById('studio-document-style');
+      if (!css) {
+        element?.remove();
+        return;
+      }
+      if (!element) {
+        element = document.createElement('style');
+        element.id = 'studio-document-style';
+        document.head.appendChild(element);
+      }
+      // A fixed-position element stays inside the document.
+      element.textContent = `${PREVIEW_SCOPE} .preview-content { contain: layout; }\n${css}`;
+    });
+
     // Keep the native menu's document-only items (Save, Save As, Close, Show in
     // File Manager) enabled only while a document is open.
     effect(() => {
       window.mdzipStudio?.setDocumentOpen?.(!!this.currentArchive());
     });
+
+    // Files open in other apps belong to the document they came from.
+    effect(() => {
+      this.archiveService.opened();
+      untracked(() => this.resetExternalEdits());
+    });
+    this.removeExternalFileListener = window.mdzipStudio?.onExternalFileChanged?.(
+      (change) => this.ngZone.run(() => void this.applyExternalChange(change)),
+    ) ?? null;
 
     window.addEventListener('mdzip-studio:new-archive', this.handleNewArchiveCommand);
     window.addEventListener('mdzip-studio:open-archive', this.handleOpenArchiveCommand);
@@ -1535,10 +1965,13 @@ export class AppComponent implements OnDestroy {
     window.addEventListener('mdzip-studio:show-changelog', this.handleShowChangelogCommand);
     window.addEventListener('mdzip-studio:set-md-default', this.handleSetMdDefaultCommand);
     window.addEventListener('mdzip-studio:show-system-integration', this.handleShowSystemIntegrationCommand);
+    window.addEventListener('mdzip-studio:import-document', this.handleImportCommand);
+    window.addEventListener('mdzip-studio:export-document', this.handleExportCommand);
     window.addEventListener('mdzip-studio:help-anchor', this.handleHelpAnchorCommand);
     window.addEventListener('mdzip-studio:pack-folder', this.handlePackFolderCommand);
     window.addEventListener('mdzip-studio:insert-agents', this.handleInsertAgentsCommand);
     window.addEventListener('mdzip-studio:insert-readme', this.handleInsertReadmeCommand);
+    window.addEventListener('mdzip-studio:insert-word-template', this.handleInsertWordTemplateCommand);
     window.addEventListener('mdzip-studio:unpack-mdz', this.handleUnpackMdzCommand);
     window.addEventListener('mdzip-studio:show-in-folder', this.handleShowInFolderCommand);
     window.addEventListener('mdzip-studio:copy-path', this.handleCopyPathCommand);
@@ -1546,6 +1979,7 @@ export class AppComponent implements OnDestroy {
     window.addEventListener('mdzip-studio:reload-document', this.handleReloadDocumentCommand);
     window.addEventListener('mdzip-studio:toggle-line-numbers', this.handleToggleLineNumbersCommand);
     window.addEventListener('mdzip-studio:outline-position', this.handleOutlinePositionCommand);
+    window.addEventListener('mdzip-studio:document-styles', this.handleDocumentStylesCommand);
     window.addEventListener('mdzip-studio:print', this.handlePrintCommand);
     window.addEventListener('mdzip-studio:open-reading-view', this.handleOpenReadingViewCommand);
     document.addEventListener('keydown', this.handleKeyDown);
@@ -1579,6 +2013,8 @@ export class AppComponent implements OnDestroy {
           const drawn = this.nextPreviewRendered();
           this.readingWindowDrawn(this.showReaderInThisWindow(action), drawn);
         });
+      } else if (action?.kind === 'imported') {
+        this.ngZone.run(() => void this.openImported(action));
       }
     });
     this.removeReaderUpdateListener = window.mdzipStudio?.onReaderUpdate?.(
@@ -1619,6 +2055,7 @@ export class AppComponent implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.removeExternalFileListener?.();
     window.removeEventListener('mdzip-studio:new-archive', this.handleNewArchiveCommand);
     window.removeEventListener('mdzip-studio:open-archive', this.handleOpenArchiveCommand);
     window.removeEventListener('mdzip-studio:save-archive', this.handleSaveArchiveCommand);
@@ -1630,10 +2067,13 @@ export class AppComponent implements OnDestroy {
     window.removeEventListener('mdzip-studio:show-changelog', this.handleShowChangelogCommand);
     window.removeEventListener('mdzip-studio:set-md-default', this.handleSetMdDefaultCommand);
     window.removeEventListener('mdzip-studio:show-system-integration', this.handleShowSystemIntegrationCommand);
+    window.removeEventListener('mdzip-studio:import-document', this.handleImportCommand);
+    window.removeEventListener('mdzip-studio:export-document', this.handleExportCommand);
     window.removeEventListener('mdzip-studio:help-anchor', this.handleHelpAnchorCommand);
     window.removeEventListener('mdzip-studio:pack-folder', this.handlePackFolderCommand);
     window.removeEventListener('mdzip-studio:insert-agents', this.handleInsertAgentsCommand);
     window.removeEventListener('mdzip-studio:insert-readme', this.handleInsertReadmeCommand);
+    window.removeEventListener('mdzip-studio:insert-word-template', this.handleInsertWordTemplateCommand);
     window.removeEventListener('mdzip-studio:unpack-mdz', this.handleUnpackMdzCommand);
     window.removeEventListener('mdzip-studio:show-in-folder', this.handleShowInFolderCommand);
     window.removeEventListener('mdzip-studio:copy-path', this.handleCopyPathCommand);
@@ -1641,6 +2081,7 @@ export class AppComponent implements OnDestroy {
     window.removeEventListener('mdzip-studio:reload-document', this.handleReloadDocumentCommand);
     window.removeEventListener('mdzip-studio:toggle-line-numbers', this.handleToggleLineNumbersCommand);
     window.removeEventListener('mdzip-studio:outline-position', this.handleOutlinePositionCommand);
+    window.removeEventListener('mdzip-studio:document-styles', this.handleDocumentStylesCommand);
     window.removeEventListener('mdzip-studio:print', this.handlePrintCommand);
     window.removeEventListener('mdzip-studio:open-reading-view', this.handleOpenReadingViewCommand);
     this.removeReaderUpdateListener?.();
@@ -1768,6 +2209,83 @@ export class AppComponent implements OnDestroy {
     return new Promise((resolve) => this.previewRenderedWaiters.push(resolve));
   }
   private previewRenderedWaiters: Array<() => void> = [];
+
+  // File > Import...: the converted .mdz, open and unsaved (Save asks where
+  // to keep it), named after the file it came from.
+  async openImported(imported: ImportedDocument): Promise<void> {
+    this.isLoading.set(true);
+    await this.yieldForPaint();
+    let bytes: Uint8Array = new Uint8Array(imported.bytes);
+    // A Word document's options: its styles and/or the file itself.
+    const added: string[] = [];
+    if (imported.original) {
+      try {
+        const result = await addImportedWordFiles(bytes, imported.original);
+        bytes = result.bytes;
+        if (result.styles) added.push(`its Word styles (${result.styles})`);
+        if (result.stylesheet) added.push(`its look (${result.stylesheet})`);
+        if (result.original) added.push(`the original (${result.original})`);
+        if (result.stylesSkipped) added.push("not its Word styles (it couldn't be read as a Word document)");
+      } catch (error) {
+        added.push(`not its styles or the original (${error instanceof Error ? error.message : 'could not add them'})`);
+      }
+    }
+    await this.openDocumentBytes(bytes, imported.fileName, undefined, false, false, false);
+    const warnings = imported.warnings?.length ?? 0;
+    this.statusMessage.set(`Imported ${imported.fileName} (unsaved)`
+      + (added.length ? ` with ${added.join(' and ')}` : '')
+      + (warnings ? `, ${warnings} warning${warnings === 1 ? '' : 's'}` : ''));
+  }
+
+  // File > Export...: the dialog, for the document open here and the page
+  // being viewed (when it's another of an .mdz's documents than its entry point).
+  async openExportDialog(): Promise<void> {
+    const archive = this.currentArchive();
+    if (!archive || this.readerView()) return;
+    const flushed = await this.flushWorkspaceEdits();
+    const viewing = flushed?.state.currentPath ?? null;
+    const entryPoint = archive.manifest?.entryPoint ?? 'index.md';
+    const document = viewing && /\.(?:md|markdown)$/i.test(viewing) && viewing !== entryPoint ? viewing : null;
+    void this.exportDialog?.open(
+      this.workspaceFileName(),
+      this.sourceFormat() === 'mdz' ? 'mdz' : 'markdown',
+      archive.mode === 'project' ? 'project' : 'document',
+      document,
+    );
+  }
+
+  // The Export dialog's Export...: the document as it is now, unsaved edits
+  // included (the same flush as Save and Print). PDF goes through Print's
+  // rendering, the rest to Pandoc.
+  readonly runExport = async (choice: ExportChoice): Promise<ExportResult> => {
+    if (choice.format === 'pdf') {
+      if (this.printCapture() || this.pdfExportDone) return { error: true, message: 'Studio is already printing; try again in a moment.' };
+      const done = new Promise<ExportResult>((resolve) => (this.pdfExportDone = resolve));
+      await this.startPrintCapture('Making the PDF… (a long document can take a minute)');
+      return done;
+    }
+    const exportRun = window.mdzipStudio?.exportRun;
+    if (!exportRun) return { error: true, message: 'Export is available in the desktop app.' };
+    await this.flushWorkspaceEdits();
+    const bytes = this.latestWorkspaceBytes() ?? this.workspaceBytes();
+    if (!bytes) return { error: true, message: 'The document has no content.' };
+    const result = await exportRun({
+      format: choice.format,
+      bytes,
+      fileName: this.workspaceFileName(),
+      sourceFormat: this.sourceFormat() === 'mdz' ? 'mdz' : 'markdown',
+      combine: choice.combine,
+      document: choice.document,
+    });
+    if (!result.error && !result.canceled) this.statusMessage.set(`Exported ${result.filePath}`);
+    return result;
+  };
+
+  private finishPdfExport(result: ExportResult): void {
+    const done = this.pdfExportDone;
+    this.pdfExportDone = null;
+    done?.(result);
+  }
 
   canSaveReaderCopy(): boolean {
     return !!window.mdzipStudio?.saveCopy;
@@ -1957,6 +2475,39 @@ export class AppComponent implements OnDestroy {
     || this.headingAutoInserted()
     || (this.isDesktopShell() && !!this.currentArchive() && !this.hasFileOnDisk())
   ));
+
+  // The status bar's links after Extract…. Each says what happened, so a
+  // click is never silent (the links go once the message changes).
+  async openExtracted(): Promise<void> {
+    const extracted = this.lastExtract();
+    const open = window.mdzipStudio?.openExtracted;
+    if (!extracted || !open) {
+      this.statusMessage.set('Could not open it: this window has nothing extracted to open');
+      return;
+    }
+    try {
+      const result = await open();
+      this.statusMessage.set(result?.error
+        ? `Could not open ${extracted.path}: ${result.error}`
+        : `Opened ${extracted.path}`);
+    } catch (error) {
+      this.statusMessage.set(`Could not open ${extracted.path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  async showExtracted(): Promise<void> {
+    const extracted = this.lastExtract();
+    const reveal = window.mdzipStudio?.showInFolder;
+    if (!extracted || !reveal) return;
+    try {
+      const result = await reveal(extracted.path);
+      this.statusMessage.set(!result?.error
+        ? `Showed ${extracted.path} in its folder`
+        : result.error === 'not-found' ? `${extracted.path} is no longer there` : 'Could not open the file manager');
+    } catch (error) {
+      this.statusMessage.set(`Could not show it: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 
   async showInFileManager(): Promise<void> {
     this.closeMenu();
@@ -3170,6 +3721,7 @@ export class AppComponent implements OnDestroy {
     if (snapshot) {
       this.latestWorkspaceBytes.set(new Uint8Array(await snapshot.bytes.arrayBuffer()));
       this.syncManifestFromWorkspace(snapshot.workspace?.manifest);
+      void this.refreshDocumentStyle(snapshot.workspace?.manifest, this.latestWorkspaceBytes());
     }
     return snapshot ?? null;
   }
@@ -3182,8 +3734,16 @@ export class AppComponent implements OnDestroy {
     // Browser mode has no native menu (and no printPreview bridge): no-op in V1.
     if (!archive || !window.mdzipStudio?.printPreview) return;
     if (this.printCapture()) return; // a print is already in flight
+    this.pdfExportDone = null;
+    await this.startPrintCapture('Preparing print preview… (a long document can take a minute)');
+  }
 
-    this.statusMessage.set('Preparing print preview…');
+  // Renders the document for printing (or Export as PDF); onPrintCaptureReady
+  // takes it from there.
+  private async startPrintCapture(status: string): Promise<void> {
+    const archive = this.currentArchive();
+    if (!archive) return;
+    this.statusMessage.set(status);
     await this.yieldForPaint();
     try {
       // Same flush as Save, so unsaved typing prints.
@@ -3205,12 +3765,14 @@ export class AppComponent implements OnDestroy {
       this.printCapture.set({ bytes, fileName: this.workspaceFileName(), title });
       // A wedged render (bad bytes, hung asset) must not leave printing armed
       // forever; fail the capture and unmount if nothing hydrates in time.
+      // Generous, for long documents with many pictures.
       this.printCaptureTimer = setTimeout(
         () => this.ngZone.run(() => this.failPrintCapture('timed out rendering the document')),
-        15000
+        120000
       );
     } catch (error) {
       this.printCapture.set(null);
+      this.finishPdfExport({ error: true, message: error instanceof Error ? error.message : 'Could not make the PDF.' });
       this.statusMessage.set(`Print failed: ${error instanceof Error ? error.message : 'unknown error'}`);
     }
   }
@@ -3237,11 +3799,19 @@ export class AppComponent implements OnDestroy {
       const previewRoot = this.printWorkspaceRef?.nativeElement
         .querySelector<HTMLElement>('[data-ref="preview-content"], .preview-content');
       if (!capture || !previewRoot) throw new Error('could not capture the rendered document');
-      const html = await this.printService.buildPrintDocument(previewRoot, capture.title);
+      const documentCss = this.documentStylesOn() ? this.documentStyle()?.print ?? '' : '';
+      const html = await this.printService.buildPrintDocument(previewRoot, capture.title, undefined, documentCss);
+      if (this.pdfExportDone) {
+        const result = await window.mdzipStudio?.exportPdf?.({ html, fileName: this.workspaceFileName() });
+        this.statusMessage.set(result && !result.error && !result.canceled ? `Exported ${result.filePath}` : '');
+        this.finishPdfExport(result ?? { error: true, message: 'Could not make the PDF.' });
+        return;
+      }
       const result = await window.mdzipStudio?.printPreview?.({ html, title: capture.title });
       if (result?.error) throw new Error(result.error);
       this.statusMessage.set('Opened print preview');
     } catch (error) {
+      this.finishPdfExport({ error: true, message: error instanceof Error ? error.message : 'Could not make the PDF.' });
       this.statusMessage.set(`Print failed: ${error instanceof Error ? error.message : 'unknown error'}`);
     } finally {
       this.clearPrintCapture();
@@ -3256,6 +3826,7 @@ export class AppComponent implements OnDestroy {
     if (this.printCaptureHandled) return;
     this.printCaptureHandled = true;
     this.clearPrintCapture();
+    this.finishPdfExport({ error: true, message: `Could not make the PDF: ${message}` });
     this.statusMessage.set(`Print failed: ${message}`);
   }
 
@@ -3718,6 +4289,13 @@ export class AppComponent implements OnDestroy {
     void this.insertTemplateFile('readme');
   }
 
+  // Insert Word Template: Pandoc's own Word styles as styles/reference.docx,
+  // named in the manifest (pandoc.referenceDoc) so Export as Word uses them.
+  // You change the styles in Word; the notice says how.
+  insertWordTemplate(): void {
+    void this.insertTemplateFile('word');
+  }
+
   private async insertTemplateFile(kind: TemplateFileKind): Promise<void> {
     if (!this.canInsertTemplateFile()) return;
 
@@ -3735,9 +4313,17 @@ export class AppComponent implements OnDestroy {
 
     const { path } = TEMPLATE_FILES[kind];
     let alreadyExists: boolean;
+    let existingStyles: string | null = null;
     try {
       const opened = await MdzArchiveCore.open(bytes);
-      alreadyExists = opened.listPaths().some((entry) => entry.toLowerCase() === path.toLowerCase());
+      const has = (target: string) => opened.listPaths().some((entry) => entry.toLowerCase() === target.toLowerCase());
+      alreadyExists = has(path);
+      if (kind === 'word') {
+        // Styles the manifest already names count too, if they're there.
+        const named = manifestReferenceDoc(await opened.readManifest());
+        existingStyles = named && has(named) ? named : alreadyExists ? path : null;
+        alreadyExists = existingStyles !== null;
+      }
     } catch (error) {
       this.statusMessage.set(`Could not read archive: ${error instanceof Error ? error.message : 'unknown error'}`);
       return;
@@ -3745,6 +4331,8 @@ export class AppComponent implements OnDestroy {
 
     if (alreadyExists) {
       this.pendingInsertTemplate = kind;
+      this.pendingInsertTemplateKind.set(kind);
+      this.existingWordStyles.set(existingStyles);
       this.insertTemplateDialogOpen.set(true);
       return;
     }
@@ -3805,12 +4393,27 @@ export class AppComponent implements OnDestroy {
     const archive = this.currentArchive();
     if (!archive) return;
     const { path, assetUrl } = TEMPLATE_FILES[kind];
+    let wordCommand: string | null = null;
     try {
-      const response = await fetch(assetUrl, { cache: 'no-store' });
-      if (!response.ok) throw new Error(`Could not load ${assetUrl}`);
-      const content = await response.text();
-      const result = await MdzArchiveCore.addFile(bytes, path, content);
-      const nextBytes = new Uint8Array(await result.blob.arrayBuffer());
+      let nextBytes: Uint8Array;
+      if (kind === 'word') {
+        const template = await this.wordTemplateContent();
+        if (!template) return;
+        wordCommand = template.command;
+        // The manifest keeps every field it has; this adds pandoc.referenceDoc.
+        const manifest = (await (await MdzArchiveCore.open(bytes)).readManifest()) ?? {};
+        const pandoc = (manifest as { pandoc?: Record<string, unknown> }).pandoc ?? {};
+        const result = await MdzArchiveCore.updateFiles(bytes, [{ path, content: template.bytes }], [], {
+          manifest: { ...manifest, pandoc: { ...pandoc, referenceDoc: path } } as MdzManifest,
+        });
+        nextBytes = new Uint8Array(await result.blob.arrayBuffer());
+      } else {
+        const response = await fetch(assetUrl!, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`Could not load ${assetUrl}`);
+        const content = await response.text();
+        const result = await MdzArchiveCore.addFile(bytes, path, content);
+        nextBytes = new Uint8Array(await result.blob.arrayBuffer());
+      }
       // Route through the same full reopen every other bytes-replacing action
       // uses (Open/New/Pack Folder/post-save) instead of poking workspaceBytes
       // directly, so the nav tree, ArchiveService's document/asset lists, and
@@ -3828,6 +4431,7 @@ export class AppComponent implements OnDestroy {
           ? `Converted to MDZip and added ${path} — not saved yet`
           : `${replacing ? 'Replaced' : 'Added'} ${path}`
       );
+      if (kind === 'word') this.wordTemplateNotice.set({ kind: 'added', path, command: wordCommand });
     } catch (error) {
       this.isLoading.set(false);
       this.statusMessage.set(`Could not insert ${path}: ${error instanceof Error ? error.message : 'unknown error'}`);
@@ -3847,6 +4451,23 @@ export class AppComponent implements OnDestroy {
   cancelInsertTemplate(): void {
     this.insertTemplateDialogOpen.set(false);
     this.pendingInsertTemplate = null;
+  }
+
+  // Pandoc's own Word styles, from the main process; null (and the notice
+  // says why) when Pandoc isn't ready or failed.
+  private async wordTemplateContent(): Promise<{ bytes: Uint8Array; command: string | null } | null> {
+    const make = window.mdzipStudio?.wordTemplate;
+    if (!make) {
+      this.wordTemplateNotice.set({ kind: 'error', message: 'Insert Word Template needs the desktop app (it uses Pandoc).', fix: null });
+      return null;
+    }
+    const result = await make();
+    if (result.error || !result.bytes) {
+      this.wordTemplateNotice.set({ kind: 'error', message: result.message ?? "Couldn't make the Word template.", fix: result.fix ?? null });
+      return null;
+    }
+    // Marked as current Word, so Word doesn't open it in Compatibility Mode.
+    return { bytes: markAsCurrentWord(new Uint8Array(result.bytes)), command: result.command ?? null };
   }
 
   onInsertTemplateDialogVisibleChange(visible: boolean): void {
@@ -4132,6 +4753,8 @@ export class AppComponent implements OnDestroy {
     this.latestWorkspaceBytes.set(event.bytes);
     this.latestWorkspaceSnapshot.set(event.snapshot);
     this.syncManifestFromWorkspace(event.snapshot.workspace?.manifest);
+    this.viewingMarkdown.set(isMarkdownPath(event.snapshot.currentPath));
+    void this.refreshDocumentStyle(event.snapshot.workspace?.manifest, event.bytes);
     this.recomputeDocumentStats(event.snapshot);
     // Structural change: other documents' texts may have changed, so their
     // cached image-reference sets are stale.
@@ -4157,6 +4780,7 @@ export class AppComponent implements OnDestroy {
   // no longer fires for navigation (no archive bytes changed), so the
   // "Viewing <file>" label follows the selection from here instead.
   onWorkspaceSelectionChanged(snapshot: MdzipWorkspaceSnapshot): void {
+    this.viewingMarkdown.set(isMarkdownPath(snapshot.currentPath));
     if (this.readerView()) {
       // Moving to another help page: the strip follows it.
       this.reader.pageShown(snapshot.currentPath ?? null);
@@ -4244,6 +4868,35 @@ export class AppComponent implements OnDestroy {
     // to the host. Sync the new manifest into app state; it is patched into
     // the archive bytes at save time.
     this.syncManifestFromWorkspace(event.snapshot.workspace?.manifest);
+    void this.refreshDocumentStyle(event.snapshot.workspace?.manifest, this.latestWorkspaceBytes() ?? this.workspaceBytes());
+  }
+
+  // The document's stylesheet, read again when the document or its manifest
+  // changes (a stylesheet edited as text: when it's next saved or flushed).
+  private async refreshDocumentStyle(manifest: unknown, bytes: Uint8Array | null): Promise<void> {
+    const run = ++this.documentStyleRun;
+    const path = this.sourceFormat() === 'mdz' ? documentStylePath(manifest) : null;
+    try {
+      if (!path || !bytes) throw new Error('none');
+      const archive = await MdzArchiveCore.open(bytes);
+      const paths = new Set(archive.listPaths());
+      if (!paths.has(path)) throw new Error('none');
+      const css = await archive.readText(path);
+      const key = `${path}\n${css}`;
+      if (key === this.documentStyleKey && this.documentStyle()) return;
+      const read = async (file: string) => (paths.has(file) ? archive.readDataUri(file) : null);
+      const [preview, print] = await Promise.all([
+        scopeDocumentStyle(css, path, 'preview', read),
+        scopeDocumentStyle(css, path, 'print', read),
+      ]);
+      if (run !== this.documentStyleRun) return;
+      this.documentStyleKey = key;
+      this.documentStyle.set({ path, preview, print });
+    } catch {
+      if (run !== this.documentStyleRun) return;
+      this.documentStyleKey = '';
+      this.documentStyle.set(null);
+    }
   }
 
   // The editor's manifest view (Document properties form + JSON editor, from
@@ -4627,4 +5280,9 @@ export class AppComponent implements OnDestroy {
         return (a.label ?? '').localeCompare(b.label ?? '', undefined, { sensitivity: 'base' });
       });
   }
+}
+
+// A Markdown page of the document (not a picture, the manifest or another file).
+function isMarkdownPath(path: string | null | undefined): boolean {
+  return !path || /\.(?:md|markdown)$/i.test(path);
 }

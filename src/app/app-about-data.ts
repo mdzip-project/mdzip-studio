@@ -176,6 +176,12 @@ export const OPEN_SOURCE_LIBRARIES: LibraryInfo[] = [
     "homepage": "https://github.com/electron-userland/electron-builder"
   },
   {
+    "name": "fflate",
+    "version": "0.8.3",
+    "license": "MIT",
+    "homepage": "https://101arrowz.github.io/fflate"
+  },
+  {
     "name": "highlight.js",
     "version": "11.12.0",
     "license": "BSD-3-Clause",

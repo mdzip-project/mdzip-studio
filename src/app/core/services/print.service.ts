@@ -64,12 +64,14 @@ export class PrintService {
   async buildPrintDocument(
     previewRoot: HTMLElement,
     title: string,
-    resolveBlobUrl: BlobUrlResolver = blobUrlToDataUri
+    resolveBlobUrl: BlobUrlResolver = blobUrlToDataUri,
+    // The document's own stylesheet, fitted to .print-root (document-style.ts).
+    documentCss = ''
   ): Promise<string> {
     const clone = previewRoot.cloneNode(true) as HTMLElement;
     this.stripEditorArtifacts(clone);
     await this.inlineBlobImages(clone, resolveBlobUrl);
-    return this.wrapDocument(clone.innerHTML, title);
+    return this.wrapDocument(clone.innerHTML, title, documentCss);
   }
 
   // Removes editor-only DOM the preview wraps around content: image hydration
@@ -107,14 +109,17 @@ export class PrintService {
     }));
   }
 
-  private wrapDocument(bodyHtml: string, title: string): string {
+  private wrapDocument(bodyHtml: string, title: string, documentCss: string): string {
+    // After Studio's print styles, so the document's own win; it can't end
+    // the style element early.
+    const own = documentCss ? `\n<style>${documentCss.replace(/<\/(style)/gi, '<\\/$1')}</style>` : '';
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="script-src 'none'">
 <title>${escapeHtml(title)}</title>
-<style>${PRINT_CSS}</style>
+<style>${PRINT_CSS}</style>${own}
 </head>
 <body>
 <article class="print-root">${bodyHtml}</article>

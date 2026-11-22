@@ -244,7 +244,7 @@ describe('helper programs', () => {
     expect(installCommandFor(byId['pandoc'], 'linux')).toBeNull();
     expect(installCommandFor(byId['rsvg-convert'], 'win32')).toBeNull();
     expect(installCommandFor(byId['mmdc'], 'linux')).toBe('npm install -g @mermaid-js/mermaid-cli');
-    expect(installCommandFor(byId['markitdown-mdz'], 'win32')).toBe('py -m pip install --user markitdown-mdzip');
+    expect(installCommandFor(byId['markitdown-mdz'], 'win32')).toBe('py -m pip install --user "markitdown-mdzip[all]"');
     expect(installCommandFor(byId['mdz'], 'win32')).toBe('winget install --id MDZip.Cli --exact --source winget');
   });
 
@@ -253,7 +253,7 @@ describe('helper programs', () => {
     expect(upgradeCommandFor(byId['mdz'], 'win32')).toBe('winget upgrade --id MDZip.Cli --exact --source winget');
     expect(upgradeCommandFor(byId['typst'], 'darwin')).toBe('brew upgrade typst');
     expect(upgradeCommandFor(byId['mmdc'], 'linux')).toBe('npm install -g @mermaid-js/mermaid-cli@latest');
-    expect(upgradeCommandFor(byId['markitdown-mdz'], 'darwin')).toBe('python3 -m pip install --user --upgrade markitdown-mdzip');
+    expect(upgradeCommandFor(byId['markitdown-mdz'], 'darwin')).toBe('python3 -m pip install --user --upgrade "markitdown-mdzip[all]"');
     expect(upgradeCommandFor(byId['rsvg-convert'], 'win32')).toBeNull();
   });
 
