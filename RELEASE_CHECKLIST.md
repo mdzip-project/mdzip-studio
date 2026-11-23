@@ -51,6 +51,17 @@ workflow fails the build if the tag and `package.json` version disagree.
   the macOS job runs the tests on macOS, where `path` uses `/` only, and a
   test written on Windows can pass there and fail here (1.8.0's first build).
 
+### If the macOS job is cancelled without running
+
+GitHub's Mac runners are sometimes short: the job waits in the queue and is
+then cancelled with "The job was not acquired by Runner of type hosted even
+after multiple attempts". Nothing is wrong with the build. Re-run just the
+failed jobs; macOS and then checksums upload into the same draft:
+
+```bash
+gh run rerun <run-id> --failed
+```
+
 ### If a job fails (nothing published yet)
 
 A failed job leaves a **draft** with only some of the files. Nobody can see a
