@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-23
+
 ### Added
 - **File → Import…** (#33) turns a Word document, PowerPoint presentation, Excel workbook, PDF (text only), web page, EPUB, OpenDocument, Rich Text, Jupyter notebook, LaTeX, reStructuredText or Org file into an `.mdz`, pictures included. It opens unsaved, so Save asks where to keep it (in a new window when one is already open here). It opens in View with the outline on the left, to read through what came across, and Studio remembers the outline that way. Studio uses the best program you have for each kind of file: Pandoc for Word and most others, markitdown-mdz for PowerPoint, Excel and PDF, or the other one when only it's installed; you can choose. Get them in **Help → System Integration…**.
 - **File → Export…** (Ctrl+E, #41) saves the document as a Word document, PDF, a web page (one file, pictures inside), EPUB, OpenDocument, PowerPoint, Rich Text or LaTeX, unsaved changes included. For an `.mdz` with several pages, **Include the pages it links to** makes them one document (in Word, each starting on a new page); for a project, **Include all its documents** makes one file with each document a part of its own. Otherwise it exports the page you're viewing. Word uses the styles the document carries, if any. PDF is made by Studio from its own preview, as Print does, so it needs nothing installed; the other formats need Pandoc. **Open** and **Show in Folder** follow.
@@ -470,7 +472,8 @@ release-pipeline work that was tagged as 1.3.22 and 1.3.23 but never published.
 - First public release: create, view, edit, and validate MDZip archives, with
   Markdown editor/preview, asset browser, and manifest editing.
 
-[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/mdzip-project/mdzip-studio/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/mdzip-project/mdzip-studio/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/mdzip-project/mdzip-studio/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/mdzip-project/mdzip-studio/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/mdzip-project/mdzip-studio/compare/v1.5.1...v1.6.0
