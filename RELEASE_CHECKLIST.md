@@ -47,6 +47,28 @@ workflow fails the build if the tag and `package.json` version disagree.
   defaults to a **draft** release, so the two jobs converge on one draft (the jobs are chained with `needs:` so they never race to create it).
 - Last, the **checksums** job (`checksums.yml`) downloads the six installers from the draft and attaches `SHA256SUMS.txt`, which the Studio page on mdzip.org tells people to check downloads against. If it fails, or you replace an installer on the draft by hand, rerun it: `gh workflow run checksums.yml -f tag=v<version>`.
 - To test the Mac build without a release, run the **Mac build (test)** workflow (`mac-build.yml`; also runs on pushes to the `macOS` branch). It builds, verifies and uploads the `.dmg`/`.zip` as run artifacts, with no publishing.
+  Worth doing before tagging when a release adds code that handles file paths:
+  the macOS job runs the tests on macOS, where `path` uses `/` only, and a
+  test written on Windows can pass there and fail here (1.8.0's first build).
+
+### If a job fails (nothing published yet)
+
+A failed job leaves a **draft** with only some of the files. Nobody can see a
+draft: the app's updater, Chocolatey and Homebrew all wait for a published
+release. So keep the same version:
+
+```bash
+gh release delete v<version> --yes        # the draft
+git push --delete origin v<version>
+git tag -d v<version>
+# fix, commit, push main, then tag the fix with the same version:
+git tag -a v<version> -m "<version>"
+git push origin v<version>
+```
+
+The version commit from `npm version` stays as it is; the tag just moves to
+the fix. Use the next patch number only once a release has been **published**
+(see step 4 for a failed smoke test).
 
 Artifacts that must end up on the release (electron-builder produces all of
 these — do not add or rename any by hand):
@@ -94,8 +116,11 @@ on each platform you can reach:
 
 If a smoke test fails: delete the draft release, delete the tag
 (`git push --delete origin v<version>` and `git tag -d v<version>`), fix, and
-start again from step 2 with the next patch number. Never publish a draft that
-failed a smoke test.
+start again from step 2 with the next patch number. (Moving the tag to the fix
+and keeping the version, as for a failed job in step 3, also works while
+nothing is published, but a new number keeps any copy you've already handed
+out for testing apart from the fixed one.) Never publish a draft that failed a
+smoke test.
 
 ## 5. Publish
 
