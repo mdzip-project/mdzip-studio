@@ -203,7 +203,9 @@ function quoteArg(arg, platform) {
 
 // A file name with another extension: "Guide.mdz" → "Guide.docx".
 function withExtension(fileName, extension) {
-  const base = path.basename(String(fileName ?? ''));
+  // win32's basename splits at both \ and /, so a Windows path gives its
+  // name on macOS and Linux too.
+  const base = path.win32.basename(String(fileName ?? ''));
   const stem = base.replace(/\.[^.]+$/, '') || 'Document';
   return `${stem}.${extension}`;
 }

@@ -152,6 +152,7 @@ describe('withExtension', () => {
   it('swaps the extension, keeping the name', () => {
     expect(withExtension('Field Guide.mdz', 'docx')).toBe('Field Guide.docx');
     expect(withExtension('C:\\Docs\\notes.md', 'pdf')).toBe('notes.pdf');
+    expect(withExtension('/Users/me/notes.md', 'pdf')).toBe('notes.pdf');
     expect(withExtension('', 'html')).toBe('Document.html');
   });
 });
