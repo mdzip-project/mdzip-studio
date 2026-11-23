@@ -2,6 +2,7 @@
 // docs/studio-system-integration, system-integration.md in the bundled help).
 // A test checks every one is a heading id in the bundled copy.
 export const HELP_SECTIONS: Readonly<Record<string, string>> = {
+  studio: 'installing-mdzip-studio',
   markdown: 'opening-md-files',
   preview: 'explorer-previews',
   outlook: 'outlook-attachments',

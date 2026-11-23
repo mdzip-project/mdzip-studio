@@ -56,6 +56,28 @@ describe('AppComponent', () => {
     expect(component).toBeTruthy();
   });
 
+  it('says in About whether this is the portable or installed version, on Windows only', () => {
+    const build = () => runInInjectionContext(TestBed.inject(Injector), () => new AppComponent(
+      TestBed.inject(ArchiveService),
+      TestBed.inject(PrintService),
+      TestBed.inject(StorageService),
+      TestBed.inject(ValidationService),
+      TestBed.inject(NgZone),
+    ));
+    const kindOn = (bridge: object) => {
+      vi.stubGlobal('mdzipStudio', bridge);
+      const app = build();
+      const kind = app.installKind;
+      const debug = app.debugInfo().find((entry) => entry.label === 'Installation')?.value ?? null;
+      app.ngOnDestroy();
+      return [kind, debug];
+    };
+    expect(kindOn({ isElectron: true, platform: 'win32', portable: true })).toEqual(['Portable version', 'Portable version']);
+    expect(kindOn({ isElectron: true, platform: 'win32', portable: false })).toEqual(['Installed', 'Installed']);
+    expect(kindOn({ isElectron: true, platform: 'darwin', portable: false })).toEqual([null, null]);
+    expect(component.installKind).toBeNull();
+  });
+
   it('starts on the welcome screen with no document open', () => {
     expect(component.currentArchive()).toBeNull();
   });

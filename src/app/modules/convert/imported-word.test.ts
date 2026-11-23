@@ -55,6 +55,14 @@ describe('stylesOnlyCopy', () => {
     expect(strFromU8(files['word/settings.xml'])).toContain('compatibilityMode');
   });
 
+  it('gets numbering for its sample lists, though it had none', () => {
+    const files = unzipSync(stylesOnlyCopy(wordDocument())!);
+    expect(strFromU8(files['word/numbering.xml'])).toContain('<w:num w:numId="9801">');
+    expect(strFromU8(files['word/_rels/document.xml.rels'])).toContain('Target="numbering.xml"');
+    expect(strFromU8(files['[Content_Types].xml'])).toContain('PartName="/word/numbering.xml"');
+    expect(strFromU8(files['word/document.xml'])).toContain('<w:numId w:val="9801"/>');
+  });
+
   it('drops what was written: text, body pictures, footnotes, comments, authors, links', () => {
     const files = unzipSync(stylesOnlyCopy(wordDocument())!);
     const all = Object.entries(files).filter(([name]) => !name.startsWith('word/media/')).map(([, bytes]) => strFromU8(bytes)).join(' ');

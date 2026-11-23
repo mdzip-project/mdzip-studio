@@ -14,7 +14,7 @@ It's one Lua file, `mdz.lua`, used as a Pandoc [custom reader and writer](https:
 ## Setup
 
 1. Download `mdzip-pandoc-<version>.zip` from the [latest release](https://github.com/mdzip-project/mdzip-pandoc/releases/latest) and unzip it. It holds `mdz.lua`, the two filters and a copy of mdzip-core-lua, so there's nothing else to install.
-2. Pass the path of `mdz.lua` to `-f` or `-t`, for example `pandoc -f mdzip-pandoc-0.7.0/mdz.lua guide.mdz -o guide.docx`. Keep the `mdzip-core-lua` folder next to `mdz.lua`.
+2. Pass the path of `mdz.lua` to `-f` or `-t`, for example `pandoc -f mdzip-pandoc-0.8.0/mdz.lua guide.mdz -o guide.docx`. Keep the `mdzip-core-lua` folder next to `mdz.lua`.
 
 To use your own copy of mdzip-core-lua instead (a git checkout, or one installed with `luarocks install mdzip-core-lua`), set `MDZIP_LUA_PATH` to its `src` folder, or put the `mdzip-core-lua` folder next to `mdz.lua` or next to the folder `mdz.lua` is in.
 
@@ -27,6 +27,7 @@ Tested with Pandoc 3.13 (Lua 5.4).
 - A **project-mode** archive, a collection of separate documents, is converted one document at a time: the entry point, with a warning naming how many were left out, or the one you name. `+combine` makes the whole collection one file, each document a part of its own: see [A project as one file](#a-project-as-one-file).
 - **Images** are read from inside the archive, never from the web or from files next to the archive, and go into Pandoc's media bag. So Word, EPUB and PDF output include them, and HTML does with `--embed-resources` (or `--extract-media`). This covers Markdown images and `<img>` tags in raw HTML, including ones in a document in a subfolder.
 - The archive's **manifest** fills in metadata the document doesn't set itself: `title`, `author`, `lang`, `description`, `keywords` and `cover`. `cover` is the path of the manifest's cover picture in the media bag; in HTML, `mdz-images.lua` turns it into a link preview picture (see below).
+- When the document starts with its title as a level-1 heading (`# Trip Notes`, with the title `Trip Notes`), that heading is left out: Pandoc shows the title as a title block above the document (Word's Title style, a web page's title header), so it would appear twice. A different first heading stays.
 - A damaged or invalid archive stops Pandoc with the MDZip error code, for example `ERR_ENTRYPOINT_MISSING` or `ERR_ZIP_INVALID`.
 
 The Markdown is read as CommonMark with Pandoc's extensions (`commonmark_x`), so it comes out the way MDZip Studio, VS Code and Obsidian show it: a list or heading right after a paragraph is a list or heading, heading identifiers are the ones editors link to (`## AGENTS.md` is `#agentsmd`), and an image on its own line stays an image, not a figure captioned with its alt text. Footnotes, definition lists, math, fenced divs and `{width=50%}` attributes still work. Add a switch to the format to change it:
@@ -40,7 +41,7 @@ The Markdown is read as CommonMark with Pandoc's extensions (`commonmark_x`), so
 | `-f mdz.lua+combine+orphans` | Also add the documents nothing links to (a project's collection always has them) |
 | `-f mdz.lua+combine+pagebreaks` | Start each document on a new page |
 
-Raw HTML in the archive passes through to HTML output, as it does with Pandoc's own readers. For an `.mdz` from someone you don't trust, use `-raw_html`: it removes raw HTML, `on...` event-handler attributes (`{onclick="..."}`) and `javascript:`, `vbscript:` and `data:text/html` links, with any of the reading switches. (Pandoc's own CommonMark and GFM readers ignore `-raw_html`, a [known Pandoc issue](https://github.com/jgm/pandoc/issues/8305), so `mdz.lua` does it itself.) For HTML you publish, a sanitizer is still the safer choice.
+Raw HTML in the archive passes through to HTML output, as it does with Pandoc's own readers. HTML that stands for something Markdown has no syntax for is read as that thing, so Word and PDF output keep it instead of dropping it: a `<table>` (merged cells, or headings and lists in cells), an `<img>` with a size, a `<figure>` with its caption, and `<u>`, `<sup>`, `<sub>`, `<mark>`, `<del>`, `<s>`, `<b>`, `<i>` and `<span class="mark">` or `"smallcaps"` around text. Pandoc's GFM and CommonMark writers write these as HTML, and so does `mdz.lua` with its switches on (see [Keeping the look, or plain Markdown](#keeping-the-look-or-plain-markdown)). For an `.mdz` from someone you don't trust, use `-raw_html`: it removes raw HTML, `on...` event-handler attributes (`{onclick="..."}`) and `javascript:`, `vbscript:` and `data:text/html` links, with any of the reading switches. (Pandoc's own CommonMark and GFM readers ignore `-raw_html`, a [known Pandoc issue](https://github.com/jgm/pandoc/issues/8305), so `mdz.lua` does it itself.) For HTML you publish, a sanitizer is still the safer choice.
 
 ### Another document
 
@@ -107,8 +108,44 @@ pandoc -f mdz.lua guide.mdz -t docx.lua -o guide.docx
 - Web images (`https:`) stay links. An image that can't be found stays as written, with a warning.
 - The manifest records the title, the first author, `lang`, `description` and `keywords` from the document's metadata. The title is also added as a heading when the document has no level-1 heading, since Markdown output doesn't keep metadata.
 - Pandoc has to write to a file: use `-o name.mdz`.
+- A link inside a link, as in a Word table of contents, keeps the inner one's text: Markdown has no nested links.
+- From Word, a picture sharing a line with a shape or another picture (a logo on a banner) is kept: Pandoc's Word reader would take only the first, so `mdz.lua` reads the file again with them apart. Shapes themselves aren't kept, but with `image_sizes` a picture drawn on a shape filled with a colour or gradient (a white logo on a blue banner) goes in a `<div>` with that fill behind it. A heading with only pictures in it becomes a paragraph.
+- A picture with a caption becomes the picture with the caption as a paragraph under it (GFM and CommonMark have no figures).
 
 The result passes `mdz validate`.
+
+### Keeping the look, or plain Markdown
+
+Some of what a document can have doesn't exist in Markdown. By default `mdz.lua` writes plain Markdown and leaves it out. Turn on any of these switches to keep it as HTML in the Markdown instead, so the `.mdz` looks more like the original and Word output (with `docx.lua`) gets it back. To keep all of it:
+
+```sh
+pandoc report.docx -t mdz.lua+image_sizes+html_tables+table_look+html_formatting -o report.mdz
+```
+
+MDZip Studio's Import turns all four on unless you turn them off, and shows the command it runs.
+
+| Switch | On | Off (the default) |
+|---|---|---|
+| `image_sizes` | Pictures at the size the document shows them, as `<img style="width:…">`. From Word, older pictures (VML, from Word 2003 and earlier) too: Pandoc's Word reader ignores their size, so `mdz.lua` reads it from the `.docx`. A picture drawn on a filled shape keeps the fill behind it | Plain `![]()` images, shown at their own size |
+| `html_tables` | Tables Markdown can't write (merged cells; headings, lists or several paragraphs in a cell) as HTML, as Pandoc writes them | Made into Markdown tables: each cell on one line (headings bold, list items joined with semicolons), a merged cell split into that cell and empty ones |
+| `table_look` | From Word: shaded cells (`style="background-color:#CCCCCC"`, Word's patterns as the flat colour they look like), and the lines (`data-word-borders`) or Word table style (`data-word-style`) of tables that differ from most of the document's. Such a table is written as HTML. `docx.lua` puts them back | Nothing kept |
+| `html_formatting` | Underline, superscript, subscript, small caps and highlight, as `<u>`, `<sup>` and so on | Plain text |
+
+The lines most of a Word document's tables share aren't kept per table: they belong in the reference document's `Table` style (see [Word styles carried in the `.mdz`](#word-styles-carried-in-the-mdz)), so those tables stay Markdown tables when they can. MDZip Studio's Import makes such a reference document from the Word file.
+
+### Conversion notes
+
+`+notes` adds `sources/conversion-notes.md` to the archive, a note about the conversion that isn't part of the document:
+
+- **Where it came from:** the original's file name (not its folder), kind, size and SHA-1; when it was converted (`SOURCE_DATE_EPOCH` if set), with which Pandoc and `mdz.lua`; which look switches were on.
+- **What didn't come across**, from Word: comments (left out), tracked changes (accepted), shapes and text boxes, fields (TOC, PAGE: their last text, no longer updating), charts, SmartArt, embedded objects, several columns, headers and footers, macros. Each is listed only when the file has it.
+- **What's in the archive:** the document, its tables and footnotes, and the pictures under `images/`.
+
+```sh
+pandoc report.docx -t mdz.lua+notes -o report.mdz
+```
+
+MDZip Studio's Import turns it on unless you turn it off, and adds what it did: the files it added and Pandoc's warnings.
 
 ## GitHub Action
 

@@ -85,9 +85,10 @@ import {
 import { ImportDialogComponent, ImportedDocument } from './modules/convert/import-dialog.component';
 import { ExportDialogComponent } from './modules/convert/export-dialog.component';
 import { CommandBoxComponent } from './modules/convert/command-box.component';
-import { markAsCurrentWord } from './core/word-template';
+import { markAsCurrentWord, stylesOnlyCopy } from './core/word-template';
 import { documentStylePath, PREVIEW_SCOPE, scopeDocumentStyle } from './core/document-style';
 import { addImportedWordFiles } from './modules/convert/imported-word';
+import { addConversionNotes } from './modules/convert/conversion-notes';
 import { ConvertTool, ExportChoice, ExportOptions, ExportResult, ImportPick, ImportResult } from './modules/convert/convert-types';
 
 type AssetViewMode = 'tiles' | 'list';
@@ -102,6 +103,8 @@ interface ReaderSnapshot {
 type ArchiveTreeKind = 'folder' | 'document' | 'asset';
 type SaveValidationState = 'unchecked' | 'valid' | 'invalid';
 const MARKDOWN_IMAGE_SOURCE_ATTR = 'mdzip-studio-src';
+// Print and Export as PDF give up when rendering makes no progress this long.
+const PRINT_STALL_MS = 60000;
 // Marks a preview container once its copy listener is bound, so a re-mount
 // (same node reused across renders) doesn't stack duplicate listeners.
 const COPY_IMAGES_BOUND_ATTR = 'data-mdzip-copy-bound';
@@ -324,6 +327,7 @@ type PackSource =
 
 interface ElectronBridge {
   isElectron?: boolean;
+  portable?: boolean;
   platform?: string;
   arch?: string;
   versions?: {
@@ -423,6 +427,7 @@ interface ElectronBridge {
   checkSystemIntegration?: (id: string) => Promise<unknown>;
   getHelperLatestVersions?: () => Promise<HelperLatestVersions>;
   runSystemIntegrationAction?: (payload: { action: SystemIntegrationAction; id?: string }) => Promise<SystemIntegrationActionResult>;
+  onSystemIntegrationFinished?: (callback: (data: { action: SystemIntegrationAction; id: string; code: number | null }) => void) => () => void;
   viewSettings?: {
     colorScheme?: MdzipColorSchemePreference;
     previewWidth?: MdzipPreviewWidthChoice;
@@ -721,6 +726,7 @@ interface ArchiveTreeData {
                 (colorSchemePreferenceChanged)="onColorSchemePreferenceChanged($event)"
                 (previewWidthChanged)="onPreviewWidthChanged($event)"
                 (outlineVisibilityChanged)="onOutlineVisibilityChanged($event)"
+                (outlinePositionChanged)="onOutlinePositionChanged($event)"
                 (outlineWidthChanged)="onOutlineWidthChanged($event)"
                 (changed)="onWorkspaceChanged($event)"
                 (selectionChanged)="onWorkspaceSelectionChanged($event)"
@@ -757,6 +763,16 @@ interface ArchiveTreeData {
             </span>
           } @else {
             <span class="statusbar-message" [class.statusbar-url]="displayStatus().kind === 'url'">{{ displayStatus().text }}</span>
+            @if (printCapture()) {
+              <span class="statusbar-links">
+                @if (printProgress(); as progress) {
+                  <progress class="statusbar-progress" [value]="progress.loaded" [max]="progress.total"
+                            [attr.aria-label]="'Pictures loaded for printing'"></progress>
+                  <span class="statusbar-progress-text">Pictures {{ progress.loaded }} of {{ progress.total }}</span>
+                }
+                <button type="button" class="statusbar-link" (mousedown)="$event.preventDefault()" (click)="cancelPrintCapture()">Cancel</button>
+              </span>
+            }
             @if (displayStatus().kind === 'message' && lastExtract(); as extracted) {
               @if (extracted.message === statusMessage()) {
                 <span class="statusbar-links">
@@ -987,7 +1003,7 @@ interface ArchiveTreeData {
               </picture>
               <div class="about-body">
                 <h2>MDZip Studio</h2>
-                <p class="about-version">Version {{ appVersion }}</p>
+                <p class="about-version">Version {{ appVersion }}@if (installKind) { · {{ installKind }}}</p>
                 <p>A Markdown editor that saves as <strong>MDZip</strong> when you need it - portable documents with embedded images and assets. It uses CommonMark-based editing, GFM-style preview rendering, HTML sanitization, highlighted fenced code blocks, and inline Mermaid diagrams.</p>
                 <div class="about-links">
                   <a href="https://mdzip.org" target="_blank" rel="noopener">mdzip.org</a>
@@ -1104,6 +1120,9 @@ interface ArchiveTreeData {
           [imageHydrationAnimation]="'off'"
           [markdownExtensions]="markdownExtensions"
           [navigationButtonActive]="false"
+          [progressiveTextRendering]="false"
+          [eagerImages]="true"
+          (assetsProgress)="onPrintCaptureProgress($event)"
           (assetsHydrated)="onPrintCaptureReady()"
           (failed)="onPrintCaptureFailed($event)"
         />
@@ -1347,6 +1366,10 @@ export class AppComponent implements OnDestroy {
   ];
 
   readonly appVersion = APP_VERSION;
+  // Windows only: the portable version or an installed one (Help > About).
+  readonly installKind = window.mdzipStudio?.platform === 'win32'
+    ? (window.mdzipStudio.portable ? 'Portable version' : 'Installed')
+    : null;
   // True while the editor holds unsaved edits, driven by the workspace's
   // (dirtyChanged) event. Powers the Save button's emphasis and the
   // unsaved-changes guard on close/new/open.
@@ -1432,6 +1455,8 @@ export class AppComponent implements OnDestroy {
   // it went (null: an ordinary print, to the print preview).
   private pdfExportDone: ((result: ExportResult) => void) | null = null;
   private printCaptureTimer: ReturnType<typeof setTimeout> | null = null;
+  // The print copy's pictures as they load, for the status bar's progress bar.
+  readonly printProgress = signal<{ loaded: number; total: number } | null>(null);
   readonly mdDefaultPromptOpen = signal(false);
   // Help > System Integration... (studio#11).
   readonly systemIntegrationOpen = signal(false);
@@ -1492,6 +1517,7 @@ export class AppComponent implements OnDestroy {
     const bridge = window.mdzipStudio;
     const entries: Array<{ label: string; value: string }> = [
       { label: 'MDZip Studio', value: APP_VERSION },
+      ...(this.installKind ? [{ label: 'Installation', value: this.installKind }] : []),
       { label: 'Shell', value: this.isDesktopShell() ? 'Electron (desktop)' : 'Browser' },
       ...this.firstPartyLibraries.map((lib) => ({ label: lib.name, value: lib.version })),
       { label: 'Angular', value: NG_VERSION.full },
@@ -1514,6 +1540,9 @@ export class AppComponent implements OnDestroy {
   readonly isLoading = signal(false);
   private workspaceLoadPending = false;
   private workspaceLoadTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  // What to do once the workspace has the document just opened (it parses the
+  // bytes itself, after openDocumentBytes returns): an import switches to View.
+  private afterWorkspaceLoad: (() => void) | null = null;
   private pendingConversionAction: MdzipConversionAction | null = null;
   private pendingConversionContext: MdzipConversionContext | null = null;
   // One-shot status held across the conversion's own re-render (see onWorkspaceChanged).
@@ -2219,6 +2248,9 @@ export class AppComponent implements OnDestroy {
     let bytes: Uint8Array = new Uint8Array(imported.bytes);
     // A Word document's options: its styles and/or the file itself.
     const added: string[] = [];
+    // For the conversion notes: [path, what it is], and what wasn't added.
+    const files: [string, string][] = [];
+    const skipped: string[] = [];
     if (imported.original) {
       try {
         const result = await addImportedWordFiles(bytes, imported.original);
@@ -2227,11 +2259,33 @@ export class AppComponent implements OnDestroy {
         if (result.stylesheet) added.push(`its look (${result.stylesheet})`);
         if (result.original) added.push(`the original (${result.original})`);
         if (result.stylesSkipped) added.push("not its Word styles (it couldn't be read as a Word document)");
+        if (result.styles) files.push([result.styles, 'a Word template with its styles, page setup, headers and footers, which Export… as Word uses']);
+        if (result.stylesheet) files.push([result.stylesheet, 'its fonts, colours and spacing as the document\'s stylesheet']);
+        if (result.original) files.push([result.original, 'the original file, unchanged']);
+        if (result.stylesSkipped) skipped.push("its Word styles: it couldn't be read as a Word document");
       } catch (error) {
-        added.push(`not its styles or the original (${error instanceof Error ? error.message : 'could not add them'})`);
+        const reason = error instanceof Error ? error.message : 'could not add them';
+        added.push(`not its styles or the original (${reason})`);
+        skipped.push(`its styles or the original: ${reason}`);
       }
     }
-    await this.openDocumentBytes(bytes, imported.fileName, undefined, false, false, false);
+    if (imported.notes) {
+      try {
+        bytes = await addConversionNotes(bytes, {
+          info: imported.notes, studioVersion: APP_VERSION, added: files, skipped, warnings: imported.warnings ?? [],
+        });
+      } catch {
+        // The document matters more than its notes: open it without them.
+      }
+    }
+    // An imported document opens in View with the outline on the left, to
+    // read through what came across. Saved, as if chosen with the outline
+    // button, so View > Outline on the Left and new windows agree.
+    this.outlineOptions.update((options) => ({ ...options, visible: true, position: 'left' }));
+    window.mdzipStudio?.setViewSetting?.('outlineVisible', true);
+    window.mdzipStudio?.setViewSetting?.('outlinePosition', 'left');
+    await this.openDocumentBytes(bytes, imported.fileName, undefined, false, false, false, false,
+      () => void this.workspaceEditor?.setLayout('preview'));
     const warnings = imported.warnings?.length ?? 0;
     this.statusMessage.set(`Imported ${imported.fileName} (unsaved)`
       + (added.length ? ` with ${added.join(' and ')}` : '')
@@ -2262,7 +2316,7 @@ export class AppComponent implements OnDestroy {
     if (choice.format === 'pdf') {
       if (this.printCapture() || this.pdfExportDone) return { error: true, message: 'Studio is already printing; try again in a moment.' };
       const done = new Promise<ExportResult>((resolve) => (this.pdfExportDone = resolve));
-      await this.startPrintCapture('Making the PDF… (a long document can take a minute)');
+      await this.startPrintCapture('Making the PDF…');
       return done;
     }
     const exportRun = window.mdzipStudio?.exportRun;
@@ -3365,7 +3419,8 @@ export class AppComponent implements OnDestroy {
     });
   }
 
-  private async openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly = false, recordRecent = true, showNavigation = false, reading = false): Promise<void> {
+  private async openDocumentBytes(bytes: Uint8Array, name: string, filePath?: string, readOnly = false, recordRecent = true, showNavigation = false, reading = false, afterLoad?: () => void): Promise<void> {
+    this.afterWorkspaceLoad = afterLoad ?? null;
     this.readOnly.set(readOnly);
     this.readerView.set(reading);
     if (!reading) this.readerCopy = null;
@@ -3476,11 +3531,12 @@ export class AppComponent implements OnDestroy {
     this.workspaceLoadTimeoutId = setTimeout(() => {
       this.workspaceLoadPending = false;
       this.workspaceLoadTimeoutId = null;
+      this.afterWorkspaceLoad = null;
       this.isLoading.set(false);
     }, 30_000);
   }
 
-  private clearWorkspaceLoad(): void {
+  private clearWorkspaceLoad(loaded = true): void {
     if (!this.workspaceLoadPending) return;
     this.workspaceLoadPending = false;
     if (this.workspaceLoadTimeoutId !== null) {
@@ -3488,6 +3544,9 @@ export class AppComponent implements OnDestroy {
       this.workspaceLoadTimeoutId = null;
     }
     this.isLoading.set(false);
+    const after = this.afterWorkspaceLoad;
+    this.afterWorkspaceLoad = null;
+    if (loaded) after?.();
   }
 
   private updateArchivePath(filePath: string | undefined, fileName: string | undefined): void {
@@ -3736,7 +3795,7 @@ export class AppComponent implements OnDestroy {
     if (!archive || !window.mdzipStudio?.printPreview) return;
     if (this.printCapture()) return; // a print is already in flight
     this.pdfExportDone = null;
-    await this.startPrintCapture('Preparing print preview… (a long document can take a minute)');
+    await this.startPrintCapture('Preparing print preview…');
   }
 
   // Renders the document for printing (or Export as PDF); onPrintCaptureReady
@@ -3763,14 +3822,9 @@ export class AppComponent implements OnDestroy {
       }
 
       this.printCaptureHandled = false;
+      this.printProgress.set(null);
       this.printCapture.set({ bytes, fileName: this.workspaceFileName(), title });
-      // A wedged render (bad bytes, hung asset) must not leave printing armed
-      // forever; fail the capture and unmount if nothing hydrates in time.
-      // Generous, for long documents with many pictures.
-      this.printCaptureTimer = setTimeout(
-        () => this.ngZone.run(() => this.failPrintCapture('timed out rendering the document')),
-        120000
-      );
+      this.armPrintCaptureTimer();
     } catch (error) {
       this.printCapture.set(null);
       this.finishPdfExport({ error: true, message: error instanceof Error ? error.message : 'Could not make the PDF.' });
@@ -3819,6 +3873,33 @@ export class AppComponent implements OnDestroy {
     }
   }
 
+  // A wedged render (bad bytes, a picture that never loads) must not leave
+  // printing armed forever: fail when nothing has happened for a minute.
+  // Each picture that loads starts the minute again, so a long document with
+  // many pictures takes as long as it needs.
+  private armPrintCaptureTimer(): void {
+    if (this.printCaptureTimer !== null) clearTimeout(this.printCaptureTimer);
+    this.printCaptureTimer = setTimeout(
+      () => this.ngZone.run(() => this.failPrintCapture('nothing happened for a minute while rendering the document')),
+      PRINT_STALL_MS
+    );
+  }
+
+  onPrintCaptureProgress(progress: { loaded: number; total: number }): void {
+    if (this.printCaptureHandled) return;
+    this.printProgress.set(progress);
+    this.armPrintCaptureTimer();
+  }
+
+  // The status bar's Cancel while preparing: stop, print nothing.
+  cancelPrintCapture(): void {
+    if (this.printCaptureHandled || !this.printCapture()) return;
+    this.printCaptureHandled = true;
+    this.clearPrintCapture();
+    this.finishPdfExport({ canceled: true });
+    this.statusMessage.set('Print canceled');
+  }
+
   onPrintCaptureFailed(error: unknown): void {
     this.failPrintCapture(error instanceof Error ? error.message : 'the document could not be rendered');
   }
@@ -3836,6 +3917,7 @@ export class AppComponent implements OnDestroy {
       clearTimeout(this.printCaptureTimer);
       this.printCaptureTimer = null;
     }
+    this.printProgress.set(null);
     this.printCapture.set(null);
   }
 
@@ -4467,8 +4549,11 @@ export class AppComponent implements OnDestroy {
       this.wordTemplateNotice.set({ kind: 'error', message: result.message ?? "Couldn't make the Word template.", fix: result.fix ?? null });
       return null;
     }
-    // Marked as current Word, so Word doesn't open it in Compatibility Mode.
-    return { bytes: markAsCurrentWord(new Uint8Array(result.bytes)), command: result.command ?? null };
+    // With the same samples as a template made from a Word document (lists
+    // included, which Pandoc's lacks), and marked as current Word, so Word
+    // doesn't open it in Compatibility Mode.
+    const bytes = new Uint8Array(result.bytes);
+    return { bytes: stylesOnlyCopy(bytes) ?? markAsCurrentWord(bytes), command: result.command ?? null };
   }
 
   onInsertTemplateDialogVisibleChange(visible: boolean): void {
@@ -4856,6 +4941,14 @@ export class AppComponent implements OnDestroy {
     window.mdzipStudio?.setViewSetting?.('outlineVisible', visible);
   }
 
+  // The outline button goes left, right, off: a change of side is saved like
+  // View > Outline on the Left, whose check mark follows it.
+  onOutlinePositionChanged(position: MdzipOutlinePosition): void {
+    if (this.readerView()) return;
+    this.outlineOptions.update((options) => ({ ...options, position }));
+    window.mdzipStudio?.setViewSetting?.('outlinePosition', position);
+  }
+
   onOutlineWidthChanged(width: number): void {
     if (this.readerView()) return;
     const rounded = Math.round(width);
@@ -4946,7 +5039,7 @@ export class AppComponent implements OnDestroy {
   }
 
   onWorkspaceFailed(error: unknown): void {
-    this.clearWorkspaceLoad();
+    this.clearWorkspaceLoad(false);
     this.statusMessage.set(error instanceof Error ? error.message : 'MDZip editor failed');
   }
 

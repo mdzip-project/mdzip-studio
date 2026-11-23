@@ -11,6 +11,12 @@ const {
   extensionList,
   freshPath,
   helperStatus,
+  parseMissingReaders,
+  requirementFor,
+  requirementInstalled,
+  uninstallCommandFor,
+  terminalScript,
+  parseExitCode,
   installCommandFor,
   outlookStatus,
   parseRegValues,
@@ -19,6 +25,9 @@ const {
   previewOverrideKeys,
   setOutlookAllowed,
   setPreviewForUser,
+  STUDIO_PACKAGES,
+  studioInstallPaths,
+  studioInstallStatus,
   userChoiceProgId,
   withExtension,
   withoutExtension,
@@ -287,11 +296,62 @@ describe('helper programs', () => {
   it('checks a program with --version', async () => {
     const helper = HELPER_PROGRAMS[0];
     expect(await helperStatus(helper, async () => ({ code: 0, stdout: 'pandoc 3.14', stderr: '' })))
-      .toEqual({ id: 'pandoc', installed: true, version: '3.14' });
+      .toEqual({ id: 'pandoc', installed: true, version: '3.14', missingReaders: [] });
     expect(await helperStatus(helper, async () => ({ code: 1, stdout: '', stderr: 'not recognized' })))
-      .toEqual({ id: 'pandoc', installed: false, version: null });
+      .toEqual({ id: 'pandoc', installed: false, version: null, missingReaders: [] });
     expect(await helperStatus(helper, async () => { throw new Error('ENOENT'); }))
-      .toEqual({ id: 'pandoc', installed: false, version: null });
+      .toEqual({ id: 'pandoc', installed: false, version: null, missingReaders: [] });
+  });
+
+  it('knows what installs each program, and checks it is there', async () => {
+    const find = (id) => HELPER_PROGRAMS.find((h) => h.id === id);
+    expect(requirementFor(find('markitdown-mdz'), 'win32')).toMatchObject({ name: 'Python', always: true, command: 'py' });
+    expect(requirementFor(find('markitdown-mdz'), 'darwin')).toMatchObject({ name: 'Python', command: 'python3' });
+    expect(requirementFor(find('mmdc'), 'linux')).toMatchObject({ name: 'Node.js', always: true, command: 'npm' });
+    expect(requirementFor(find('pandoc'), 'win32')).toMatchObject({ name: 'winget', always: false });
+    expect(requirementFor(find('pandoc'), 'darwin')).toMatchObject({ name: 'Homebrew' });
+    expect(requirementFor(find('mdz'), 'darwin')).toBeNull(); // no package here: a download page
+    // Every program with an installer says what installing it costs, except rsvg-convert (Homebrew's libraries vary).
+    expect(HELPER_PROGRAMS.filter((h) => !h.size).map((h) => h.id)).toEqual(['rsvg-convert']);
+
+    const calls = [];
+    const run = async (command, args) => { calls.push([command, ...args]); return { code: command === 'py' ? 0 : 1, stdout: '', stderr: '' }; };
+    expect(await requirementInstalled(find('markitdown-mdz'), 'win32', run)).toBe(true);
+    expect(await requirementInstalled(find('mmdc'), 'win32', run)).toBe(false);
+    expect(await requirementInstalled(find('mdz'), 'darwin', run)).toBe(true);
+    expect(calls).toEqual([['py', '--version'], ['npm', '--version']]);
+    expect(await requirementInstalled(find('mmdc'), 'win32', async () => { throw new Error('ENOENT'); })).toBe(false);
+  });
+
+  it('uninstalls with the same tool that installed, without its own question for pip', () => {
+    const find = (id) => HELPER_PROGRAMS.find((h) => h.id === id);
+    expect(uninstallCommandFor(find('pandoc'), 'win32')).toBe('winget uninstall --id JohnMacFarlane.Pandoc --exact --source winget');
+    expect(uninstallCommandFor(find('pandoc'), 'darwin')).toBe('brew uninstall pandoc');
+    expect(uninstallCommandFor(find('mmdc'), 'linux')).toBe('npm uninstall -g @mermaid-js/mermaid-cli');
+    expect(uninstallCommandFor(find('markitdown-mdz'), 'win32')).toBe('py -m pip uninstall -y markitdown-mdzip');
+    expect(uninstallCommandFor(find('markitdown-mdz'), 'darwin')).toBe('python3 -m pip uninstall -y markitdown-mdzip');
+    expect(uninstallCommandFor(find('mdz'), 'darwin')).toBeNull();
+    expect(find('mmdc').uninstallNote).toMatch(/puppeteer/);
+  });
+
+  it('ends a terminal command by writing its exit code where Studio watches', () => {
+    expect(terminalScript('npm uninstall -g x', 'Uninstalling X', 'win32', 'C:/Temp/m.done'))
+      .toBe('title Uninstalling X && call npm uninstall -g x & >"C:/Temp/m.done" echo !errorlevel!');
+    expect(terminalScript('brew uninstall pandoc', 'Uninstalling Pandoc', 'darwin', '/tmp/m.done'))
+      .toBe("brew uninstall pandoc; echo $? > '/tmp/m.done'");
+    expect(parseExitCode('0 \r\n')).toBe(0);
+    expect(parseExitCode('3')).toBe(3);
+    expect(parseExitCode('')).toBeNull();
+  });
+
+  it('reads the readers markitdown-mdz says it is missing', async () => {
+    const helper = HELPER_PROGRAMS.find((h) => h.id === 'markitdown-mdz');
+    const stdout = 'markitdown-mdz 0.1.1\nMarkItDown 0.1.9\nMissing readers: docx, pptx, xlsx, xls (pip install "markitdown-mdzip[all]" adds them)\n';
+    expect(await helperStatus(helper, async () => ({ code: 0, stdout, stderr: '' })))
+      .toEqual({ id: 'markitdown-mdz', installed: true, version: '0.1.1', missingReaders: ['docx', 'pptx', 'xlsx', 'xls'] });
+    // All there, or 0.1.0, which doesn't say.
+    expect(parseMissingReaders('markitdown-mdz 0.1.1\nMarkItDown 0.1.9\n')).toEqual([]);
+    expect(parseMissingReaders('markitdown-mdz 0.1.0')).toEqual([]);
   });
 
   it('builds a fresh PATH so programs installed since Studio started are found', async () => {
@@ -325,5 +385,40 @@ describe('helper programs', () => {
         '/Users/me/Library/Python/3.14/bin', '/Users/me/Library/Python/3.13/bin', '/Users/me/Library/Python/3.9/bin'].join(':'));
     expect(await freshPath({ platform: 'linux', reg, env: { PATH: '/usr/bin', HOME: '/home/me' }, listDir }))
       .toBe('/usr/bin:/home/me/.local/bin');
+  });
+});
+
+describe('installing Studio from the portable version', () => {
+  const places = { programFiles: 'C:/Program Files', localAppData: 'C:/Users/me/AppData/Local' };
+  const paths = studioInstallPaths(places);
+  const runWith = (present) => vi.fn(async (command) => {
+    if (!present.includes(command)) throw new Error('not found');
+    return { code: 0, stdout: '1.0', stderr: '' };
+  });
+
+  it('finds an installed Studio for all users or for one, without asking package managers', async () => {
+    expect(paths.machine).toBe(path.join('C:/Program Files', 'MDZip Studio', 'MDZip Studio.exe'));
+    expect(paths.user).toBe(path.join('C:/Users/me/AppData/Local', 'Programs', 'MDZip Studio', 'MDZip Studio.exe'));
+    const run = runWith(['winget']);
+    expect(await studioInstallStatus({ ...places, run, fileExists: (file) => file === paths.machine }))
+      .toEqual({ installed: 'machine', via: null, command: null });
+    expect(await studioInstallStatus({ ...places, run, fileExists: (file) => file === paths.user }))
+      .toEqual({ installed: 'user', via: null, command: null });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('installs with winget first, then Chocolatey, else neither', async () => {
+    const none = () => false;
+    expect(await studioInstallStatus({ ...places, run: runWith(['winget', 'choco']), fileExists: none }))
+      .toEqual({ installed: null, via: 'winget', command: STUDIO_PACKAGES.winget.shown });
+    expect(await studioInstallStatus({ ...places, run: runWith(['choco']), fileExists: none }))
+      .toEqual({ installed: null, via: 'choco', command: 'choco install mdzip-studio -y' });
+    expect(await studioInstallStatus({ ...places, run: runWith([]), fileExists: none }))
+      .toEqual({ installed: null, via: null, command: null });
+  });
+
+  it('installs for all users: winget with machine scope, Chocolatey as administrator', () => {
+    expect(STUDIO_PACKAGES.winget.run).toBe('winget install --id MDZip.Studio --exact --source winget --scope machine');
+    expect(STUDIO_PACKAGES.choco.run).toMatch(/Start-Process choco -ArgumentList 'install mdzip-studio -y' -Verb RunAs -Wait -PassThru/);
   });
 });

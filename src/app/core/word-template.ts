@@ -98,12 +98,46 @@ export function withTableStyle(stylesXml: string, documentXml: string): string {
 
 const escapeXml = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+// The sample lists' numbering (withSampleNumbering). Pandoc numbers the lists
+// it writes from 1001 and keeps a reference document's own definitions, so
+// these don't meet its.
+export const SAMPLE_BULLETS = 9801;
+export const SAMPLE_NUMBERS = 9802;
+
+const W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+
+function sampleAbstract(id: number, format: 'bullet' | 'decimal'): string {
+  const bullets = ['•', '◦', '▪'];
+  const levels = [0, 1, 2].map((level) => `<w:lvl w:ilvl="${level}"><w:start w:val="1"/><w:numFmt w:val="${format}"/>`
+    + `<w:lvlText w:val="${format === 'bullet' ? bullets[level] : `%${level + 1}.`}"/><w:lvlJc w:val="left"/>`
+    + `<w:pPr><w:ind w:left="${480 * (level + 1)}" w:hanging="360"/></w:pPr></w:lvl>`).join('');
+  return `<w:abstractNum w:abstractNumId="${id}"><w:multiLevelType w:val="multilevel"/>${levels}</w:abstractNum>`;
+}
+
+/**
+ * numbering.xml (or a new one, for null) with the definitions the sample
+ * lists use: bullets and numbers, three levels each.
+ */
+export function withSampleNumbering(numberingXml: string | null): string {
+  const xml = numberingXml ?? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:numbering xmlns:w="${W_NS}"></w:numbering>`;
+  if (xml.includes(`w:abstractNumId="${SAMPLE_BULLETS}"`)) return xml;
+  const abstracts = sampleAbstract(SAMPLE_BULLETS, 'bullet') + sampleAbstract(SAMPLE_NUMBERS, 'decimal');
+  const nums = [SAMPLE_BULLETS, SAMPLE_NUMBERS].map((id) => `<w:num w:numId="${id}"><w:abstractNumId w:val="${id}"/></w:num>`).join('');
+  // Every w:abstractNum comes before every w:num; w:numIdMacAtCleanup last.
+  const firstNum = xml.search(/<w:num[\s>]/);
+  const end = xml.search(/<w:numIdMacAtCleanup[\s/>]|<\/w:numbering>/);
+  if (end < 0) return xml;
+  const abstractsAt = firstNum >= 0 ? firstNum : end;
+  return xml.slice(0, abstractsAt) + abstracts + xml.slice(abstractsAt, end) + nums + xml.slice(end);
+}
+
 /**
  * What the reference document shows when it's opened in Word: a line of
  * help, then a sample of each style an export uses that the document has
- * (title, headings, body text, quote, link, table), so there's something to
- * look at while changing them. Pandoc uses only the styles; this text never
- * reaches an exported document.
+ * (title, headings, body text with bold, italic, code and a link, bulleted
+ * and numbered lists, quote, table), so there's something to look at while
+ * changing them. Pandoc uses only the styles; this text never reaches an
+ * exported document. The lists need withSampleNumbering's definitions.
  */
 export function styleSamples(stylesXml: string): string {
   const ids = new Map<string, string>();
@@ -112,35 +146,55 @@ export function styleSamples(stylesXml: string): string {
     const name = /<w:name w:val="([^"]+)"/.exec(match[2])?.[1]?.toLowerCase();
     if (id && name && !ids.has(name)) ids.set(name, id);
   }
-  const run = (text: string, style?: string) =>
-    `<w:r>${style ? `<w:rPr><w:rStyle w:val="${style}"/></w:rPr>` : ''}<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r>`;
+  const run = (text: string, props = '') =>
+    `<w:r>${props ? `<w:rPr>${props}</w:rPr>` : ''}<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r>`;
+  const styled = (text: string, style?: string) => run(text, style ? `<w:rStyle w:val="${style}"/>` : '');
   const paragraph = (style: string | undefined, ...runs: string[]) =>
     `<w:p>${style ? `<w:pPr><w:pStyle w:val="${style}"/></w:pPr>` : ''}${runs.join('')}</w:p>`;
   const sample = (name: string, text: string) => (ids.has(name) ? paragraph(ids.get(name), run(text)) : '');
+  const body = ids.get('body text') ?? ids.get('normal');
+  const first = ids.get('first paragraph') ?? body;
+  // Pandoc writes a list's items in "Compact" (when its items are short).
+  const item = (numId: number, level: number, text: string) => {
+    const style = ids.get('compact') ?? body;
+    return `<w:p><w:pPr>${style ? `<w:pStyle w:val="${style}"/>` : ''}<w:numPr><w:ilvl w:val="${level}"/><w:numId w:val="${numId}"/></w:numPr></w:pPr>${run(text)}</w:p>`;
+  };
 
   const parts = [
     paragraph(ids.get('normal'), run('The look of this document, for Export… as Word. To change it, change its styles: in Word, '
       + 'right-click a style in Home › Styles and choose Modify…. Only the styles are used; the text below just shows them.')),
     sample('title', 'Title'),
     sample('subtitle', 'Subtitle'),
+    sample('author', 'Author'),
+    sample('date', 'Date'),
     sample('heading 1', 'Heading 1'),
+    paragraph(first, run('First Paragraph: the first paragraph after a heading.')),
+    paragraph(body, run(`${ids.has('body text') ? 'Body Text' : 'Normal'}: every other paragraph, with `),
+      run('bold', '<w:b/>'), run(', '), run('italic', '<w:i/>'), run(', '),
+      ids.has('verbatim char') ? styled('code', ids.get('verbatim char')) : run('code', '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas"/>'),
+      run(' and a '), ids.has('hyperlink') ? styled('link', ids.get('hyperlink')) : run('link', '<w:u w:val="single"/>'), run('.')),
     sample('heading 2', 'Heading 2'),
+    paragraph(first, run('A bulleted list:')),
+    item(SAMPLE_BULLETS, 0, 'First item'),
+    item(SAMPLE_BULLETS, 1, 'An item inside it'),
+    item(SAMPLE_BULLETS, 0, 'Second item'),
+    paragraph(body, run('A numbered list:')),
+    item(SAMPLE_NUMBERS, 0, 'First step'),
+    item(SAMPLE_NUMBERS, 1, 'A step inside it'),
+    item(SAMPLE_NUMBERS, 0, 'Second step'),
     sample('heading 3', 'Heading 3'),
-    sample('first paragraph', 'First Paragraph: the first paragraph after a heading.'),
-    ids.has('body text')
-      ? sample('body text', 'Body Text: every other paragraph.')
-      : paragraph(ids.get('normal'), run('Normal: a paragraph.')),
     sample('block text', 'Block Text: a quotation.') || sample('quote', 'Quote: a quotation.'),
-    ids.has('hyperlink') ? paragraph(ids.get('body text') ?? ids.get('normal'), run('A '), run('Hyperlink', ids.get('hyperlink')), run('.')) : '',
   ];
-  // A table in the "Table" style Pandoc gives every table it writes.
-  const cell = (text: string) => `<w:tc><w:tcPr><w:tcW w:w="2880" w:type="dxa"/></w:tcPr><w:p>${run(text)}</w:p></w:tc>`;
+  // A table in the "Table" style Pandoc gives every table it writes, with
+  // its caption above, where Pandoc puts it.
+  const cell = (text: string) => `<w:tc><w:tcPr><w:tcW w:w="2160" w:type="dxa"/></w:tcPr><w:p>${run(text)}</w:p></w:tc>`;
   const row = (...cells: string[]) => `<w:tr>${cells.map(cell).join('')}</w:tr>`;
   if (ids.has('table')) {
-    parts.push(`<w:tbl><w:tblPr><w:tblStyle w:val="${ids.get('table')}"/><w:tblW w:w="0" w:type="auto"/>`
+    parts.push(sample('table caption', 'Table Caption: what the table shows.'),
+      `<w:tbl><w:tblPr><w:tblStyle w:val="${ids.get('table')}"/><w:tblW w:w="0" w:type="auto"/>`
       + '<w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/></w:tblPr>'
-      + '<w:tblGrid><w:gridCol w:w="2880"/><w:gridCol w:w="2880"/></w:tblGrid>'
-      + row('Table', 'Header') + row('Cell', 'Cell') + '</w:tbl>'
+      + '<w:tblGrid><w:gridCol w:w="2160"/><w:gridCol w:w="2160"/><w:gridCol w:w="2160"/></w:tblGrid>'
+      + row('Header', 'Header', 'Header') + row('Cell', 'Cell', 'Cell') + row('Cell', 'Cell', 'Cell') + '</w:tbl>'
       + paragraph(ids.get('normal')));
   }
   return parts.join('');
@@ -185,6 +239,10 @@ export function stylesOnlyCopy(docx: Uint8Array): Uint8Array | null {
   const samples = styleSamples(text('word/styles.xml') ?? '');
   document = document.slice(0, bodyOpen.index + bodyOpen[0].length) + samples + sectPr + document.slice(bodyClose);
   files['word/document.xml'] = strToU8(document);
+  // The sample lists' bullets and numbers; a document without lists may have
+  // no numbering part, so it gets one.
+  const numbering = text('word/numbering.xml');
+  files['word/numbering.xml'] = strToU8(withSampleNumbering(numbering));
 
   // Footnotes and endnotes: only Word's separators.
   for (const [part, element] of [['word/footnotes.xml', 'w:footnote'], ['word/endnotes.xml', 'w:endnote']] as const) {
@@ -212,14 +270,23 @@ export function stylesOnlyCopy(docx: Uint8Array): Uint8Array | null {
   // Nothing may still point at a removed part.
   const rels = text('word/_rels/document.xml.rels');
   if (rels) {
-    files['word/_rels/document.xml.rels'] = strToU8(rels.replace(/<Relationship\b[^>]*\/>/g, (rel) => {
+    let kept = rels.replace(/<Relationship\b[^>]*\/>/g, (rel) => {
       const target = /Target="([^"]+)"/.exec(rel)?.[1] ?? '';
       if (/TargetMode="External"/.test(rel)) return /\/hyperlink"/.test(rel) ? '' : rel;
       const resolved = target.startsWith('/') ? target.slice(1) : `word/${target.replace(/^\.\//, '')}`;
       return removed.has(resolved) ? '' : rel;
-    }));
+    });
+    if (!numbering) {
+      kept = kept.replace('</Relationships>', '<Relationship Id="rIdMdzSampleNumbering" '
+        + 'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/></Relationships>');
+    }
+    files['word/_rels/document.xml.rels'] = strToU8(kept);
   }
   let types = strFromU8(contentTypes);
+  if (!/PartName="\/word\/numbering\.xml"/.test(types)) {
+    types = types.replace('</Types>', '<Override PartName="/word/numbering.xml" '
+      + 'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>');
+  }
   for (const name of removed) {
     types = types.replace(new RegExp(`<Override\\b[^>]*PartName="/${escapeRegExp(name)}"[^>]*/>`, 'g'), '');
   }

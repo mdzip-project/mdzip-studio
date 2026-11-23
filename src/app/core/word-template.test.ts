@@ -1,5 +1,7 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
-import { markAsCurrentWord, styleSamples, withCurrentWordCompat, withTableStyle } from './word-template';
+import {
+  markAsCurrentWord, SAMPLE_BULLETS, SAMPLE_NUMBERS, styleSamples, withCurrentWordCompat, withSampleNumbering, withTableStyle,
+} from './word-template';
 
 // The shape of Pandoc 3.x's reference.docx settings.xml (trimmed).
 const PANDOC_SETTINGS = [
@@ -89,7 +91,7 @@ describe('styleSamples', () => {
     const body = styleSamples(styles);
     expect(body).toContain('<w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t xml:space="preserve">Heading 1</w:t>');
     // Found by its name, whatever its id.
-    expect(body).toContain('<w:pStyle w:val="Corps"/></w:pPr><w:r><w:t xml:space="preserve">Body Text: every other paragraph.');
+    expect(body).toContain('<w:pStyle w:val="Corps"/></w:pPr><w:r><w:t xml:space="preserve">Body Text: every other paragraph, with ');
     expect(body).toContain('<w:rStyle w:val="Hyperlink"/>');
     expect(body).toContain('<w:tblStyle w:val="Table"/>');
     expect(body).not.toContain('Heading 2');
@@ -98,7 +100,38 @@ describe('styleSamples', () => {
     expect(body.endsWith('</w:p>')).toBe(true);
   });
 
+  it('shows bold, italic, code, and bulleted and numbered lists, nested', () => {
+    const body = styleSamples(styles);
+    expect(body).toContain('<w:rPr><w:b/></w:rPr><w:t xml:space="preserve">bold</w:t>');
+    expect(body).toContain('<w:rPr><w:i/></w:rPr><w:t xml:space="preserve">italic</w:t>');
+    for (const numId of [SAMPLE_BULLETS, SAMPLE_NUMBERS]) {
+      expect(body).toContain(`<w:numPr><w:ilvl w:val="0"/><w:numId w:val="${numId}"/></w:numPr>`);
+      expect(body).toContain(`<w:numPr><w:ilvl w:val="1"/><w:numId w:val="${numId}"/></w:numPr>`);
+    }
+    // No Compact style here: the items are body text.
+    expect(body).toContain('<w:pStyle w:val="Corps"/><w:numPr>');
+  });
+
   it('still shows the help line with no styles', () => {
     expect(styleSamples('')).toContain('change its styles');
+  });
+});
+
+describe('withSampleNumbering', () => {
+  it("adds the sample lists' definitions, abstract ones before the numbers", () => {
+    const existing = '<w:numbering xmlns:w="w"><w:abstractNum w:abstractNumId="1"/><w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num></w:numbering>';
+    const xml = withSampleNumbering(existing);
+    expect(xml.indexOf(`w:abstractNumId="${SAMPLE_BULLETS}"`)).toBeLessThan(xml.indexOf('<w:num w:numId="1">'));
+    expect(xml.indexOf(`<w:num w:numId="${SAMPLE_NUMBERS}">`)).toBeGreaterThan(xml.indexOf('<w:num w:numId="1">'));
+    expect(xml).toContain('<w:lvlText w:val="•"/>');
+    expect(xml).toContain('<w:lvlText w:val="%2."/>');
+    // Once only.
+    expect(withSampleNumbering(xml)).toBe(xml);
+  });
+
+  it('makes a numbering part when there is none', () => {
+    const xml = withSampleNumbering(null);
+    expect(xml).toMatch(/^<\?xml[^>]*\?><w:numbering xmlns:w="http:\/\/schemas\.openxmlformats\.org\/wordprocessingml\/2006\/main">/);
+    expect(xml).toContain(`<w:num w:numId="${SAMPLE_BULLETS}">`);
   });
 });

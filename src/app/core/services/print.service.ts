@@ -45,6 +45,8 @@ pre code { font-size: 100%; background: transparent; padding: 0; border-radius: 
 table { border-collapse: collapse; max-width: 100%; }
 th, td { border: 1px solid #d1d9e0; padding: 6px 13px; text-align: left; vertical-align: top; }
 th { background: #f6f8fa; font-weight: 600; }
+/* An empty cell holds a line, as in Word (and the editor's preview). */
+th:empty::after, td:empty::after { content: '\\00a0'; }
 hr { height: 0; margin: 24px 0; border: 0; border-top: 2px solid #d1d9e0; }
 img, svg, video { max-width: 100%; height: auto; }
 .mdzip-mermaid { margin: 16px 0; text-align: center; }

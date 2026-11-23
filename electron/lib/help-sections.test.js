@@ -38,9 +38,9 @@ describe('Studio help', () => {
     expect(contents.map((page) => page.file)).toEqual(HELP_PAGES.map((page) => page.file));
     const integration = contents.find((page) => page.file === 'system-integration.md');
     expect(integration.sections.map((section) => section.id)).toEqual([
-      'opening-md-files', 'explorer-previews', 'outlook-attachments', 'helper-programs', 'for-administrators',
+      'installing-mdzip-studio', 'opening-md-files', 'explorer-previews', 'outlook-attachments', 'helper-programs', 'for-administrators',
     ]);
-    expect(integration.sections[0].text).toBe('Opening .md files');
+    expect(integration.sections[0].text).toBe('Installing MDZip Studio');
   });
 
   it('has a heading for every System Integration (?)', async () => {

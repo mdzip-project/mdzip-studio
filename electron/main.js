@@ -6,6 +6,7 @@ const { constants: fsConstants, createWriteStream, existsSync, readdirSync, unli
 const { exec, execFile, spawn } = require('child_process');
 const os = require('os');
 const path = require('path');
+const { randomUUID } = require('crypto');
 const { pathToFileURL } = require('url');
 const { documentPathFromArgs } = require('./lib/document-path');
 const { saveDialogFilters } = require('./lib/save-dialog');
@@ -19,10 +20,18 @@ const {
   installCommandFor,
   latestVersion,
   upgradeCommandFor,
+  uninstallCommandFor,
+  terminalScript,
+  parseExitCode,
   outlookStatus,
   previewHandlerStatus,
+  requirementFor,
+  requirementInstalled,
   setOutlookAllowed,
   setPreviewForUser,
+  STUDIO_PACKAGES,
+  studioInstallPaths,
+  studioInstallStatus,
   userChoiceProgId,
 } = require('./lib/system-integration');
 const { buildJumpList, wantsNewWindow, startupActionFromArgs, recentDocumentsForMac } = require('./lib/jump-list');
@@ -608,6 +617,10 @@ app.on('ready', () => {
 ipcMain.on('mdzip:get-view-settings', (event) => {
   event.returnValue = viewSettingsOf(getSettings());
 });
+// Whether this is the Windows portable version (Help > About says so).
+ipcMain.on('mdzip:is-portable', (event) => {
+  event.returnValue = isPortable;
+});
 ipcMain.on('mdzip:set-view-setting', (_event, payload) => {
   const { key, value } = payload ?? {};
   if (!isValidViewSetting(key, value) || getSettings()[key] === value) return;
@@ -617,10 +630,13 @@ ipcMain.on('mdzip:set-view-setting', (_event, payload) => {
   } catch (error) {
     console.error('Could not save settings:', error);
   }
+  // The editor's outline button changes the side too: keep View > Outline on
+  // the Left's check mark in step.
+  if (key === 'outlinePosition') refreshAllWindowMenus();
 });
 
 // View > Outline on the Left: saved for new windows, and moves the outline in
-// every open one (the editor has no control of its own for the side).
+// every open one. (The editor's outline button moves it in its own window.)
 function toggleOutlineSide() {
   const outlinePosition = getSettings().outlinePosition === 'left' ? 'right' : 'left';
   studioSettings = { ...getSettings(), outlinePosition };
@@ -1692,8 +1708,9 @@ async function freshEnv(reg = createRegistry((file, args) => runProcess(file, ar
   return env;
 }
 
-// Where the Studio installer (with Windows Explorer integration) comes from.
-const STUDIO_DOWNLOAD_URL = 'https://mdzip.org/studio.html';
+// Where the Studio installer (with Windows Explorer integration) comes from:
+// the download page's Windows section (only Windows cards link here).
+const STUDIO_DOWNLOAD_URL = 'https://mdzip.org/studio#windows';
 
 // Help > System Integration's cards, at once and without checking anything:
 // the Windows rows (on Windows) and the helper programs. Each card's state
@@ -1704,13 +1721,19 @@ function systemIntegrationCards() {
   return {
     platform,
     portable: isPortable,
-    windows: platform === 'win32' ? ['markdown', 'preview', 'outlook'] : [],
+    // The portable version starts with installing Studio itself.
+    windows: platform === 'win32' ? [...(isPortable ? ['studio'] : []), 'markdown', 'preview', 'outlook'] : [],
     helpers: HELPER_PROGRAMS.map((helper) => ({
       id: helper.id,
       name: helper.name,
       purpose: helper.purpose,
       url: helper.url,
       installCommand: installCommandFor(helper, platform),
+      uninstallCommand: uninstallCommandFor(helper, platform),
+      uninstallNote: helper.uninstallNote ?? null,
+      size: helper.size ?? null,
+      requires: requirementFor(helper, platform)?.name ?? null,
+      requiresAlways: requirementFor(helper, platform)?.always ?? false,
     })),
   };
 }
@@ -1722,7 +1745,21 @@ function envForChecks() {
   return checkEnv.env;
 }
 
-// One card's state: 'markdown', 'preview' or 'outlook' (Windows), or a helper
+// Runs `<program> <args>` as a newly started program would (fresh PATH).
+async function checkRunner() {
+  const env = await envForChecks();
+  return (file, args) => runProcess(file, args, { env, shell: process.platform === 'win32' });
+}
+
+// Where an installed Studio would be (Windows).
+function studioInstallPlaces() {
+  return {
+    programFiles: process.env.ProgramW6432 || process.env.ProgramFiles,
+    localAppData: process.env.LOCALAPPDATA,
+  };
+}
+
+// One card's state: 'studio' (portable only), 'markdown', 'preview' or 'outlook' (Windows), or a helper
 // program's id ({ installed, version }).
 async function systemIntegrationCheck(id) {
   const reg = createRegistry((file, args) => runProcess(file, args));
@@ -1750,37 +1787,70 @@ async function systemIntegrationCheck(id) {
       });
     }
     if (id === 'outlook') return outlookStatus(reg);
+    if (id === 'studio') return studioInstallStatus({ ...studioInstallPlaces(), run: await checkRunner(), fileExists: existsSync });
   }
   const helper = HELPER_PROGRAMS.find((candidate) => candidate.id === id);
   if (!helper) throw new Error(`Nothing to check called ${id}`);
-  const env = await envForChecks();
-  const { installed, version } = await helperStatus(helper, (file, args) => runProcess(file, args, { env, shell: process.platform === 'win32' }));
-  return { installed, version };
+  const run = await checkRunner();
+  const { installed, version, missingReaders } = await helperStatus(helper, run);
+  // Not installed: is what installs it there? (Python for pip, Node.js for npm...)
+  const requirementMissing = !installed && !(await requirementInstalled(helper, process.platform, run));
+  return { installed, version, missingReaders, requirementMissing };
 }
 
 // Opens a terminal window running `command`, so the user sees the package
 // manager's progress and answers its prompts. Returns false where Studio
 // doesn't know how to open one (Linux): the row shows the command to copy.
-function runInTerminal(command, title) {
+// `onDone(code)`: called when the command has finished (the window stays
+// open), with its exit code, so System Integration can check again.
+function runInTerminal(command, title, onDone = null) {
+  const marker = path.join(app.getPath('temp'), `mdzip-studio-${randomUUID()}.done`);
+  const script = terminalScript(command, title, process.platform, marker);
   if (process.platform === 'win32') {
-    const child = spawn('cmd.exe', ['/k', `title ${title} && ${command}`], {
+    const child = spawn('cmd.exe', ['/v:on', '/k', script], {
       detached: true,
       stdio: 'ignore',
       windowsVerbatimArguments: true,
     });
     child.unref();
-    return true;
-  }
-  if (process.platform === 'darwin') {
+  } else if (process.platform === 'darwin') {
     const child = spawn('osascript', [
       // An AppleScript string: escape the command's own quotes ("markitdown-mdzip[all]").
-      '-e', `tell application "Terminal" to do script "${command.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
+      '-e', `tell application "Terminal" to do script "${script.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
       '-e', 'tell application "Terminal" to activate',
     ], { detached: true, stdio: 'ignore' });
     child.unref();
-    return true;
+  } else {
+    return false;
   }
-  return false;
+  if (onDone) watchTerminalMarker(marker, onDone);
+  return true;
+}
+
+// Waits for a terminal script's marker (checked each second, for up to two
+// hours: winget may wait on an installer that waits on the user), then reads
+// the exit code, removes the marker and calls onDone(code).
+function watchTerminalMarker(marker, onDone) {
+  const started = Date.now();
+  const timer = setInterval(async () => {
+    let text;
+    try {
+      text = await fs.readFile(marker, 'utf8');
+    } catch {
+      if (Date.now() - started > 2 * 60 * 60 * 1000) clearInterval(timer);
+      return;
+    }
+    clearInterval(timer);
+    fs.unlink(marker).catch(() => {});
+    onDone(parseExitCode(text));
+  }, 1000);
+}
+
+// Tells the window that ran an Install, Update or Uninstall that it finished.
+function reportTerminalDone(win, action, id) {
+  return (code) => {
+    if (win && !win.isDestroyed()) win.webContents.send('mdzip:system-integration-finished', { action, id, code });
+  };
 }
 
 ipcMain.handle('mdzip:system-integration-cards', () => systemIntegrationCards());
@@ -1841,22 +1911,53 @@ ipcMain.handle('mdzip:system-integration-action', async (event, payload) => {
         const helper = HELPER_PROGRAMS.find((candidate) => candidate.id === payload?.id);
         const command = helper ? installCommandFor(helper, process.platform) : null;
         if (!helper || !command) return { ok: false, error: 'No installer for this program here.' };
-        return runInTerminal(command, `Installing ${helper.name}`)
+        return runInTerminal(command, `Installing ${helper.name}`, reportTerminalDone(win, action, helper.id))
           ? { ok: true }
           : { ok: false, error: 'no-terminal', command };
+      }
+      case 'uninstall-helper': {
+        const helper = HELPER_PROGRAMS.find((candidate) => candidate.id === payload?.id);
+        const command = helper ? uninstallCommandFor(helper, process.platform) : null;
+        if (!helper || !command) return { ok: false, error: 'No uninstaller for this program here.' };
+        return runInTerminal(command, `Uninstalling ${helper.name}`, reportTerminalDone(win, action, helper.id))
+          ? { ok: true }
+          : { ok: false, error: 'no-terminal', command };
+      }
+      case 'install-studio': {
+        // From the portable version: install it with winget or Chocolatey.
+        if (!isPortable) return { ok: false, error: 'MDZip Studio is already installed.' };
+        const status = await systemIntegrationCheck('studio');
+        if (status.installed) return { ok: false, error: 'MDZip Studio is already installed.' };
+        if (!status.via) return { ok: false, error: 'Neither winget nor Chocolatey is installed.' };
+        return runInTerminal(STUDIO_PACKAGES[status.via].run, 'Installing MDZip Studio', reportTerminalDone(win, action, 'studio'))
+          ? { ok: true }
+          : { ok: false, error: 'no-terminal', command: STUDIO_PACKAGES[status.via].shown };
+      }
+      case 'open-studio': {
+        // The installed Studio, from the portable one.
+        const paths = studioInstallPaths(studioInstallPlaces());
+        const exe = [paths.machine, paths.user].find((candidate) => candidate && existsSync(candidate));
+        if (!exe) return { ok: false, error: 'MDZip Studio isn’t installed.' };
+        const error = await shell.openPath(exe);
+        return error ? { ok: false, error } : { ok: true };
       }
       case 'upgrade-helper': {
         const helper = HELPER_PROGRAMS.find((candidate) => candidate.id === payload?.id);
         const command = helper ? upgradeCommandFor(helper, process.platform) : null;
         if (!helper || !command) return { ok: false, error: 'No updater for this program here.' };
-        return runInTerminal(command, `Updating ${helper.name}`)
+        return runInTerminal(command, `Updating ${helper.name}`, reportTerminalDone(win, action, helper.id))
           ? { ok: true }
           : { ok: false, error: 'no-terminal', command };
       }
       case 'open-page': {
-        // Only Studio's own known pages: a helper's download page, or Studio's.
-        const helper = HELPER_PROGRAMS.find((candidate) => candidate.id === payload?.id);
-        const url = helper ? helper.url : payload?.id === 'studio' ? STUDIO_DOWNLOAD_URL : null;
+        // Only Studio's own known pages: a helper's download page, what it
+        // needs installed first ("requires:<id>"), or Studio's.
+        const id = String(payload?.id ?? '');
+        const requires = id.startsWith('requires:');
+        const helper = HELPER_PROGRAMS.find((candidate) => candidate.id === (requires ? id.slice('requires:'.length) : id));
+        const url = helper
+          ? (requires ? requirementFor(helper, process.platform)?.url ?? null : helper.url)
+          : id === 'studio' ? STUDIO_DOWNLOAD_URL : null;
         if (!url) return { ok: false, error: 'Unknown page.' };
         await shell.openExternal(url);
         return { ok: true };
@@ -2263,7 +2364,8 @@ ipcMain.handle('mdzip:import-run', async (event, payload) => {
     const fileName = convert.withExtension(path.basename(filePath), 'mdz');
     const output = path.join(work, fileName);
     const look = payload?.look && typeof payload.look === 'object' ? payload.look : null;
-    const { args } = convert.importCommand({ tool, input: filePath, output, scripts: mdzipPandocScripts(), look });
+    const notes = payload?.notes === true;
+    const { args } = convert.importCommand({ tool, input: filePath, output, scripts: mdzipPandocScripts(), look, notes });
     // In the file's folder, so a web page's pictures are found next to it.
     const run = await runConversion(state, programs[tool], args, { env, cwd: path.dirname(filePath) });
     if (run.canceled) return { canceled: true };
@@ -2275,6 +2377,15 @@ ipcMain.handle('mdzip:import-run', async (event, payload) => {
     }
     if (run.code !== 0 || !bytes) return { ...convert.describeFailure(tool, run), error: true };
     const imported = { bytes: new Uint8Array(bytes), fileName, warnings: convert.warningsFrom(run.stderr) };
+    // Conversion notes: the renderer adds what it did (conversion-notes.ts),
+    // with the command as the dialog showed it (file names, no folders).
+    if (notes) {
+      imported.notes = {
+        tool: convert.TOOL_NAMES[tool] ?? tool,
+        command: convert.commandLine(convert.importCommand({ tool, input: path.basename(filePath), output: fileName, look, notes })),
+        source: path.basename(filePath),
+      };
+    }
     // A Word document's Import options: the renderer adds its styles and/or
     // the file itself to the .mdz (imported-word.ts), so it gets the file too.
     const keepStyles = payload?.keepStyles === true;

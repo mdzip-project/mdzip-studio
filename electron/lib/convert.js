@@ -119,10 +119,12 @@ function importLookSwitches(look) {
 }
 
 // Import: { command, args } turning `input` into the .mdz `output`. `look`:
-// what to keep as HTML (see IMPORT_LOOK_SWITCHES); Pandoc only.
-function importCommand({ tool, input, output, scripts = null, look = null }) {
+// what to keep as HTML (see IMPORT_LOOK_SWITCHES); `notes`: mdz.lua writes
+// sources/conversion-notes.md. Both Pandoc only.
+function importCommand({ tool, input, output, scripts = null, look = null, notes = false }) {
   if (tool === 'pandoc') {
-    return { command: 'pandoc', args: [input, '-t', scriptPath(scripts, 'mdz.lua') + importLookSwitches(look), '-o', output] };
+    const switches = importLookSwitches(look) + (notes === true ? '+notes' : '');
+    return { command: 'pandoc', args: [input, '-t', scriptPath(scripts, 'mdz.lua') + switches, '-o', output] };
   }
   if (tool === 'markitdown-mdz') return { command: 'markitdown-mdz', args: [input, '-o', output] };
   throw new Error(`Unknown import program: ${tool}`);

@@ -13,14 +13,48 @@ export interface SystemIntegrationHelperCard {
   purpose: string;
   url: string;
   installCommand: string | null;
+  // The command that removes it, and what it leaves behind, if anything.
+  uninstallCommand?: string | null;
+  uninstallNote?: string | null;
+  // What installing it costs ("About 45 MB to download."), if known.
+  size?: string | null;
+  // What its install command needs first ('Python', 'Node.js', 'winget'...),
+  // and whether the card names it even when it's there.
+  requires?: string | null;
+  requiresAlways?: boolean;
 }
 
 export interface SystemIntegrationHelper extends SystemIntegrationHelperCard {
   installed: boolean;
   version: string | null;
+  // Kinds of file it can't read for want of a package ('docx', 'pptx', ...):
+  // markitdown-mdz without MarkItDown's readers. Absent or [] when it has them.
+  missingReaders?: string[];
+  // Not installed, and neither is what installs it (`requires`).
+  requirementMissing?: boolean;
 }
 
-export type WindowsCardId = 'markdown' | 'preview' | 'outlook';
+// The missing readers in words: ['docx', 'pptx', 'xlsx', 'xls'] -> "Word,
+// PowerPoint and Excel". Unknown kinds by their extension.
+const READER_NAMES: Record<string, string> = { docx: 'Word', pptx: 'PowerPoint', xlsx: 'Excel', xls: 'Excel', pdf: 'PDF' };
+// The line under a helper's purpose: what it needs (Python, Node.js; winget
+// or Homebrew only when missing) and what installing it costs.
+export function helperFacts(helper: SystemIntegrationHelper): string {
+  const parts: string[] = [];
+  if (helper.requires && (helper.requiresAlways || (!helper.installed && helper.requirementMissing))) {
+    parts.push(`Needs ${helper.requires}.`);
+  }
+  if (helper.size && !helper.installed) parts.push(helper.size);
+  return parts.join(' ');
+}
+
+export function readerNames(kinds: readonly string[]): string {
+  const names = [...new Set(kinds.map((kind) => READER_NAMES[kind] ?? `.${kind}`))];
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+// studio: the portable version only (installing Studio itself).
+export type WindowsCardId = 'studio' | 'markdown' | 'preview' | 'outlook';
 
 // The cards, at once; each one's state is checked on its own
 // (checkSystemIntegration), so a slow check doesn't hold up the others.
@@ -50,6 +84,10 @@ export interface SystemIntegrationStatus {
     | { state: 'not-found' }
     | { state: 'allowed' | 'blocked' | 'managed'; version: string; managed: boolean }
     | null;
+  // The portable version only: whether Studio is also installed ('machine'
+  // for all users, 'user' for one), and if not, the package manager that can
+  // install it (winget, else Chocolatey) and its command.
+  studio?: { installed: 'machine' | 'user' | null; via: 'winget' | 'choco' | null; command: string | null } | null;
   helpers: SystemIntegrationHelper[];
 }
 
@@ -61,6 +99,9 @@ export type SystemIntegrationAction =
   | 'preview-on'
   | 'install-helper'
   | 'upgrade-helper'
+  | 'uninstall-helper'
+  | 'install-studio'
+  | 'open-studio'
   | 'open-page';
 
 // Each helper program's newest published version (null when it couldn't be
@@ -87,6 +128,7 @@ const TONE_ICONS: Record<Tone, string> = {
 };
 
 const WINDOWS_TITLES: Record<WindowsCardId, string> = {
+  studio: 'Install MDZip Studio',
   markdown: 'Open .md files with MDZip Studio',
   preview: 'Previews in File Explorer',
   outlook: '.mdz attachments in Outlook',
@@ -98,7 +140,9 @@ interface HelperRow {
   status: string;
   // The command the row's button runs, shown so you can see what it does.
   command: string | null;
-  action: 'install' | 'update' | null;
+  action: 'install' | 'update' | 'readers' | 'requires' | null;
+  // What it needs and costs, under its purpose: "Needs Python. About 115 MB to download."
+  facts: string;
 }
 
 interface Row {
@@ -108,6 +152,10 @@ interface Row {
   status: string;
   detail: string;
   action?: { label: string; run: () => void; secondary?: boolean };
+  // A second, lesser button, after the first.
+  more?: { label: string; run: () => void };
+  // The command the button runs, shown so you can see what it does.
+  command?: string | null;
 }
 
 @Component({
@@ -161,16 +209,24 @@ interface Row {
                     @if (row.id === 'preview' && previewChanged()) {
                       <p class="si-note">Open a new File Explorer window for this to take effect.</p>
                     }
+                    @if (row.command) {
+                      <code class="si-command">{{ row.command }}</code>
+                    }
                   </div>
                   @if (row.action; as action) {
-                    <p-button
-                      [label]="action.label"
-                      size="small"
-                      [severity]="action.secondary ? 'secondary' : undefined"
-                      [outlined]="!!action.secondary"
-                      [disabled]="busy()"
-                      (onClick)="action.run()"
-                    />
+                    <div class="si-actions">
+                      <p-button
+                        [label]="action.label"
+                        size="small"
+                        [severity]="action.secondary ? 'secondary' : undefined"
+                        [outlined]="!!action.secondary"
+                        [disabled]="busy()"
+                        (onClick)="action.run()"
+                      />
+                      @if (row.more; as more) {
+                        <p-button [label]="more.label" size="small" severity="secondary" [outlined]="true" [disabled]="busy()" (onClick)="more.run()" />
+                      }
+                    </div>
                   }
                 </li>
               }
@@ -206,8 +262,22 @@ interface Row {
                     {{ row.status }}
                   </div>
                   <p class="si-detail">{{ helper.purpose }}</p>
+                  @if (row.facts) {
+                    <p class="si-detail si-facts">{{ row.facts }}</p>
+                  }
                   @if (row.command) {
                     <code class="si-command">{{ row.command }}</code>
+                  }
+                  @if (confirmUninstall() === helper.id) {
+                    <div class="si-confirm" role="group" [attr.aria-label]="'Uninstall ' + helper.name">
+                      <p class="si-confirm-title">Uninstall {{ helper.name }}?</p>
+                      <p class="si-detail">Studio's Import and Export can't use it afterwards, and neither can other programs that do.@if (helper.uninstallNote) { {{ helper.uninstallNote }}}</p>
+                      <code class="si-command">{{ helper.uninstallCommand }}</code>
+                      <div class="si-confirm-actions">
+                        <p-button label="Uninstall" size="small" severity="danger" [disabled]="busy()" (onClick)="uninstall(helper)" />
+                        <p-button label="Cancel" size="small" severity="secondary" [text]="true" [disabled]="busy()" (onClick)="confirmUninstall.set(null)" />
+                      </div>
+                    </div>
                   }
                   @if (copyHint() === helper.id) {
                     <p class="si-note">Run this command in a terminal, then click Check Again.</p>
@@ -218,6 +288,10 @@ interface Row {
                     <p-button label="Install" size="small" [disabled]="busy()" (onClick)="install(helper)" />
                   } @else if (row.action === 'update') {
                     <p-button label="Update" size="small" [disabled]="busy()" (onClick)="update(helper)" />
+                  } @else if (row.action === 'requires') {
+                    <p-button [label]="'Get ' + helper.requires" size="small" [disabled]="busy()" (onClick)="openPage('requires:' + helper.id)" />
+                  } @else if (row.action === 'readers') {
+                    <p-button label="Add Readers" size="small" [disabled]="busy()" (onClick)="install(helper)" />
                   }
                   <p-button
                     [label]="helper.installed || helper.installCommand ? 'Website' : 'Download Page'"
@@ -227,12 +301,18 @@ interface Row {
                     [disabled]="busy()"
                     (onClick)="openPage(helper.id)"
                   />
+                  @if (helper.installed && helper.uninstallCommand && confirmUninstall() !== helper.id) {
+                    <p-button label="Uninstall…" size="small" severity="secondary" [text]="true" [disabled]="busy()" (onClick)="confirmUninstall.set(helper.id)" />
+                  }
                 </div>
               </li>
             }
           </ul>
           @if (installStarted()) {
-            <p class="si-note">It runs in its own window. When it's done, come back here, or click Check Again.</p>
+            <p class="si-note">It runs in its own window. This page checks again when it's done.</p>
+          }
+          @if (finished(); as done) {
+            <p [class]="done.ok ? 'si-note si-done' : 'si-note'" role="status">{{ done.text }}</p>
           }
         }
       </div>
@@ -282,6 +362,12 @@ interface Row {
     .si-off { color: #68717d; }
     .si-update { color: #9a6700; }
     .si-detail, .si-intro, .si-note { margin: 4px 0 0; font-size: 12.5px; line-height: 1.45; color: #4c5663; }
+    .si-detail.si-facts { margin-top: 2px; }
+    .si-note.si-done { color: #1a7f37; }
+    /* Uninstall's question, inside its card. */
+    .si-confirm { margin-top: 8px; padding: 8px 10px; border: 1px solid #d1242f; border-radius: 6px; background: rgba(209, 36, 47, 0.06); }
+    .si-confirm-title { margin: 0; font-size: 13px; font-weight: 600; }
+    .si-confirm-actions { display: flex; gap: 6px; margin-top: 8px; }
     .si-intro { margin: 0 0 4px; }
     .si-note { color: #9a6700; }
     .si-command {
@@ -310,6 +396,8 @@ interface Row {
       .si-good { color: #4ac26b; }
       .si-warn { color: #f97066; }
       .si-note, .si-update { color: #d29922; }
+      .si-note.si-done { color: #4ac26b; }
+      .si-confirm { background: rgba(249, 112, 102, 0.08); border-color: #f97066; }
       .si-command { background: #1e1e1e; border-color: #3c3c3c; }
       .si-error { color: #f97066; }
     }
@@ -338,9 +426,10 @@ export class SystemIntegrationDialogComponent implements OnChanges, OnDestroy {
       markdownDefault: field<SystemIntegrationStatus['markdownDefault']>('markdown'),
       previewHandler: field<SystemIntegrationStatus['previewHandler']>('preview'),
       outlook: field<SystemIntegrationStatus['outlook']>('outlook'),
+      studio: field<SystemIntegrationStatus['studio']>('studio'),
       helpers: cards.helpers.map((helper) => ({
         ...helper,
-        ...((results[helper.id] as { installed: boolean; version: string | null } | undefined) ?? { installed: false, version: null }),
+        ...((results[helper.id] as { installed: boolean; version: string | null; missingReaders?: string[]; requirementMissing?: boolean } | undefined) ?? { installed: false, version: null }),
       })),
     };
   });
@@ -352,12 +441,15 @@ export class SystemIntegrationDialogComponent implements OnChanges, OnDestroy {
   readonly previewChanged = signal(false);
   readonly installStarted = signal(false);
   readonly copyHint = signal<string | null>(null);
+  // The helper whose card is asking "Uninstall …?", if any.
+  readonly confirmUninstall = signal<string | null>(null);
   readonly latestVersions = signal<HelperLatestVersions>({});
 
   readonly helperRows = computed<HelperRow[]>(() => {
     const results = this.results();
     return (this.status()?.helpers ?? []).map((helper) => results[helper.id] === undefined
-      ? { helper, tone: 'checking', status: 'Checking…', command: null, action: null }
+      // Still checking: just what it always needs; the size waits until it's known not to be installed.
+      ? { helper, tone: 'checking', status: 'Checking…', command: null, action: null, facts: helper.requiresAlways && helper.requires ? `Needs ${helper.requires}.` : '' }
       : this.helperRow(helper, this.latestVersions()[helper.id]));
   });
 
@@ -367,6 +459,7 @@ export class SystemIntegrationDialogComponent implements OnChanges, OnDestroy {
     if (!s || !cards) return [];
     const results = this.results();
     const rowFor: Record<WindowsCardId, (status: SystemIntegrationStatus) => Row | null> = {
+      studio: (status) => this.studioRow(status),
       markdown: (status) => this.markdownRow(status),
       preview: (status) => this.previewRow(status),
       outlook: (status) => this.outlookRow(status),
@@ -384,12 +477,32 @@ export class SystemIntegrationDialogComponent implements OnChanges, OnDestroy {
     if (this.visible && !this.loading()) void this.refresh();
   };
 
+  // What the last Install, Update or Uninstall's terminal window did, once
+  // its command finished.
+  readonly finished = signal<{ ok: boolean; text: string } | null>(null);
+  private readonly stopFinished: (() => void) | undefined;
+
   constructor() {
     window.addEventListener('focus', this.handleWindowFocus);
+    this.stopFinished = window.mdzipStudio?.onSystemIntegrationFinished?.((data) => this.onFinished(data));
   }
 
   ngOnDestroy(): void {
     window.removeEventListener('focus', this.handleWindowFocus);
+    this.stopFinished?.();
+  }
+
+  // A terminal command finished: say so, and check every card again (even
+  // when Studio never lost the focus, or got it back before the command was done).
+  onFinished(data: { action: SystemIntegrationAction; id: string; code: number | null }): void {
+    const name = data.id === 'studio' ? 'MDZip Studio' : this.cards()?.helpers.find((helper) => helper.id === data.id)?.name ?? data.id;
+    const verb = data.action === 'uninstall-helper' ? 'uninstall' : data.action === 'upgrade-helper' ? 'update' : 'install';
+    const done = data.action === 'uninstall-helper' ? 'uninstalled' : data.action === 'upgrade-helper' ? 'updated' : 'installed';
+    this.installStarted.set(false);
+    this.finished.set(data.code === 0
+      ? { ok: true, text: `${name} was ${done}.` }
+      : { ok: false, text: `The ${name} ${verb} didn't finish: its window says why.` });
+    if (this.visible) void this.refresh();
   }
 
   ngOnChanges(changes: SimpleChanges): void {
@@ -455,7 +568,21 @@ export class SystemIntegrationDialogComponent implements OnChanges, OnDestroy {
     return TONE_ICONS[tone];
   }
 
+  // After the card's "Uninstall …?": runs in a terminal window, as Install does.
+  async uninstall(helper: SystemIntegrationHelper): Promise<void> {
+    this.finished.set(null);
+    const result = await this.run('uninstall-helper', helper.id);
+    if (result?.ok) {
+      this.confirmUninstall.set(null);
+      this.installStarted.set(true);
+    } else if (result?.error === 'no-terminal') {
+      // The question stays open: it shows the command to run.
+      this.copyHint.set(helper.id);
+    }
+  }
+
   async update(helper: SystemIntegrationHelper): Promise<void> {
+    this.finished.set(null);
     const result = await this.run('upgrade-helper', helper.id);
     if (result?.ok) {
       this.installStarted.set(true);
@@ -465,8 +592,29 @@ export class SystemIntegrationDialogComponent implements OnChanges, OnDestroy {
   }
 
   private helperRow(helper: SystemIntegrationHelper, newest?: { latest: string | null; upgradeCommand: string | null }): HelperRow {
+    return { ...this.helperState(helper, newest), facts: helperFacts(helper) };
+  }
+
+  private helperState(helper: SystemIntegrationHelper, newest?: { latest: string | null; upgradeCommand: string | null }): Omit<HelperRow, 'facts'> {
     if (!helper.installed) {
+      // Its install command would fail without what runs it: get that first.
+      if (helper.requirementMissing && helper.requires) {
+        return { helper, tone: 'off', status: `Not installed. Needs ${helper.requires} first`, command: helper.installCommand, action: 'requires' };
+      }
       return { helper, tone: 'off', status: 'Not installed', command: helper.installCommand, action: helper.installCommand ? 'install' : null };
+    }
+    // Installed, but MarkItDown can't read some kinds of file: say which, and
+    // offer the install command, which adds them ([all]).
+    const missing = helper.missingReaders ?? [];
+    if (missing.length) {
+      const version = helper.version ? `, version ${helper.version}` : '';
+      return {
+        helper,
+        tone: 'warn',
+        status: `Installed${version}, but can't read ${readerNames(missing)} files`,
+        command: helper.installCommand,
+        action: helper.installCommand ? 'readers' : null,
+      };
     }
     if (!helper.version) {
       return { helper, tone: 'good', status: 'Installed', command: null, action: null };
@@ -492,6 +640,7 @@ export class SystemIntegrationDialogComponent implements OnChanges, OnDestroy {
   }
 
   async install(helper: SystemIntegrationHelper): Promise<void> {
+    this.finished.set(null);
     const result = await this.run('install-helper', helper.id);
     if (result?.ok) {
       this.installStarted.set(true);
@@ -523,6 +672,48 @@ export class SystemIntegrationDialogComponent implements OnChanges, OnDestroy {
     if (result?.ok && (action === 'outlook-allow' || action === 'outlook-undo')) this.outlookChanged.set(true);
     if (result?.ok && (action === 'preview-off' || action === 'preview-on')) this.previewChanged.set(true);
     await this.refresh();
+  }
+
+  // The portable version only: what installing Studio adds, and where to get it.
+  private studioRow(s: SystemIntegrationStatus): Row | null {
+    const studio = s.studio;
+    if (!studio) return null;
+    const title = WINDOWS_TITLES.studio;
+    const getInstaller = { label: 'Get the Installer', run: () => void this.openPage('studio') };
+    const keep = 'Your documents aren’t affected; settings made in the portable version stay with it.';
+    if (studio.installed) {
+      // Not "Open MDZip Studio": this is Studio, already open.
+      return {
+        id: 'studio', title: 'Installed version', tone: 'good',
+        status: studio.installed === 'machine' ? 'Installed for all users' : 'Installed for you',
+        detail: `You’re running the portable version. MDZip Studio is also installed on this computer, as a separate copy with its own settings. Your documents aren’t affected.`,
+        action: { label: 'Open Installed Version', run: () => void this.runAndRefresh('open-studio') },
+      };
+    }
+    const adds = 'The installed version opens .mdz files from File Explorer, can open .md files, shows previews in File Explorer, and can download and install a new version when you choose to (the portable version only tells you about it).';
+    if (studio.via) {
+      const manager = studio.via === 'winget' ? 'winget' : 'Chocolatey';
+      return {
+        id: 'studio', title, tone: 'off', status: 'This is the portable version',
+        detail: `${adds} Install installs it for all users with ${manager}, with Windows Explorer integration; Windows asks for administrator rights. ${keep}`,
+        action: { label: 'Install', run: () => void this.installStudio() },
+        more: { label: 'Get the Installer', run: getInstaller.run },
+        command: studio.command,
+      };
+    }
+    return {
+      id: 'studio', title, tone: 'off', status: 'This is the portable version',
+      detail: `${adds} For all of these, install it for all users with the Windows Explorer integration option. ${keep}`,
+      action: getInstaller,
+    };
+  }
+
+  // Installs Studio in a terminal window (winget or Chocolatey); the card
+  // checks again when it's done.
+  async installStudio(): Promise<void> {
+    this.finished.set(null);
+    const result = await this.run('install-studio');
+    if (result?.ok) this.installStarted.set(true);
   }
 
   private markdownRow(s: SystemIntegrationStatus): Row | null {

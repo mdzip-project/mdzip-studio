@@ -55,7 +55,7 @@ describe('ImportDialogComponent', () => {
     await dialog.run();
 
     // A Word document: its styles are kept by default, the original isn't.
-    expect(importRun).toHaveBeenCalledWith('pandoc', { keepStyles: true, keepOriginal: false, documentStyle: true, look: DEFAULT_IMPORT_LOOK });
+    expect(importRun).toHaveBeenCalledWith('pandoc', { keepStyles: true, keepOriginal: false, documentStyle: true, look: DEFAULT_IMPORT_LOOK, notes: true });
     expect(imported.map((document) => document.fileName)).toEqual(['Launch Notes.mdz']);
     expect(dialog.visible()).toBe(false);
   });
@@ -74,7 +74,7 @@ describe('ImportDialogComponent', () => {
     dialog.documentStyle.set(false);
     await dialog.run();
 
-    expect(importRun).toHaveBeenCalledWith('pandoc', { keepStyles: false, keepOriginal: true, documentStyle: false, look: DEFAULT_IMPORT_LOOK });
+    expect(importRun).toHaveBeenCalledWith('pandoc', { keepStyles: false, keepOriginal: true, documentStyle: false, look: DEFAULT_IMPORT_LOOK, notes: true });
     expect(imported[0].original).toEqual(original);
   });
 
@@ -84,14 +84,14 @@ describe('ImportDialogComponent', () => {
     await dialog.start();
     // All on by default, so the command shows each switch.
     expect(dialog.commandLine()).toBe(
-      'pandoc "Launch Notes.docx" -t mdz.lua+image_sizes+html_tables+table_look+html_formatting -o "Launch Notes.mdz"',
+      'pandoc "Launch Notes.docx" -t mdz.lua+image_sizes+html_tables+table_look+html_formatting+notes -o "Launch Notes.mdz"',
     );
     dialog.setLook('htmlTables', false);
     dialog.setLook('tableLook', false);
-    expect(dialog.commandLine()).toBe('pandoc "Launch Notes.docx" -t mdz.lua+image_sizes+html_formatting -o "Launch Notes.mdz"');
+    expect(dialog.commandLine()).toBe('pandoc "Launch Notes.docx" -t mdz.lua+image_sizes+html_formatting+notes -o "Launch Notes.mdz"');
     dialog.setLook('imageSizes', false);
     dialog.setLook('htmlFormatting', false);
-    expect(dialog.commandLine()).toBe('pandoc "Launch Notes.docx" -t mdz.lua -o "Launch Notes.mdz"');
+    expect(dialog.commandLine()).toBe('pandoc "Launch Notes.docx" -t mdz.lua+notes -o "Launch Notes.mdz"');
     dialog.setLook('htmlTables', true);
     dialog.setLook('tableLook', true);
     await dialog.run();
@@ -116,11 +116,35 @@ describe('ImportDialogComponent', () => {
       importRun,
     });
     await dialog.start();
-    expect(dialog.commandLine()).toBe('pandoc "page.html" -t mdz.lua+image_sizes+html_tables+html_formatting -o "Launch Notes.mdz"');
+    expect(dialog.commandLine()).toBe('pandoc "page.html" -t mdz.lua+image_sizes+html_tables+html_formatting+notes -o "Launch Notes.mdz"');
     dialog.selectTool('markitdown-mdz');
     expect(dialog.commandLine()).toBe('markitdown-mdz "page.html" -o "Launch Notes.mdz"');
     await dialog.run();
-    expect(importRun).toHaveBeenCalledWith('markitdown-mdz', undefined);
+    expect(importRun).toHaveBeenCalledWith('markitdown-mdz', { notes: true });
+  });
+
+  it('Conversion notes: on by default, for any program; off drops +notes, is remembered, and the info comes back', async () => {
+    const notes = { tool: 'Pandoc', command: 'pandoc "Launch Notes.docx" -t mdz.lua+notes -o "Launch Notes.mdz"', source: 'Launch Notes.docx' };
+    const importRun = vi.fn().mockResolvedValue({ bytes: new Uint8Array([80, 75]), fileName: 'Launch Notes.mdz', warnings: [], notes });
+    vi.stubGlobal('mdzipStudio', { importPick: vi.fn().mockResolvedValue(WORD_PICK), importRun });
+    const imported: ImportedDocument[] = [];
+    dialog.imported.subscribe((document) => imported.push(document));
+    await dialog.start();
+    expect(dialog.notes()).toBe(true);
+    await dialog.run();
+    expect(imported[0].notes).toEqual(notes);
+
+    dialog.setNotes(false);
+    expect(dialog.commandLine()).toBe(
+      'pandoc "Launch Notes.docx" -t mdz.lua+image_sizes+html_tables+table_look+html_formatting -o "Launch Notes.mdz"',
+    );
+    await dialog.start();
+    await dialog.run();
+    expect(importRun.mock.calls[1][1].notes).toBe(false);
+    runInInjectionContext(TestBed.inject(Injector), () => {
+      dialog = new ImportDialogComponent();
+    });
+    expect(dialog.notes()).toBe(false);
   });
 
   it('stays open with the message and the fix when the conversion fails', async () => {

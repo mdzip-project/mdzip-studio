@@ -1,6 +1,6 @@
 import { SimpleChange } from '@angular/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SystemIntegrationDialogComponent, SystemIntegrationStatus } from './system-integration-dialog.component';
+import { SystemIntegrationDialogComponent, SystemIntegrationStatus, helperFacts, readerNames } from './system-integration-dialog.component';
 
 const helpers: SystemIntegrationStatus['helpers'] = [
   { id: 'pandoc', name: 'Pandoc', purpose: 'Converts.', url: 'https://pandoc.org', installCommand: 'winget install --id JohnMacFarlane.Pandoc --exact --source winget', installed: true, version: '3.14' },
@@ -26,15 +26,16 @@ function fakeBridge(initial: SystemIntegrationStatus) {
   const getCards = vi.fn(async () => ({
     platform: status.platform,
     portable: status.portable,
-    windows: status.platform === 'win32' ? ['markdown', 'preview', 'outlook'] : [],
-    helpers: status.helpers.map(({ installed: _installed, version: _version, ...card }) => card),
+    windows: status.platform === 'win32' ? [...(status.portable ? ['studio'] : []), 'markdown', 'preview', 'outlook'] : [],
+    helpers: status.helpers.map(({ installed: _installed, version: _version, missingReaders: _missing, requirementMissing: _requirement, ...card }) => card),
   }));
   const check = vi.fn(async (id: string) => {
     if (id === 'markdown') return status.markdownDefault;
     if (id === 'preview') return status.previewHandler;
     if (id === 'outlook') return status.outlook;
+    if (id === 'studio') return status.studio;
     const helper = status.helpers.find((candidate) => candidate.id === id)!;
-    return { installed: helper.installed, version: helper.version };
+    return { installed: helper.installed, version: helper.version, missingReaders: helper.missingReaders, requirementMissing: helper.requirementMissing };
   });
   return { getCards, check, setStatus: (next: SystemIntegrationStatus) => { status = next; } };
 }
@@ -97,6 +98,52 @@ describe('SystemIntegrationDialogComponent', () => {
     expect(asked).toEqual([
       'opening-md-files', 'explorer-previews', 'outlook-attachments', 'helper-programs', 'pandoc', 'mermaid-cli', 'mdz-command-line',
     ]);
+  });
+
+  it('offers to install Studio first in the portable version, and not otherwise', async () => {
+    const portable = (studio: SystemIntegrationStatus['studio']) => windowsStatus({
+      portable: true, markdownDefault: { state: 'unsupported' }, previewHandler: { state: 'portable' }, studio,
+    });
+    const winget = 'winget install --id MDZip.Studio --exact --source winget --scope machine';
+    const { dialog, action } = await open(portable({ installed: null, via: 'winget', command: winget }));
+    const rows = dialog.windowsRows();
+    expect(rows.map((row) => row.id)).toEqual(['studio', 'markdown', 'preview', 'outlook']);
+    expect(rows[0]).toMatchObject({ title: 'Install MDZip Studio', status: 'This is the portable version', command: winget });
+    expect(rows[0].detail).toMatch(/install a new version when you choose to.*with winget/);
+    expect(rows[0].action?.label).toBe('Install');
+    expect(rows[0].more?.label).toBe('Get the Installer');
+    rows[0].action!.run();
+    await vi.waitFor(() => expect(action).toHaveBeenCalledWith({ action: 'install-studio', id: undefined }));
+    await vi.waitFor(() => expect(dialog.installStarted()).toBe(true));
+    rows[0].more!.run();
+    await vi.waitFor(() => expect(action).toHaveBeenCalledWith({ action: 'open-page', id: 'studio' }));
+
+    dialog.onFinished({ action: 'install-studio', id: 'studio', code: 0 });
+    expect(dialog.finished()).toEqual({ ok: true, text: 'MDZip Studio was installed.' });
+
+    const asked: (string | null)[] = [];
+    dialog.learnMore.subscribe((anchor) => asked.push(anchor));
+    dialog.showHelp('studio');
+    expect(asked).toEqual(['installing-mdzip-studio']);
+
+    const choco = await open(portable({ installed: null, via: 'choco', command: 'choco install mdzip-studio -y' }));
+    expect(choco.dialog.windowsRows()[0].detail).toMatch(/with Chocolatey/);
+
+    const neither = await open(portable({ installed: null, via: null, command: null }));
+    const row = neither.dialog.windowsRows()[0];
+    expect(row.action?.label).toBe('Get the Installer');
+    expect(row.more).toBeUndefined();
+    expect(row.command).toBeUndefined();
+
+    const both = await open(portable({ installed: 'machine', via: null, command: null }));
+    const installedRow = both.dialog.windowsRows()[0];
+    expect(installedRow).toMatchObject({ title: 'Installed version', tone: 'good', status: 'Installed for all users' });
+    expect(installedRow.action?.label).toBe('Open Installed Version');
+    installedRow.action!.run();
+    await vi.waitFor(() => expect(both.action).toHaveBeenCalledWith({ action: 'open-studio', id: undefined }));
+
+    const installed = await open(windowsStatus());
+    expect(installed.dialog.windowsRows().some((row) => row.id === 'studio')).toBe(false);
   });
 
   it('has no Windows rows elsewhere, only helper programs', async () => {
@@ -204,6 +251,103 @@ describe('SystemIntegrationDialogComponent', () => {
     await dialog.update(mdz);
     expect(action).toHaveBeenCalledWith({ action: 'upgrade-helper', id: 'mdz' });
     expect(dialog.installStarted()).toBe(true);
+  });
+
+  it("says which files markitdown-mdz can't read, and offers to add the readers", async () => {
+    const markitdown = {
+      id: 'markitdown-mdz', name: 'markitdown-mdz', purpose: 'Imports.', url: 'https://example.org',
+      installCommand: 'py -m pip install --user "markitdown-mdzip[all]"', installed: true, version: '0.1.1',
+      missingReaders: ['docx', 'pptx', 'xlsx', 'xls'],
+    };
+    const { dialog, action } = await open(windowsStatus({ helpers: [markitdown] }));
+    const row = dialog.helperRows()[0];
+    expect(row.status).toBe("Installed, version 0.1.1, but can't read Word, PowerPoint and Excel files");
+    expect([row.tone, row.action, row.command]).toEqual(['warn', 'readers', 'py -m pip install --user "markitdown-mdzip[all]"']);
+    await dialog.install(row.helper);
+    expect(action).toHaveBeenCalledWith({ action: 'install-helper', id: 'markitdown-mdz' });
+    expect(readerNames(['pdf'])).toBe('PDF');
+    expect(readerNames(['docx', 'rtf'])).toBe('Word and .rtf');
+  });
+
+  it('says what a program needs and costs, and offers to get what installs it when that is missing', async () => {
+    const markitdown = {
+      id: 'markitdown-mdz', name: 'markitdown-mdz', purpose: 'Imports.', url: 'https://example.org',
+      installCommand: 'py -m pip install --user "markitdown-mdzip[all]"', size: 'About 115 MB to download.',
+      requires: 'Python', requiresAlways: true, installed: false, version: null, requirementMissing: true,
+    };
+    const pandoc = {
+      id: 'pandoc', name: 'Pandoc', purpose: 'Converts.', url: 'https://example.org',
+      installCommand: 'winget install --id JohnMacFarlane.Pandoc --exact --source winget', size: 'About 45 MB to download.',
+      requires: 'winget', requiresAlways: false, installed: false, version: null, requirementMissing: false,
+    };
+    const { dialog, action } = await open(windowsStatus({ helpers: [markitdown, pandoc] }));
+    const [python, winget] = dialog.helperRows();
+    expect([python.status, python.action, python.facts]).toEqual(['Not installed. Needs Python first', 'requires', 'Needs Python. About 115 MB to download.']);
+    // winget is there, so it isn't mentioned; the size is.
+    expect([winget.status, winget.action, winget.facts]).toEqual(['Not installed', 'install', 'About 45 MB to download.']);
+    await dialog.openPage('requires:markitdown-mdz');
+    expect(action).toHaveBeenCalledWith({ action: 'open-page', id: 'requires:markitdown-mdz' });
+
+    // Installed: what it needs stays (Python), what it cost goes.
+    expect(helperFacts({ ...markitdown, installed: true, version: '0.1.1', requirementMissing: false })).toBe('Needs Python.');
+    expect(helperFacts({ ...pandoc, installed: true, version: '3.14' })).toBe('');
+    expect(helperFacts({ ...pandoc, requirementMissing: true })).toBe('Needs winget. About 45 MB to download.');
+  });
+
+  it('uninstalls a program only after its card asks, and says what stays behind', async () => {
+    const mmdc = {
+      id: 'mmdc', name: 'Mermaid CLI', purpose: 'Draws.', url: 'https://example.org',
+      installCommand: 'npm install -g @mermaid-js/mermaid-cli', uninstallCommand: 'npm uninstall -g @mermaid-js/mermaid-cli',
+      uninstallNote: 'Its copies of Chrome stay.', installed: true, version: '12.2.0',
+    };
+    const typst = { ...mmdc, id: 'typst', name: 'Typst', uninstallCommand: 'winget uninstall --id Typst.Typst --exact --source winget', uninstallNote: null, installed: false, version: null };
+    const { dialog, action } = await open(windowsStatus({ helpers: [mmdc, typst] }));
+    expect(dialog.confirmUninstall()).toBeNull();
+    dialog.confirmUninstall.set('mmdc'); // Uninstall… asks first; nothing has run yet
+    expect(action).not.toHaveBeenCalled();
+    await dialog.uninstall(dialog.helperRows()[0].helper);
+    expect(action).toHaveBeenCalledWith({ action: 'uninstall-helper', id: 'mmdc' });
+    expect(dialog.confirmUninstall()).toBeNull();
+    expect(dialog.installStarted()).toBe(true);
+
+    // Where Studio can't open a terminal, the question stays open: it shows the command.
+    action.mockResolvedValue({ ok: false, error: 'no-terminal', command: mmdc.uninstallCommand });
+    dialog.confirmUninstall.set('mmdc');
+    await dialog.uninstall(dialog.helperRows()[0].helper);
+    expect(dialog.confirmUninstall()).toBe('mmdc');
+    expect(dialog.copyHint()).toBe('mmdc');
+  });
+
+  it('checks again and says so when an install, update or uninstall finishes in its window', async () => {
+    let finish: ((data: { action: string; id: string; code: number | null }) => void) | null = null;
+    const stop = vi.fn();
+    const bridge = fakeBridge(windowsStatus());
+    const action = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal('mdzipStudio', {
+      getSystemIntegrationCards: bridge.getCards,
+      checkSystemIntegration: bridge.check,
+      runSystemIntegrationAction: action,
+      onSystemIntegrationFinished: (callback: typeof finish) => { finish = callback; return stop; },
+    });
+    const dialog = new SystemIntegrationDialogComponent();
+    dialog.visible = true;
+    dialog.ngOnChanges({ visible: new SimpleChange(false, true, true) });
+    await vi.waitFor(() => expect(dialog.loading()).toBe(false));
+    expect(dialog.helperRows()[1].status).toBe('Not installed');
+
+    await dialog.install(helpers[1]);
+    expect(dialog.installStarted()).toBe(true);
+    // Typst's window finishes; Studio never lost the focus.
+    bridge.setStatus(windowsStatus({ helpers: [helpers[0], { ...helpers[1], installed: true, version: '0.15.1' }] }));
+    finish!({ action: 'install-helper', id: 'typst', code: 0 });
+    expect(dialog.installStarted()).toBe(false);
+    expect(dialog.finished()).toEqual({ ok: true, text: 'Typst was installed.' });
+    await vi.waitFor(() => expect(dialog.helperRows()[1].status).toBe('Installed, version 0.15.1'));
+
+    finish!({ action: 'uninstall-helper', id: 'typst', code: 1 });
+    expect(dialog.finished()).toEqual({ ok: false, text: "The Typst uninstall didn't finish: its window says why." });
+    dialog.ngOnDestroy();
+    expect(stop).toHaveBeenCalled();
   });
 
   it('shows every card at once, each checking until its own check answers', async () => {

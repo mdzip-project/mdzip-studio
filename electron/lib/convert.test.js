@@ -80,6 +80,14 @@ describe('importCommand', () => {
       .toBe('markitdown-mdz a.docx -o a.mdz');
   });
 
+  it('adds +notes for conversion notes, after the look; markitdown-mdz has none', () => {
+    const look = { imageSizes: true, htmlTables: false, tableLook: false, htmlFormatting: false };
+    expect(importCommand({ tool: 'pandoc', input: 'a.docx', output: 'a.mdz', look, notes: true }).args[2]).toBe('mdz.lua+image_sizes+notes');
+    expect(importCommand({ tool: 'pandoc', input: 'a.docx', output: 'a.mdz', notes: 'yes' }).args[2]).toBe('mdz.lua');
+    expect(commandLine(importCommand({ tool: 'markitdown-mdz', input: 'a.docx', output: 'a.mdz', notes: true }), 'darwin'))
+      .toBe('markitdown-mdz a.docx -o a.mdz');
+  });
+
   it('runs markitdown-mdz with -o', () => {
     expect(commandLine(importCommand({ tool: 'markitdown-mdz', input: 'deck.pptx', output: 'deck.mdz' }), 'darwin'))
       .toBe('markitdown-mdz deck.pptx -o deck.mdz');

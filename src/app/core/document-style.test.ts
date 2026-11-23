@@ -85,6 +85,13 @@ describe('scopeDocumentStyle', () => {
     expect(await scopeDocumentStyle(source, 'style.css', 'print', read)).toContain('@page');
   });
 
+  it("keeps a page's picture from the archive for print (a letterhead), and not one from outside", async () => {
+    const letterhead = await scopeDocumentStyle('@page :first { background-image: url(../images/paper.png) }', 'styles/style.css', 'print', read);
+    expect(letterhead).toContain('@page :first');
+    expect(letterhead).toContain('data:image/png;base64,BBBB');
+    expect(await scopeDocumentStyle('@page { background-image: url(https://tracker.example/p.png) }', 'style.css', 'print', read)).toBe('');
+  });
+
   it('gives nothing for a stylesheet that is all junk', async () => {
     expect(await scopeDocumentStyle('}{ not css', 'style.css', 'preview', read)).toBe('');
   });

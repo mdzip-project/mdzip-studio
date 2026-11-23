@@ -155,6 +155,18 @@ export async function scopeDocumentStyle(
     return lines.length ? lines.join(' ') : null;
   };
 
+  // A whole rule's text with its url()s made data: URIs, or null when one
+  // points outside the archive.
+  const withArchiveUrls = (text: string): string | null => {
+    let blocked = false;
+    const result = text.replace(URL, (_match, a, b, c) => {
+      const data = urlOf(String(a ?? b ?? c ?? '').trim());
+      if (!data) blocked = true;
+      return `url("${data ?? ''}")`;
+    });
+    return blocked ? null : result;
+  };
+
   const walk = (list: CSSRuleList, root: string, wrap: (text: string) => string) => {
     for (const rule of Array.from(list)) {
       switch (rule.type) {
@@ -184,21 +196,18 @@ export async function scopeDocumentStyle(
           break;
         }
         case 5: { // @font-face: whole, or not at all if a source is outside the archive
-          let blocked = false;
-          const text = rule.cssText.replace(URL, (_match, a, b, c) => {
-            const data = urlOf(String(a ?? b ?? c ?? '').trim());
-            if (!data) blocked = true;
-            return `url("${data ?? ''}")`;
-          });
-          if (!blocked) out.push(text);
+          const text = withArchiveUrls(rule.cssText);
+          if (text) out.push(text);
           break;
         }
         case 7: // @keyframes
           if (!/url\(/i.test(rule.cssText)) out.push(rule.cssText);
           break;
-        case 6: // @page: print only
-          if (target === 'print' && !/url\(/i.test(rule.cssText)) out.push(rule.cssText);
+        case 6: { // @page: print only, with its margin boxes (a letterhead picture in @top-center)
+          const text = target === 'print' ? withArchiveUrls(rule.cssText) : null;
+          if (text) out.push(text);
           break;
+        }
         default:
           // @layer blocks: their rules, in order. @import and the rest: dropped.
           if (rule.constructor?.name === 'CSSLayerBlockRule') walk((rule as CSSGroupingRule).cssRules, root, wrap);

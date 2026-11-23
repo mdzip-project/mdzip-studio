@@ -43,6 +43,19 @@ export interface ImportWordOptions {
   documentStyle?: boolean;
   // What Pandoc's import keeps as HTML (see ImportLook).
   look?: ImportLook;
+  // Conversion notes, sources/conversion-notes.md (see conversion-notes.ts):
+  // mdz.lua's +notes, and what Studio did. Any file, not only Word.
+  notes?: boolean;
+}
+
+// What the main process tells the notes about the run (with `notes` on).
+export interface ImportNotesInfo {
+  // The program's name ("Pandoc", "MarkItDown").
+  tool: string;
+  // The command as the dialog showed it: file names, no folders.
+  command: string;
+  // The file it came from: its name, no folder.
+  source: string;
 }
 
 // What Import keeps as HTML in the Markdown so the .mdz looks like the
@@ -83,6 +96,8 @@ export type ImportResult =
       canceled?: boolean;
       // A Word document's options were on: the file it came from.
       original?: { fileName: string; bytes: Uint8Array; keepStyles: boolean; keepOriginal: boolean; documentStyle?: boolean };
+      // Conversion notes were on.
+      notes?: ImportNotesInfo;
     };
 
 export interface ExportFormatInfo {

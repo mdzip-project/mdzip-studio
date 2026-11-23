@@ -880,6 +880,18 @@ button.destination-option:hover:not(:disabled),
   flex: none;
 }
 
+.statusbar-links .statusbar-progress {
+  width: 120px;
+  height: 8px;
+  align-self: center;
+  accent-color: #2563c9;
+}
+
+.statusbar-progress-text {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 .statusbar-link {
   padding: 0;
   border: 0;

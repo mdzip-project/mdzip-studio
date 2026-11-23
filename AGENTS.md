@@ -261,6 +261,14 @@ npm test
 - Preload script exposes `window.mdzipStudio` with `openDocument` and `saveDocument`
 - Main process handles file dialogs and file system read/write via `ipcMain.handle`
 
+### Help pages
+- `src/assets/help/mdzip-studio-help.mdz` is **generated**: don't edit it. Its
+  pages are mdzip.org's `docs-src/studio-*.mdz` (the list is in
+  `src/app/modules/help/help-pages.ts`). Edit those, with the site's link forms
+  (`studio-import-export.html`, `../studio.html`, `cli.html`), then run
+  `npm run sync:help` here, which rewrites the links for the archive.
+  `npm run sync:help -- --check` says whether it's up to date.
+
 ## Next Steps for Implementation
 
 1. **Theme support**

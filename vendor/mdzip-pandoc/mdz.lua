@@ -39,6 +39,12 @@ Markdown can't write, so the .mdz looks more like the original
   html_formatting  underline, superscript, subscript, small caps, highlight;
                    off: plain text
 
+And, not part of the document:
+  notes            sources/conversion-notes.md: the original's name, size and
+                   SHA-1, when and with what it was converted, and, from Word,
+                   what didn't come across (comments, tracked changes, shapes,
+                   text boxes, fields, charts, headers and footers...)
+
 Needs mdzip-core-lua (https://github.com/mdzip-project/mdzip-core-lua): set
 MDZIP_LUA_PATH to its src folder, or keep it next to this file.
 ]]
@@ -59,6 +65,8 @@ Extensions = {
   html_tables = false,
   table_look = false,
   html_formatting = false,
+  -- Writing: sources/conversion-notes.md (off by default).
+  notes = false,
 }
 
 ---------------------------------------------------------------------------
@@ -98,13 +106,47 @@ local function mime_of(path)
   return ext and MIME[ext:lower()] or nil
 end
 
--- Rewrite the src of <img> tags in raw HTML. fn(src) returns the new src or nil.
+-- A srcset ("logo-2x.png 2x, logo.png 1x", as in an EPUB) with each picture
+-- rewritten by fn(src, true), or nil if any of them can't be. A browser shows
+-- srcset in preference to src, so a srcset that can't be rewritten is dropped,
+-- and src is shown instead. (Pandoc's EPUB reader loads only the src pictures,
+-- so an EPUB's srcset is always dropped.) The true asks fn not to warn: a
+-- missing srcset picture loses nothing.
+local function rewrite_srcset(set, fn)
+  local out = {}
+  for candidate in set:gmatch("[^,]+") do
+    local url, descriptor = candidate:match("^%s*(%S+)(.-)%s*$")
+    local new = url and fn(url, true)
+    if not new then return nil end
+    out[#out + 1] = new .. descriptor
+  end
+  if #out == 0 then return nil end
+  return table.concat(out, ", ")
+end
+
+-- An Image's src and srcset rewritten by fn(src); nil if src can't be.
+local function rewrite_image(img, fn)
+  local found = fn(img.src)
+  if not found then return nil end
+  img.src = found
+  local set = img.attributes.srcset
+  if set then img.attributes.srcset = rewrite_srcset(set, fn) end
+  return img
+end
+
+-- Rewrite the src and srcset of <img> tags in raw HTML. fn(src) returns the
+-- new src or nil.
 local function rewrite_html_img(html, fn)
   return (html:gsub("(<[Ii][Mm][Gg]%f[%s/>][^>]*)", function(tag)
-    return (tag:gsub("([%s][Ss][Rr][Cc]%s*=%s*)([\"'])(.-)%2", function(pre, quote, src)
+    tag = tag:gsub("([%s][Ss][Rr][Cc]%s*=%s*)([\"'])(.-)%2", function(pre, quote, src)
       local new = fn(src)
       if new then return pre .. quote .. new .. quote end
       return nil
+    end)
+    return (tag:gsub("([%s]+)([Ss][Rr][Cc][Ss][Ee][Tt]%s*=%s*)([\"'])(.-)%3", function(space, pre, quote, set)
+      local new = rewrite_srcset(set, fn)
+      if not new then return "" end
+      return space .. pre .. quote .. new .. quote
     end))
   end))
 end
@@ -436,10 +478,10 @@ function ByteStringReader(input, opts)
   -- Images: resolve against the document they're in, load from the archive
   -- into the media bag under their archive path, and point the document at it.
   local loaded = {}
-  local function load(from, src)
+  local function load(from, src, quiet)
     local r = archive:resolve_link(from, src)
     if r.kind ~= "internal" then
-      if r.kind == "unresolved" then warn("image not in the archive: " .. src) end
+      if r.kind == "unresolved" and not quiet then warn("image not in the archive: " .. src) end
       return nil
     end
     if not loaded[r.entry] then
@@ -453,7 +495,7 @@ function ByteStringReader(input, opts)
   local function read_doc(path)
     local text, terr = archive:read_text(path)
     if not text then fail(terr) end
-    local function here(src) return load(path, src) end
+    local function here(src, quiet) return load(path, src, quiet) end
     local parsed = pandoc.read(text, fmt, opts)
     if opts.extensions:includes("raw_html") then
       parsed = parsed:walk(html_to_native)
@@ -461,10 +503,7 @@ function ByteStringReader(input, opts)
       parsed = parsed:walk(strip_raw_html)
     end
     return parsed:walk({
-      Image = function(img)
-        local found = here(img.src)
-        if found then img.src = found; return img end
-      end,
+      Image = function(img) return rewrite_image(img, here) end,
       RawInline = function(raw)
         if raw.format == "html" then raw.text = rewrite_html_img(raw.text, here); return raw end
       end,
@@ -528,6 +567,18 @@ function ByteStringReader(input, opts)
       end
     end
     doc.meta = meta
+  end
+
+  -- A document that starts with its own title as a heading ("# Trip Notes",
+  -- with "Trip Notes" as the manifest's title, as writing an .mdz from Word
+  -- adds it) would show it twice: Pandoc writes the title as a title block
+  -- (Word's Title style, a web page's title header) above it. The heading
+  -- goes; the title stays, in the title block and the file's properties.
+  local title = doc.meta.title and stringify(doc.meta.title) or nil
+  local first = doc.blocks[1]
+  if title and first and first.t == "Header" and first.level == 1 then
+    local same = function(text) return text:gsub("%s+", " "):match("^%s*(.-)%s*$"):lower() end
+    if same(stringify(first.content)) == same(title) then doc.blocks:remove(1) end
   end
   return doc
 end
@@ -1015,6 +1066,174 @@ local function tables_with_look_as_html(doc)
   })
 end
 
+---------------------------------------------------------------------------
+-- Conversion notes (+notes): sources/conversion-notes.md, saying where the
+-- document came from and, from Word, what didn't come across. It's in
+-- sources/, next to a kept original, not part of the document.
+
+local NOTES_PATH = "sources/conversion-notes.md"
+
+local FORMAT_NAMES = {
+  docx = "Word document", docm = "Word document with macros", dotx = "Word template", dotm = "Word template with macros",
+  odt = "OpenDocument text", rtf = "Rich Text", epub = "EPUB book", html = "web page", htm = "web page",
+  md = "Markdown", markdown = "Markdown", txt = "text", tex = "LaTeX", rst = "reStructuredText", org = "Org",
+  ipynb = "Jupyter notebook", pptx = "PowerPoint presentation", xlsx = "Excel workbook", csv = "CSV", typ = "Typst",
+}
+
+local function count(text, pattern)
+  local n = 0
+  for _ in (text or ""):gmatch(pattern) do n = n + 1 end
+  return n
+end
+
+local function plural(n, one, many) return n .. " " .. (n == 1 and one or (many or one .. "s")) end
+
+local function size_text(bytes)
+  if bytes < 1024 then return bytes .. " bytes" end
+  if bytes < 1024 * 1024 then return string.format("%.0f KB", bytes / 1024) end
+  return string.format("%.1f MB", bytes / 1024 / 1024)
+end
+
+-- When it was converted: now, or SOURCE_DATE_EPOCH for a reproducible build.
+local function converted_at()
+  local epoch = tonumber(os.getenv("SOURCE_DATE_EPOCH") or "")
+  return os.date("!%Y-%m-%d %H:%M UTC", epoch)
+end
+
+-- What a Word file had that the .mdz doesn't, counted in its XML. Each entry
+-- is a line for the notes; empty when nothing checked for was there.
+local function word_losses(backdrops)
+  local word = word_input()
+  if not word or not word.bytes then return nil end
+  local xml = word.unsplit or word.xml
+  local parts, macros = {}, false
+  for _, e in ipairs(pandoc.zip.Archive(word.bytes).entries) do
+    if e.path:match("^word/[^/]+%.xml$") then parts[e.path] = e:contents() end
+    if e.path == "word/vbaProject.bin" then macros = true end
+  end
+  local lines = {}
+  local function add(text) lines[#lines + 1] = "- " .. text end
+
+  local comments = count(parts["word/comments.xml"], "<w:comment[%s>]")
+  if comments > 0 then add("**Comments:** " .. plural(comments, "comment") .. ", left out.") end
+  local ins, del = count(xml, "<w:ins[%s>]"), count(xml, "<w:del[%s>]")
+  if ins + del > 0 then
+    add("**Tracked changes:** " .. plural(ins, "insertion") .. " and " .. plural(del, "deletion")
+      .. ", accepted: the text reads as if every change had been accepted.")
+  end
+  local shapes = count(xml, "<wps:wsp[%s>]")
+  if shapes > 0 then
+    add("**Shapes:** " .. plural(shapes, "shape") .. " (lines, boxes, banners), left out."
+      .. (backdrops > 0 and (" " .. plural(backdrops, "picture") .. " drawn on one keep" .. (backdrops == 1 and "s" or "")
+        .. " its colour behind " .. (backdrops == 1 and "it" or "them") .. ".") or ""))
+  end
+  local boxes = count(xml, "<wps:txbx[%s>]")
+  if boxes == 0 then boxes = count(xml, "<v:textbox[%s>]") end
+  if boxes > 0 then
+    add("**Text boxes:** " .. plural(boxes, "text box", "text boxes")
+      .. "; their text may be out of place or missing. Check them against the original.")
+  end
+  local fields, kinds = {}, {}
+  local function field(instr)
+    local kind = (instr or ""):match("^%s*(%u+)")
+    if kind and kind ~= "HYPERLINK" then
+      if not fields[kind] then kinds[#kinds + 1] = kind end
+      fields[kind] = (fields[kind] or 0) + 1
+    end
+  end
+  for instr in xml:gmatch("<w:instrText[^>]*>([^<]*)</w:instrText>") do field(instr) end
+  for instr in xml:gmatch('<w:fldSimple[^>]-w:instr="([^"]*)"') do field(instr) end
+  if #kinds > 0 then
+    table.sort(kinds)
+    add("**Fields** (" .. table.concat(kinds, ", ") .. "): their text as the file last showed it; "
+      .. "they no longer update (a table of contents keeps its entries, page numbers stay as they were).")
+  end
+  local charts = count(xml, 'drawingml/2006/chart"')
+  if charts > 0 then add("**Charts:** " .. plural(charts, "chart") .. ", left out.") end
+  local diagrams = count(xml, 'drawingml/2006/diagram"')
+  if diagrams > 0 then add("**SmartArt:** " .. plural(diagrams, "diagram") .. ", left out.") end
+  local objects = count(xml, "<o:OLEObject[%s>]")
+  if objects > 0 then add("**Embedded objects:** " .. plural(objects, "object") .. " (a spreadsheet, a file), left out.") end
+  local columns = count(xml, '<w:cols [^>]-w:num="[2-9]')
+  if columns > 0 then add("**Columns:** text laid out in several columns is in one.") end
+  local headers = 0
+  for path, part in pairs(parts) do
+    if path:match("^word/header%d*%.xml$") or path:match("^word/footer%d*%.xml$") then
+      if part:match("<w:t[%s>][^<]*%S") then headers = headers + 1 end
+    end
+  end
+  if headers > 0 then
+    add("**Headers and footers:** " .. plural(headers, "header or footer", "headers or footers")
+      .. " with text, not part of the document. A Word template made from the original keeps them.")
+  end
+  if macros then add("**Macros:** left out.") end
+  return lines
+end
+
+local function conversion_notes(doc, ext, images)
+  local inputs = PANDOC_STATE.input_files or {}
+  local lines = {
+    "# Conversion notes",
+    "",
+    "How this document was made from its original, and what didn't come across. "
+      .. "mdz.lua wrote it when it converted the file (`+notes`); it isn't part of the document.",
+    "",
+    "## Where it came from",
+    "",
+  }
+  local function add(text) lines[#lines + 1] = text end
+  for _, input in ipairs(inputs) do
+    if input ~= "-" then
+      local name = input:match("([^/\\]+)$") or input
+      local kind = FORMAT_NAMES[(name:match("%.(%w+)$") or ""):lower()]
+      local fh = io.open(input, "rb")
+      local data = fh and fh:read("a")
+      if fh then fh:close() end
+      local about = { kind }
+      if data then about[#about + 1] = size_text(#data) end
+      add("- **Original:** `" .. name .. "`" .. (#about > 0 and (" (" .. table.concat(about, ", ") .. ")") or ""))
+      if data then add("- **SHA-1:** `" .. pandoc.utils.sha1(data) .. "`") end
+    end
+  end
+  add("- **Converted:** " .. converted_at())
+  add("- **With:** Pandoc " .. tostring(PANDOC_VERSION) .. " and mdz.lua " .. VERSION)
+  local switches = {}
+  for _, name in ipairs({ "image_sizes", "html_tables", "table_look", "html_formatting" }) do
+    if ext:includes(name) then switches[#switches + 1] = "`+" .. name .. "`" end
+  end
+  add("- **Kept as HTML:** " .. (#switches > 0 and table.concat(switches, " ") or "nothing (plain Markdown)"))
+  add("")
+
+  local backdrops, tables, html_tables, notes = 0, 0, 0, 0
+  doc:walk({
+    Div = function(div) if div.classes:includes("mdz-backdrop") then backdrops = backdrops + 1 end end,
+    Table = function() tables = tables + 1 end,
+    RawBlock = function(raw) if raw.format == "html" and raw.text:match("<table[%s>]") then html_tables = html_tables + 1 end end,
+    Note = function() notes = notes + 1 end,
+  })
+  local losses = word_losses(backdrops)
+  if losses then
+    add("## What didn't come across")
+    add("")
+    if #losses == 0 then
+      add("Nothing mdz.lua checks for: comments, tracked changes, shapes, text boxes, fields, charts, SmartArt, "
+        .. "embedded objects, columns, headers and footers, macros.")
+    else
+      for _, line in ipairs(losses) do add(line) end
+    end
+    add("")
+  end
+
+  add("## What's in the archive")
+  add("")
+  add("- `index.md`: the document" .. ((tables + html_tables) > 0
+    and (", with " .. plural(tables + html_tables, "table") .. (html_tables > 0 and (" (" .. html_tables .. " as HTML)") or ""))
+    or "") .. (notes > 0 and (" and " .. plural(notes, "footnote")) or "") .. ".")
+  if images > 0 then add("- `images/`: " .. plural(images, "picture") .. ".") end
+  add("- `" .. NOTES_PATH .. "`: these notes.")
+  return table.concat(lines, "\n") .. "\n"
+end
+
 function ByteStringWriter(doc, opts)
   -- Without -o Pandoc prints the result, and a ZIP is unreadable in a terminal.
   local out_file = PANDOC_STATE.output_file
@@ -1051,7 +1270,7 @@ function ByteStringWriter(doc, opts)
   local by_src, used = {}, {}
   local missing = {}
 
-  local function package(src)
+  local function package(src, quiet)
     if by_src[src] ~= nil then return by_src[src] or nil end
     -- A URL scheme (two or more letters, so C:\ isn't one), other than data:.
     if src:match("^[a-zA-Z][a-zA-Z0-9+.-]+:") and not src:match("^data:") then
@@ -1064,6 +1283,7 @@ function ByteStringWriter(doc, opts)
       if ok then mt, contents = fetched_mt, data end
     end
     if not contents then
+      if quiet then return nil end -- not cached: the same picture as a src still warns
       by_src[src] = false
       missing[#missing + 1] = src
       return nil
@@ -1086,10 +1306,7 @@ function ByteStringWriter(doc, opts)
   end
 
   doc = doc:walk({
-    Image = function(img)
-      local path = package(img.src)
-      if path then img.src = path; return img end
-    end,
+    Image = function(img) return rewrite_image(img, package) end,
     RawInline = function(raw)
       if raw.format == "html" then raw.text = rewrite_html_img(raw.text, package); return raw end
     end,
@@ -1144,6 +1361,9 @@ function ByteStringWriter(doc, opts)
   }))
   if markdown:sub(-1) ~= "\n" then markdown = markdown .. "\n" end
   table.insert(files, 1, { path = "index.md", text = markdown })
+  if ext:includes("notes") then
+    files[#files + 1] = { path = NOTES_PATH, text = conversion_notes(doc, ext, #files - 1) }
+  end
 
   local extra = {}
   local author = meta.author

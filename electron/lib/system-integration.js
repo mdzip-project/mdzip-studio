@@ -245,7 +245,8 @@ async function otherPreviewHandler(reg) {
 // (studio#41) and Import (studio#33). Each is checked with `<command> --version`.
 // `install` maps a platform (or `all`) to a package manager and package;
 // `latest` names where its newest release is published (GitHub releases, the
-// npm registry or PyPI), when there's somewhere to ask.
+// npm registry or PyPI), when there's somewhere to ask. `size`: what installing
+// it costs, shown on its card (measured 2026-11-23; round, as it changes).
 const HELPER_PROGRAMS = Object.freeze([
   {
     id: 'pandoc',
@@ -253,6 +254,7 @@ const HELPER_PROGRAMS = Object.freeze([
     purpose: 'Converts documents to Word, EPUB, LaTeX and many other formats.',
     command: 'pandoc',
     install: { win32: { winget: 'JohnMacFarlane.Pandoc' }, darwin: { brew: 'pandoc' } },
+    size: 'About 45 MB to download.',
     url: 'https://pandoc.org/installing.html',
     latest: { github: 'jgm/pandoc' },
   },
@@ -262,6 +264,7 @@ const HELPER_PROGRAMS = Object.freeze([
     purpose: 'Typesets PDFs from what Pandoc produces.',
     command: 'typst',
     install: { win32: { winget: 'Typst.Typst' }, darwin: { brew: 'typst' } },
+    size: 'About 20 MB to download.',
     url: 'https://github.com/typst/typst#installation',
     latest: { github: 'typst/typst' },
   },
@@ -276,20 +279,26 @@ const HELPER_PROGRAMS = Object.freeze([
   {
     id: 'mmdc',
     name: 'Mermaid CLI',
-    purpose: 'Draws Mermaid diagrams as pictures for exported files. Needs Node.js, and downloads its own copy of Chromium.',
+    purpose: 'Draws Mermaid diagrams as pictures for exported files.',
     command: 'mmdc',
     install: { all: { npm: '@mermaid-js/mermaid-cli' } },
+    // Puppeteer's Chrome and Chrome Headless Shell, 443 + 283 MB on Windows.
+    size: 'Takes about 750 MB of disk space: it downloads two copies of Chrome to draw with.',
+    uninstallNote: 'Its copies of Chrome (about 730 MB) stay, in %USERPROFILE%\\.cache\\puppeteer (~/.cache/puppeteer on a Mac). Delete that folder too, unless another program that uses Puppeteer needs it.',
     url: 'https://github.com/mermaid-js/mermaid-cli',
     latest: { npm: '@mermaid-js/mermaid-cli' },
   },
   {
     id: 'markitdown-mdz',
     name: 'markitdown-mdz',
-    purpose: 'Imports Word, PowerPoint and PDF files as MDZip documents. Needs Python.',
+    purpose: 'Imports Word, PowerPoint and PDF files as MDZip documents.',
     command: 'markitdown-mdz',
     // [all]: MarkItDown's readers for Word, PowerPoint, Excel and PDF, which
     // plain markitdown-mdzip leaves out.
     install: { all: { pip: 'markitdown-mdzip', extras: 'all' } },
+    // 53 packages with [all]; speech recognition (32 MB) and onnxruntime the biggest.
+    size: "About 115 MB to download, with MarkItDown's readers.",
+    uninstallNote: "MarkItDown and its readers stay: other Python programs may use them.",
     url: 'https://pypi.org/project/markitdown-mdzip/',
     latest: { pypi: 'markitdown-mdzip' },
   },
@@ -299,10 +308,112 @@ const HELPER_PROGRAMS = Object.freeze([
     purpose: 'Validates, creates and compares .mdz files from a terminal.',
     command: 'mdz',
     install: { win32: { winget: 'MDZip.Cli' } },
+    size: 'About 7 MB to download.',
     url: 'https://github.com/mdzip-project/mdzip-cli/releases/latest',
     latest: { github: 'mdzip-project/mdzip-cli' },
   },
 ]);
+
+// What installing a helper needs first, by how it installs: the program the
+// install command starts, how to check it's there, and where to get it.
+// `always`: the card names it even when it's there (Python and Node.js, which
+// many don't have; winget comes with Windows, and Homebrew users know).
+const REQUIREMENTS = Object.freeze({
+  pip: { name: 'Python', always: true, command: { win32: 'py', other: 'python3' }, url: 'https://www.python.org/downloads/' },
+  npm: { name: 'Node.js', always: true, command: { win32: 'npm', other: 'npm' }, url: 'https://nodejs.org/en/download' },
+  winget: { name: 'winget', always: false, command: { win32: 'winget', other: 'winget' }, url: 'https://learn.microsoft.com/windows/package-manager/winget/' },
+  brew: { name: 'Homebrew', always: false, command: { win32: 'brew', other: 'brew' }, url: 'https://brew.sh' },
+});
+
+// `helper`'s requirement on `platform`: { name, always, command, url }, or
+// null when it doesn't install from a package manager here.
+function requirementFor(helper, platform) {
+  const spec = helper.install[platform] ?? helper.install.all;
+  const kind = spec && Object.keys(REQUIREMENTS).find((key) => spec[key]);
+  if (!kind) return null;
+  const requirement = REQUIREMENTS[kind];
+  return { name: requirement.name, always: requirement.always, command: requirement.command[platform] ?? requirement.command.other, url: requirement.url };
+}
+
+// Whether `helper`'s requirement is there: `run(command, ['--version'])` as
+// for helperStatus. True when there's nothing to check.
+async function requirementInstalled(helper, platform, run) {
+  const requirement = requirementFor(helper, platform);
+  if (!requirement) return true;
+  try {
+    return (await run(requirement.command, ['--version'])).code === 0;
+  } catch {
+    return false;
+  }
+}
+
+// Installing MDZip Studio from its portable version (Windows). Both package
+// managers install for all users with Windows Explorer integration: winget's
+// machine scope (its manifest adds /allusers /mdzipExplorerIntegration and the
+// .NET 10 Desktop Runtime), and the Chocolatey package by default.
+const STUDIO_PACKAGES = Object.freeze({
+  winget: {
+    shown: 'winget install --id MDZip.Studio --exact --source winget --scope machine',
+    // winget asks for administrator rights itself.
+    run: 'winget install --id MDZip.Studio --exact --source winget --scope machine',
+  },
+  choco: {
+    shown: 'choco install mdzip-studio -y',
+    // Chocolatey needs an administrator terminal: ask for one (UAC) and wait,
+    // so this window reports its exit code.
+    run: 'powershell -NoProfile -Command "exit (Start-Process choco -ArgumentList \'install mdzip-studio -y\' -Verb RunAs -Wait -PassThru).ExitCode"',
+  },
+});
+
+// Where the installer puts Studio: Program Files for all users,
+// %LOCALAPPDATA%\Programs for one.
+function studioInstallPaths({ programFiles, localAppData }) {
+  return {
+    machine: programFiles ? path.join(programFiles, 'MDZip Studio', 'MDZip Studio.exe') : null,
+    user: localAppData ? path.join(localAppData, 'Programs', 'MDZip Studio', 'MDZip Studio.exe') : null,
+  };
+}
+
+// Whether Studio is installed ('machine', 'user' or null) and, when it
+// isn't, which package manager can install it (winget first: it comes with
+// Windows and has the newest version) and the command it runs.
+async function studioInstallStatus({ run, fileExists, programFiles, localAppData }) {
+  const paths = studioInstallPaths({ programFiles, localAppData });
+  const installed = paths.machine && fileExists(paths.machine) ? 'machine'
+    : paths.user && fileExists(paths.user) ? 'user'
+      : null;
+  if (installed) return { installed, via: null, command: null };
+  const has = async (command) => {
+    try {
+      return (await run(command, ['--version'])).code === 0;
+    } catch {
+      return false;
+    }
+  };
+  const [winget, choco] = await Promise.all([has('winget'), has('choco')]);
+  const via = winget ? 'winget' : choco ? 'choco' : null;
+  return { installed, via, command: via ? STUDIO_PACKAGES[via].shown : null };
+}
+
+// What a terminal window runs for Install, Update or Uninstall: `command`,
+// then its exit code written to `marker`, so Studio knows when it's done and
+// can check the card again. The window stays open to read.
+//
+// Windows: cmd.exe's arguments after /v:on /k. `call` brings control back
+// from a .cmd (npm is one); !errorlevel! is read after the command runs
+// (%errorlevel% would be read when the line is), which /v:on allows; and the
+// redirection comes first, so a code like 1 isn't read as "1>".
+// macOS: a shell line for Terminal.
+function terminalScript(command, title, platform, marker) {
+  if (platform === 'win32') return `title ${title} && call ${command} & >"${marker}" echo !errorlevel!`;
+  return `${command}; echo $? > '${marker}'`;
+}
+
+// The exit code a terminal script wrote ("0\r\n" -> 0); null if unreadable.
+function parseExitCode(text) {
+  const code = Number.parseInt(String(text ?? '').trim(), 10);
+  return Number.isFinite(code) ? code : null;
+}
 
 // A pip package with its extras, quoted so zsh doesn't read the brackets as a
 // file pattern: "markitdown-mdzip[all]".
@@ -330,6 +441,19 @@ function upgradeCommandFor(helper, platform) {
   if (spec.brew) return `brew upgrade ${spec.brew}`;
   if (spec.npm) return `npm install -g ${spec.npm}@latest`;
   if (spec.pip) return platform === 'win32' ? `py -m pip install --user --upgrade ${pipPackage(spec)}` : `python3 -m pip install --user --upgrade ${pipPackage(spec)}`;
+  return null;
+}
+
+// The terminal command that removes `helper` on `platform`. pip's own
+// "Proceed?" is answered (-y): Studio asks first. Only the program itself:
+// what it brought along stays (see `uninstallNote`).
+function uninstallCommandFor(helper, platform) {
+  const spec = helper.install[platform] ?? helper.install.all;
+  if (!spec) return null;
+  if (spec.winget) return `winget uninstall --id ${spec.winget} --exact --source winget`;
+  if (spec.brew) return `brew uninstall ${spec.brew}`;
+  if (spec.npm) return `npm uninstall -g ${spec.npm}`;
+  if (spec.pip) return platform === 'win32' ? `py -m pip uninstall -y ${spec.pip}` : `python3 -m pip uninstall -y ${spec.pip}`;
   return null;
 }
 
@@ -383,15 +507,25 @@ function parseVersion(text) {
   return match ? match[1] : null;
 }
 
+// The kinds of file a program says it can't read for want of a package:
+// markitdown-mdz 0.1.1 and later end --version with "Missing readers: docx,
+// pptx (...)" when MarkItDown was installed without its extras. [] when it
+// doesn't say (all there, or an older version that doesn't check).
+function parseMissingReaders(text) {
+  const match = /^Missing readers: ([a-z0-9]+(?:, *[a-z0-9]+)*)/im.exec(String(text ?? ''));
+  return match ? match[1].split(',').map((kind) => kind.trim().toLowerCase()).filter(Boolean) : [];
+}
+
 // `run(command, ['--version'])` resolves to { code, stdout, stderr } (code
 // null/negative when the program isn't there).
 async function helperStatus(helper, run) {
   try {
     const result = await run(helper.command, ['--version']);
-    if (result.code !== 0) return { id: helper.id, installed: false, version: null };
-    return { id: helper.id, installed: true, version: parseVersion(`${result.stdout}\n${result.stderr ?? ''}`) };
+    if (result.code !== 0) return { id: helper.id, installed: false, version: null, missingReaders: [] };
+    const text = `${result.stdout}\n${result.stderr ?? ''}`;
+    return { id: helper.id, installed: true, version: parseVersion(text), missingReaders: parseMissingReaders(text) };
   } catch {
-    return { id: helper.id, installed: false, version: null };
+    return { id: helper.id, installed: false, version: null, missingReaders: [] };
   }
 }
 
@@ -486,6 +620,9 @@ module.exports = {
   extensionList,
   freshPath,
   helperStatus,
+  parseMissingReaders,
+  requirementFor,
+  requirementInstalled,
   installCommandFor,
   latestVersion,
   latestVersionUrl,
@@ -496,7 +633,13 @@ module.exports = {
   previewOverrideKeys,
   setPreviewForUser,
   setOutlookAllowed,
+  STUDIO_PACKAGES,
+  studioInstallPaths,
+  studioInstallStatus,
   upgradeCommandFor,
+  uninstallCommandFor,
+  terminalScript,
+  parseExitCode,
   userChoiceProgId,
   withExtension,
   withoutExtension,

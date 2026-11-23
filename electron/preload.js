@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
     v8: process.versions.v8,
   },
   isElectron: true,
+  // The Windows portable version (no installer), as opposed to an installed one.
+  portable: ipcRenderer.sendSync('mdzip:is-portable'),
   // The editor's saved color scheme and page width, read once as the window starts.
   viewSettings: ipcRenderer.sendSync('mdzip:get-view-settings'),
   setViewSetting: (key, value) => ipcRenderer.send('mdzip:set-view-setting', { key, value }),
@@ -120,6 +122,12 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
   // Each helper program's newest version: { [id]: { latest, upgradeCommand } }.
   getHelperLatestVersions: () => ipcRenderer.invoke('mdzip:system-integration-latest'),
   runSystemIntegrationAction: (payload) => ipcRenderer.invoke('mdzip:system-integration-action', payload),
+  // An Install, Update or Uninstall's terminal command finished: { action, id, code }.
+  onSystemIntegrationFinished: (callback) => {
+    const listener = (_event, data) => callback(data);
+    ipcRenderer.on('mdzip:system-integration-finished', listener);
+    return () => ipcRenderer.removeListener('mdzip:system-integration-finished', listener);
+  },
   writeMarkdownImage: (payload) => ipcRenderer.invoke('mdzip:write-markdown-image', payload),
   readMarkdownAsset: (payload) => ipcRenderer.invoke('mdzip:read-markdown-asset', payload),
   showInFolder: (filePath) => ipcRenderer.invoke('mdzip:show-in-folder', { filePath }),

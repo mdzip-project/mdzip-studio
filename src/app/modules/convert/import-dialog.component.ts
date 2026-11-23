@@ -9,7 +9,7 @@ import { lucideCircleHelp } from '@ng-icons/lucide';
 import { CommandBoxComponent } from './command-box.component';
 import { StorageService } from '../../core/services/storage.service';
 import {
-  ConvertFailure, ConvertTool, DEFAULT_IMPORT_LOOK, ImportChoice, ImportLook, ImportPick, ImportResult, ImportWordOptions,
+  ConvertFailure, ConvertTool, DEFAULT_IMPORT_LOOK, ImportChoice, ImportLook, ImportNotesInfo, ImportPick, ImportResult, ImportWordOptions,
   importLookSwitches,
 } from './convert-types';
 import { ImportedOriginal, isWordFileName } from './imported-word';
@@ -17,6 +17,7 @@ import { ImportedOriginal, isWordFileName } from './imported-word';
 type Picked = Extract<ImportPick, { formatName: string }>;
 
 const LOOK_KEY = 'importLook';
+const NOTES_KEY = 'importNotes';
 
 export interface ImportedDocument {
   bytes: Uint8Array;
@@ -24,6 +25,8 @@ export interface ImportedDocument {
   warnings: string[];
   // A Word document's options: the file it came from, to add to the .mdz.
   original?: ImportedOriginal;
+  // Conversion notes were on: what to say about the run.
+  notes?: ImportNotesInfo;
 }
 
 interface ImportBridge {
@@ -125,9 +128,9 @@ interface ImportBridge {
             </fieldset>
           }
 
-          @if (isWord()) {
-            <fieldset class="cv-options">
-              <legend class="cv-heading">Also add to the document</legend>
+          <fieldset class="cv-options">
+            <legend class="cv-heading">Also add to the document</legend>
+            @if (isWord()) {
               <label class="cv-check">
                 <input type="checkbox" [checked]="keepStyles()" [disabled]="busy()" (change)="keepStyles.set($any($event.target).checked)" />
                 <span>
@@ -149,8 +152,15 @@ interface ImportBridge {
                   <span class="cv-option-meta">Unchanged, in sources/. It may include comments, tracked changes and authors' names.</span>
                 </span>
               </label>
-            </fieldset>
-          }
+            }
+            <label class="cv-check">
+              <input type="checkbox" [checked]="notes()" [disabled]="busy()" (change)="setNotes($any($event.target).checked)" />
+              <span>
+                <span class="cv-option-name">Conversion notes</span>
+                <span class="cv-option-meta">Where it came from and how it was converted, as sources/conversion-notes.md@if (tool() === 'pandoc' && isWord()) {, with what didn't come across: comments, tracked changes, shapes, fields, headers and footers}.</span>
+              </span>
+            </label>
+          </fieldset>
         }
 
         <div #feedback class="cv-feedback">
@@ -192,12 +202,14 @@ export class ImportDialogComponent {
   // Keep the look (Pandoc): remembered for the next import.
   private readonly storage = inject(StorageService);
   readonly look = signal<ImportLook>({ ...DEFAULT_IMPORT_LOOK, ...(this.storage.getItem<Partial<ImportLook>>(LOOK_KEY) ?? {}) });
+  // Conversion notes: on unless turned off, remembered.
+  readonly notes = signal(this.storage.getItem<boolean>(NOTES_KEY) ?? true);
   // The command as it will run: mdz.lua with the switches the choices add.
   readonly commandLine = computed(() => {
     const choice = this.choice();
     if (!choice) return '';
     if (choice.tool !== 'pandoc') return choice.commandLine;
-    const switches = importLookSwitches(this.effectiveLook());
+    const switches = importLookSwitches(this.effectiveLook()) + (this.notes() ? '+notes' : '');
     return choice.commandLine.replace(/(-t \S*mdz\.lua)(?=\s|$)/, `$1${switches}`);
   });
 
@@ -235,6 +247,11 @@ export class ImportDialogComponent {
     this.storage.setItem(LOOK_KEY, this.look());
   }
 
+  setNotes(value: boolean): void {
+    this.notes.set(value);
+    this.storage.setItem(NOTES_KEY, value);
+  }
+
   // Table shading and lines come only from a Word document; for another file
   // the switch would change nothing, so the command leaves it out.
   private effectiveLook(): ImportLook {
@@ -256,8 +273,9 @@ export class ImportDialogComponent {
       const options: ImportWordOptions = {
         ...(this.isWord() ? { keepStyles: this.keepStyles(), keepOriginal: this.keepOriginal(), documentStyle: this.documentStyle() } : {}),
         ...(tool === 'pandoc' ? { look: this.effectiveLook() } : {}),
+        notes: this.notes(),
       };
-      const result = await importRun(tool, Object.keys(options).length ? options : undefined);
+      const result = await importRun(tool, options);
       if (result.error) {
         this.failure.set({ message: result.message, fix: result.fix ?? null });
         // Below the command: scroll it into view once drawn.
@@ -275,6 +293,7 @@ export class ImportDialogComponent {
           fileName,
           warnings: result.warnings ?? [],
           original: result.original ? { ...result.original, bytes: new Uint8Array(result.original.bytes) } : undefined,
+          notes: result.notes,
         });
       }
     } catch (error) {
