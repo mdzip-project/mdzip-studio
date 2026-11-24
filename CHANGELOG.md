@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **System Integration finds a Python markitdown-mdz can use.** When `py` or `python3` runs a Python that's too new (3.15) or too old (a Mac's 3.9), but 3.10 to 3.14 is installed too, the markitdown-mdz card installs, updates and uninstalls with that one (`py -3.14`, `python3.14`) instead of asking for another Python.
 
+### Fixed
+- **A link to a picture or another file in the document opens it**, at full size for a picture, as clicking it in the contents pane does. It used to do nothing (`@mdzip/editor` 2.6.1).
+- **Links that aren't web or mail links no longer leave Studio.** Studio handed any link it didn't recognize to the system, so a `file:` link in a document opened that file with whatever the system opens it with, a program included. Web (`http`, `https`) and mail links still open in the browser or mail app; other links do nothing.
+
 ## [1.8.0] - 2026-11-23
 
 ### Added

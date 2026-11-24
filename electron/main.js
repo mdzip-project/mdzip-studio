@@ -39,6 +39,7 @@ const {
 const { buildJumpList, wantsNewWindow, startupActionFromArgs, recentDocumentsForMac } = require('./lib/jump-list');
 const { createOpenFileQueue } = require('./lib/open-file-queue');
 const { helpStartupAction } = require('./lib/help-window');
+const { navigationAction } = require('./lib/navigation');
 const { readerSnapshot, saveCopyFilters, shouldCloseLeftoverReaders } = require('./lib/reader-window');
 const convert = require('./lib/convert');
 const { statsDiffer } = require('./lib/file-watch');
@@ -1058,21 +1059,18 @@ function createWindow({ pendingOpenPath = null, startupAction = null, readerSour
     }
   });
 
-  const appOrigin = isDev
-    ? 'http://localhost:4300'
-    : `file://${path.join(__dirname, '../dist')}`;
-
-  // Open external links in the OS default browser instead of navigating the app window.
+  // The window only ever shows Studio's page: web and mail links open in the
+  // browser or mail app, anything else is dropped (navigationAction).
   win.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith(appOrigin)) {
-      event.preventDefault();
-      shell.openExternal(url);
-    }
+    const action = navigationAction(url, win.webContents.getURL());
+    if (action === 'stay') return;
+    event.preventDefault();
+    if (action === 'external') void shell.openExternal(url);
   });
 
-  // Handle target="_blank" links the same way.
+  // target="_blank" links the same way, never in a new window.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    if (navigationAction(url, win.webContents.getURL()) === 'external') void shell.openExternal(url);
     return { action: 'deny' };
   });
 
