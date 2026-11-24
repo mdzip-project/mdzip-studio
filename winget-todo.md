@@ -95,8 +95,9 @@ For later releases, copy the folder, bump `PackageVersion` / `InstallerUrl` /
 
 ## Which releases need a WinGet update
 
-Not every release. Installed copies update themselves from the published GitHub
-release (`electron-updater`), however they were installed, so a lagging WinGet
+Not every release. Installed copies check the published GitHub release
+(`electron-updater`), however they were installed, and offer the update for the
+user to install when they choose, so a lagging WinGet
 version only means `winget install` starts a little old and `winget upgrade`
 doesn't offer the latest. (Chocolatey updates automatically on publish, so it
 never lags.)
