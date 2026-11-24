@@ -2,7 +2,7 @@ const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeTheme, net, 
 const { runPathAction } = require('./lib/path-actions');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs/promises');
-const { constants: fsConstants, createWriteStream, existsSync, readdirSync, unlinkSync, watch: watchFs } = require('fs');
+const { constants: fsConstants, createWriteStream, existsSync, readdirSync, unlinkSync, watch: watchFs, writeFileSync } = require('fs');
 const { exec, execFile, spawn } = require('child_process');
 const os = require('os');
 const path = require('path');
@@ -1803,13 +1803,22 @@ async function systemIntegrationCheck(id) {
 // doesn't know how to open one (Linux): the row shows the command to copy.
 // `onDone(code)`: called when the command has finished (the window stays
 // open), with its exit code, so System Integration can check again.
+//
+// Windows: `start` opens the window, so cmd /k gets a console to read from.
+// Spawned directly, its input was Studio's (none), so it read the end of it
+// and closed the window as soon as the command finished.
 function runInTerminal(command, title, onDone = null) {
   const marker = path.join(app.getPath('temp'), `mdzip-studio-${randomUUID()}.done`);
   const script = terminalScript(command, title, process.platform, marker);
+  let batch = null;
   if (process.platform === 'win32') {
-    const child = spawn('cmd.exe', ['/v:on', '/k', script], {
+    batch = marker.replace(/\.done$/, '.cmd');
+    writeFileSync(batch, script);
+    const child = spawn('cmd.exe', ['/d', '/c', 'start', `"${title}"`, 'cmd.exe', '/k', `"${batch}"`], {
+      cwd: app.getPath('home'),
       detached: true,
       stdio: 'ignore',
+      windowsHide: true,
       windowsVerbatimArguments: true,
     });
     child.unref();
@@ -1823,7 +1832,12 @@ function runInTerminal(command, title, onDone = null) {
   } else {
     return false;
   }
-  if (onDone) watchTerminalMarker(marker, onDone);
+  // The batch file goes once it's done, a little after, so cmd has read its
+  // end (deleted mid-run, cmd says "The batch file cannot be found").
+  watchTerminalMarker(marker, (code) => {
+    if (batch) setTimeout(() => fs.unlink(batch).catch(() => {}), 5000);
+    onDone?.(code);
+  });
   return true;
 }
 

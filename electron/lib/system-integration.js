@@ -281,6 +281,7 @@ const HELPER_PROGRAMS = Object.freeze([
     name: 'Mermaid CLI',
     purpose: 'Draws Mermaid diagrams as pictures for exported files.',
     command: 'mmdc',
+    // Not Homebrew's mermaid-cli: it leaves out the Chrome mmdc draws with.
     install: { all: { npm: '@mermaid-js/mermaid-cli' } },
     // Puppeteer's Chrome and Chrome Headless Shell, 443 + 283 MB on Windows.
     size: 'Takes about 750 MB of disk space: it downloads two copies of Chrome to draw with.',
@@ -318,8 +319,14 @@ const HELPER_PROGRAMS = Object.freeze([
 // install command starts, how to check it's there, and where to get it.
 // `always`: the card names it even when it's there (Python and Node.js, which
 // many don't have; winget comes with Windows, and Homebrew users know).
+// `minVersion`, `belowVersion`: outside them doesn't count. markitdown-mdzip
+// needs MarkItDown's Python, 3.10 to 3.14 (MarkItDown 0.1.5 on): a Mac's own
+// python3 (Apple's Command Line Tools) is 3.9, where pip finds nothing to
+// install; with 3.15 pip falls back to MarkItDown 0.1.4, whose onnxruntime
+// has no 3.15 build, and fails with a dependency conflict. Raise
+// belowVersion when MarkItDown supports 3.15.
 const REQUIREMENTS = Object.freeze({
-  pip: { name: 'Python', always: true, command: { win32: 'py', other: 'python3' }, url: 'https://www.python.org/downloads/' },
+  pip: { name: 'Python 3.10 to 3.14', always: true, minVersion: '3.10', belowVersion: '3.15', command: { win32: 'py', other: 'python3' }, url: 'https://www.python.org/downloads/' },
   npm: { name: 'Node.js', always: true, command: { win32: 'npm', other: 'npm' }, url: 'https://nodejs.org/en/download' },
   winget: { name: 'winget', always: false, command: { win32: 'winget', other: 'winget' }, url: 'https://learn.microsoft.com/windows/package-manager/winget/' },
   brew: { name: 'Homebrew', always: false, command: { win32: 'brew', other: 'brew' }, url: 'https://brew.sh' },
@@ -332,16 +339,31 @@ function requirementFor(helper, platform) {
   const kind = spec && Object.keys(REQUIREMENTS).find((key) => spec[key]);
   if (!kind) return null;
   const requirement = REQUIREMENTS[kind];
-  return { name: requirement.name, always: requirement.always, command: requirement.command[platform] ?? requirement.command.other, url: requirement.url };
+  return {
+    name: requirement.name,
+    always: requirement.always,
+    minVersion: requirement.minVersion ?? null,
+    belowVersion: requirement.belowVersion ?? null,
+    command: requirement.command[platform] ?? requirement.command.other,
+    url: requirement.url,
+  };
 }
 
-// Whether `helper`'s requirement is there: `run(command, ['--version'])` as
-// for helperStatus. True when there's nothing to check.
+// Whether `helper`'s requirement is there, at least its `minVersion` and below
+// its `belowVersion` when it names them: `run(command, ['--version'])` as for
+// helperStatus. A version it doesn't print counts. True when there's nothing
+// to check.
 async function requirementInstalled(helper, platform, run) {
   const requirement = requirementFor(helper, platform);
   if (!requirement) return true;
   try {
-    return (await run(requirement.command, ['--version'])).code === 0;
+    const result = await run(requirement.command, ['--version']);
+    if (result.code !== 0) return false;
+    if (!requirement.minVersion && !requirement.belowVersion) return true;
+    const version = parseVersion(`${result.stdout ?? ''} ${result.stderr ?? ''}`);
+    if (!version) return true;
+    if (requirement.minVersion && compareVersions(version, requirement.minVersion) < 0) return false;
+    return !requirement.belowVersion || compareVersions(version, requirement.belowVersion) < 0;
   } catch {
     return false;
   }
@@ -399,13 +421,15 @@ async function studioInstallStatus({ run, fileExists, programFiles, localAppData
 // then its exit code written to `marker`, so Studio knows when it's done and
 // can check the card again. The window stays open to read.
 //
-// Windows: cmd.exe's arguments after /v:on /k. `call` brings control back
-// from a .cmd (npm is one); !errorlevel! is read after the command runs
-// (%errorlevel% would be read when the line is), which /v:on allows; and the
-// redirection comes first, so a code like 1 isn't read as "1>".
+// Windows: a batch file, which `cmd /k` runs in a window `start` opens (see
+// runInTerminal). The command's line is echoed, so the window shows what ran;
+// `call` brings control back from a .cmd (npm is one); %errorlevel% is read
+// when its own line runs, after the command; and the redirection comes first,
+// so a code like 1 isn't read as "1>". No command here has a % in it, which
+// a batch file would expand.
 // macOS: a shell line for Terminal.
 function terminalScript(command, title, platform, marker) {
-  if (platform === 'win32') return `title ${title} && call ${command} & >"${marker}" echo !errorlevel!`;
+  if (platform === 'win32') return [`@title ${title}`, `call ${command}`, `@>"${marker}" echo %errorlevel%`, ''].join('\r\n');
   return `${command}; echo $? > '${marker}'`;
 }
 
@@ -421,6 +445,14 @@ function pipPackage(spec) {
   return spec.extras ? `"${spec.pip}[${spec.extras}]"` : spec.pip;
 }
 
+// `npm <verb> -g`, into the user's ~/.local outside Windows: Node.js from
+// nodejs.org (and Linux packages) keep npm's global folder in /usr/local or
+// /usr, which only root can write to, so a plain -g fails there. Programs
+// land in ~/.local/bin, which `freshPath` searches.
+function npmGlobal(verb, platform) {
+  return platform === 'win32' ? `npm ${verb} -g` : `npm ${verb} -g --prefix ~/.local`;
+}
+
 // The terminal command that installs `helper` on `platform`, or null when
 // there's no package to install (the row links to the download page instead).
 function installCommandFor(helper, platform) {
@@ -428,7 +460,7 @@ function installCommandFor(helper, platform) {
   if (!spec) return null;
   if (spec.winget) return `winget install --id ${spec.winget} --exact --source winget`;
   if (spec.brew) return `brew install ${spec.brew}`;
-  if (spec.npm) return `npm install -g ${spec.npm}`;
+  if (spec.npm) return `${npmGlobal('install', platform)} ${spec.npm}`;
   if (spec.pip) return platform === 'win32' ? `py -m pip install --user ${pipPackage(spec)}` : `python3 -m pip install --user ${pipPackage(spec)}`;
   return null;
 }
@@ -439,7 +471,7 @@ function upgradeCommandFor(helper, platform) {
   if (!spec) return null;
   if (spec.winget) return `winget upgrade --id ${spec.winget} --exact --source winget`;
   if (spec.brew) return `brew upgrade ${spec.brew}`;
-  if (spec.npm) return `npm install -g ${spec.npm}@latest`;
+  if (spec.npm) return `${npmGlobal('install', platform)} ${spec.npm}@latest`;
   if (spec.pip) return platform === 'win32' ? `py -m pip install --user --upgrade ${pipPackage(spec)}` : `python3 -m pip install --user --upgrade ${pipPackage(spec)}`;
   return null;
 }
@@ -452,7 +484,7 @@ function uninstallCommandFor(helper, platform) {
   if (!spec) return null;
   if (spec.winget) return `winget uninstall --id ${spec.winget} --exact --source winget`;
   if (spec.brew) return `brew uninstall ${spec.brew}`;
-  if (spec.npm) return `npm uninstall -g ${spec.npm}`;
+  if (spec.npm) return `${npmGlobal('uninstall', platform)} ${spec.npm}`;
   if (spec.pip) return platform === 'win32' ? `py -m pip uninstall -y ${spec.pip}` : `python3 -m pip uninstall -y ${spec.pip}`;
   return null;
 }
@@ -533,7 +565,9 @@ async function helperStatus(helper, run) {
 // when it started, so a program installed since (winget, npm -g) wouldn't be
 // found with it. Windows: the machine and user Path values from the registry,
 // with %VARIABLES% expanded. macOS: GUI apps get a minimal PATH, so add
-// Homebrew's and the user's usual bin folders.
+// Homebrew's and the user's usual bin folders, Homebrew's and /usr/local/bin
+// first as in Terminal: a Python from python.org or Homebrew there, not the
+// older one in /usr/bin.
 //
 // Everywhere: the folders `pip install --user` puts programs in
 // (markitdown-mdz), which pip doesn't add to PATH; it only warns, in a
@@ -553,9 +587,9 @@ async function freshPath({ platform, reg, env, listDir = listDirectory }) {
   if (platform === 'darwin') {
     const home = env.HOME ?? '';
     return uniquePathList([
-      current,
       '/opt/homebrew/bin',
       '/usr/local/bin',
+      current,
       home ? `${home}/.local/bin` : '',
       ...pipUserFolders(platform, env, listDir),
     ], ':');

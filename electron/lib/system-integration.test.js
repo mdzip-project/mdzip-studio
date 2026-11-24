@@ -252,7 +252,8 @@ describe('helper programs', () => {
     expect(installCommandFor(byId['pandoc'], 'darwin')).toBe('brew install pandoc');
     expect(installCommandFor(byId['pandoc'], 'linux')).toBeNull();
     expect(installCommandFor(byId['rsvg-convert'], 'win32')).toBeNull();
-    expect(installCommandFor(byId['mmdc'], 'linux')).toBe('npm install -g @mermaid-js/mermaid-cli');
+    expect(installCommandFor(byId['mmdc'], 'win32')).toBe('npm install -g @mermaid-js/mermaid-cli');
+    expect(installCommandFor(byId['mmdc'], 'darwin')).toBe('npm install -g --prefix ~/.local @mermaid-js/mermaid-cli');
     expect(installCommandFor(byId['markitdown-mdz'], 'win32')).toBe('py -m pip install --user "markitdown-mdzip[all]"');
     expect(installCommandFor(byId['mdz'], 'win32')).toBe('winget install --id MDZip.Cli --exact --source winget');
   });
@@ -261,7 +262,7 @@ describe('helper programs', () => {
     const byId = Object.fromEntries(HELPER_PROGRAMS.map((helper) => [helper.id, helper]));
     expect(upgradeCommandFor(byId['mdz'], 'win32')).toBe('winget upgrade --id MDZip.Cli --exact --source winget');
     expect(upgradeCommandFor(byId['typst'], 'darwin')).toBe('brew upgrade typst');
-    expect(upgradeCommandFor(byId['mmdc'], 'linux')).toBe('npm install -g @mermaid-js/mermaid-cli@latest');
+    expect(upgradeCommandFor(byId['mmdc'], 'linux')).toBe('npm install -g --prefix ~/.local @mermaid-js/mermaid-cli@latest');
     expect(upgradeCommandFor(byId['markitdown-mdz'], 'darwin')).toBe('python3 -m pip install --user --upgrade "markitdown-mdzip[all]"');
     expect(upgradeCommandFor(byId['rsvg-convert'], 'win32')).toBeNull();
   });
@@ -305,8 +306,9 @@ describe('helper programs', () => {
 
   it('knows what installs each program, and checks it is there', async () => {
     const find = (id) => HELPER_PROGRAMS.find((h) => h.id === id);
-    expect(requirementFor(find('markitdown-mdz'), 'win32')).toMatchObject({ name: 'Python', always: true, command: 'py' });
-    expect(requirementFor(find('markitdown-mdz'), 'darwin')).toMatchObject({ name: 'Python', command: 'python3' });
+    expect(requirementFor(find('markitdown-mdz'), 'win32')).toMatchObject({ name: 'Python 3.10 to 3.14', always: true, minVersion: '3.10', belowVersion: '3.15', command: 'py' });
+    expect(requirementFor(find('markitdown-mdz'), 'darwin')).toMatchObject({ name: 'Python 3.10 to 3.14', command: 'python3' });
+    expect(requirementFor(find('mmdc'), 'win32')).toMatchObject({ minVersion: null, belowVersion: null });
     expect(requirementFor(find('mmdc'), 'linux')).toMatchObject({ name: 'Node.js', always: true, command: 'npm' });
     expect(requirementFor(find('pandoc'), 'win32')).toMatchObject({ name: 'winget', always: false });
     expect(requirementFor(find('pandoc'), 'darwin')).toMatchObject({ name: 'Homebrew' });
@@ -323,11 +325,24 @@ describe('helper programs', () => {
     expect(await requirementInstalled(find('mmdc'), 'win32', async () => { throw new Error('ENOENT'); })).toBe(false);
   });
 
+  it("doesn't count a Python older or newer than markitdown-mdzip can use", async () => {
+    const markitdown = HELPER_PROGRAMS.find((h) => h.id === 'markitdown-mdz');
+    const python = (stdout, stderr = '') => async () => ({ code: 0, stdout, stderr });
+    expect(await requirementInstalled(markitdown, 'darwin', python('Python 3.9.6\n'))).toBe(false); // a Mac's own
+    expect(await requirementInstalled(markitdown, 'darwin', python('Python 3.10.0\n'))).toBe(true);
+    expect(await requirementInstalled(markitdown, 'win32', python('Python 3.14.0\r\n'))).toBe(true);
+    expect(await requirementInstalled(markitdown, 'win32', python('Python 3.15.0\r\n'))).toBe(false); // MarkItDown: not yet
+    expect(await requirementInstalled(markitdown, 'darwin', python('Python 3.15.0rc1\n'))).toBe(false);
+    expect(await requirementInstalled(markitdown, 'linux', python('', 'Python 2.7.18\n'))).toBe(false);
+    expect(await requirementInstalled(markitdown, 'darwin', python(''))).toBe(true); // no version printed
+  });
+
   it('uninstalls with the same tool that installed, without its own question for pip', () => {
     const find = (id) => HELPER_PROGRAMS.find((h) => h.id === id);
     expect(uninstallCommandFor(find('pandoc'), 'win32')).toBe('winget uninstall --id JohnMacFarlane.Pandoc --exact --source winget');
     expect(uninstallCommandFor(find('pandoc'), 'darwin')).toBe('brew uninstall pandoc');
-    expect(uninstallCommandFor(find('mmdc'), 'linux')).toBe('npm uninstall -g @mermaid-js/mermaid-cli');
+    expect(uninstallCommandFor(find('mmdc'), 'win32')).toBe('npm uninstall -g @mermaid-js/mermaid-cli');
+    expect(uninstallCommandFor(find('mmdc'), 'darwin')).toBe('npm uninstall -g --prefix ~/.local @mermaid-js/mermaid-cli');
     expect(uninstallCommandFor(find('markitdown-mdz'), 'win32')).toBe('py -m pip uninstall -y markitdown-mdzip');
     expect(uninstallCommandFor(find('markitdown-mdz'), 'darwin')).toBe('python3 -m pip uninstall -y markitdown-mdzip');
     expect(uninstallCommandFor(find('mdz'), 'darwin')).toBeNull();
@@ -336,7 +351,7 @@ describe('helper programs', () => {
 
   it('ends a terminal command by writing its exit code where Studio watches', () => {
     expect(terminalScript('npm uninstall -g x', 'Uninstalling X', 'win32', 'C:/Temp/m.done'))
-      .toBe('title Uninstalling X && call npm uninstall -g x & >"C:/Temp/m.done" echo !errorlevel!');
+      .toBe('@title Uninstalling X\r\ncall npm uninstall -g x\r\n@>"C:/Temp/m.done" echo %errorlevel%\r\n');
     expect(terminalScript('brew uninstall pandoc', 'Uninstalling Pandoc', 'darwin', '/tmp/m.done'))
       .toBe("brew uninstall pandoc; echo $? > '/tmp/m.done'");
     expect(parseExitCode('0 \r\n')).toBe(0);
@@ -364,7 +379,7 @@ describe('helper programs', () => {
       'C:\\Windows\\system32;C:\\Program Files\\Pandoc;C:\\Users\\me\\AppData\\Local\\Microsoft\\WinGet\\Links;C:\\old'
     );
     expect(await freshPath({ platform: 'darwin', reg, env: { PATH: '/usr/bin', HOME: '/Users/me' }, listDir: () => [] }))
-      .toBe(['/usr/bin', '/opt/homebrew/bin', '/usr/local/bin', '/Users/me/.local/bin'].join(path.posix.delimiter));
+      .toBe(['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/Users/me/.local/bin'].join(path.posix.delimiter));
   });
 
   it("adds the folders pip install --user puts programs in, which aren't on PATH", async () => {
@@ -381,7 +396,7 @@ describe('helper programs', () => {
       'C:\\Users\\me\\AppData\\Roaming\\Python\\Python39\\Scripts',
     ].join(';'));
     expect(await freshPath({ platform: 'darwin', reg, env: { PATH: '/usr/bin', HOME: '/Users/me' }, listDir }))
-      .toBe(['/usr/bin', '/opt/homebrew/bin', '/usr/local/bin', '/Users/me/.local/bin',
+      .toBe(['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/Users/me/.local/bin',
         '/Users/me/Library/Python/3.14/bin', '/Users/me/Library/Python/3.13/bin', '/Users/me/Library/Python/3.9/bin'].join(':'));
     expect(await freshPath({ platform: 'linux', reg, env: { PATH: '/usr/bin', HOME: '/home/me' }, listDir }))
       .toBe('/usr/bin:/home/me/.local/bin');
