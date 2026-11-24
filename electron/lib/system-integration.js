@@ -320,9 +320,9 @@ const HELPER_PROGRAMS = Object.freeze([
 // `always`: the card names it even when it's there (Python and Node.js, which
 // many don't have; winget comes with Windows, and Homebrew users know).
 // `minVersion`, `belowVersion`: outside them doesn't count. markitdown-mdzip
-// needs MarkItDown's Python, 3.10 to 3.14 (MarkItDown 0.1.5 on): a Mac's own
+// needs MarkItDown's Python, 3.10 to 3.14 (MarkItDown 0.1.8 on): a Mac's own
 // python3 (Apple's Command Line Tools) is 3.9, where pip finds nothing to
-// install; with 3.15 pip falls back to MarkItDown 0.1.4, whose onnxruntime
+// install; with 3.15 pip falls back to an older MarkItDown, whose onnxruntime
 // has no 3.15 build, and fails with a dependency conflict. Raise
 // belowVersion when MarkItDown supports 3.15.
 const REQUIREMENTS = Object.freeze({
