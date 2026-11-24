@@ -27,6 +27,8 @@ const {
   previewHandlerStatus,
   requirementFor,
   requirementInstalled,
+  choosePython,
+  usesPip,
   setOutlookAllowed,
   setPreviewForUser,
   STUDIO_PACKAGES,
@@ -1793,9 +1795,36 @@ async function systemIntegrationCheck(id) {
   if (!helper) throw new Error(`Nothing to check called ${id}`);
   const run = await checkRunner();
   const { installed, version, missingReaders } = await helperStatus(helper, run);
+  const pythonChoice = usesPip(helper, process.platform) ? await chosenPython() : null;
   // Not installed: is what installs it there? (Python for pip, Node.js for npm...)
-  const requirementMissing = !installed && !(await requirementInstalled(helper, process.platform, run));
-  return { installed, version, missingReaders, requirementMissing };
+  const requirementMissing = !installed && (pythonChoice
+    ? !pythonChoice.found
+    : !(await requirementInstalled(helper, process.platform, run)));
+  // The card's commands, with the Python pip would run with (`py -3.14`).
+  const options = { python: pythonChoice?.python };
+  return {
+    installed,
+    version,
+    missingReaders,
+    requirementMissing,
+    installCommand: installCommandFor(helper, process.platform, options),
+    uninstallCommand: uninstallCommandFor(helper, process.platform, options),
+  };
+}
+
+// The Python pip runs with for markitdown-mdz (choosePython), asked once for
+// the checks that start together, like envForChecks.
+let pythonPick = null;
+function chosenPython() {
+  if (!pythonPick || Date.now() - pythonPick.at > 5000) {
+    pythonPick = { at: Date.now(), choice: checkRunner().then((run) => choosePython(process.platform, run)) };
+  }
+  return pythonPick.choice;
+}
+
+// The options a helper's commands take: the Python, for pip.
+async function commandOptions(helper) {
+  return usesPip(helper, process.platform) ? { python: (await chosenPython()).python } : {};
 }
 
 // Opens a terminal window running `command`, so the user sees the package
@@ -1896,7 +1925,7 @@ ipcMain.handle('mdzip:system-integration-latest', async () => {
       // Only answers are kept, so a failed check is tried again next time.
       if (latest) latestVersionCache.set(helper.id, { version: latest, at: now });
     }
-    return [helper.id, { latest, upgradeCommand: upgradeCommandFor(helper, process.platform) }];
+    return [helper.id, { latest, upgradeCommand: upgradeCommandFor(helper, process.platform, await commandOptions(helper)) }];
   }));
   return Object.fromEntries(entries);
 });
@@ -1923,7 +1952,7 @@ ipcMain.handle('mdzip:system-integration-action', async (event, payload) => {
         return { ok: true };
       case 'install-helper': {
         const helper = HELPER_PROGRAMS.find((candidate) => candidate.id === payload?.id);
-        const command = helper ? installCommandFor(helper, process.platform) : null;
+        const command = helper ? installCommandFor(helper, process.platform, await commandOptions(helper)) : null;
         if (!helper || !command) return { ok: false, error: 'No installer for this program here.' };
         return runInTerminal(command, `Installing ${helper.name}`, reportTerminalDone(win, action, helper.id))
           ? { ok: true }
@@ -1931,7 +1960,7 @@ ipcMain.handle('mdzip:system-integration-action', async (event, payload) => {
       }
       case 'uninstall-helper': {
         const helper = HELPER_PROGRAMS.find((candidate) => candidate.id === payload?.id);
-        const command = helper ? uninstallCommandFor(helper, process.platform) : null;
+        const command = helper ? uninstallCommandFor(helper, process.platform, await commandOptions(helper)) : null;
         if (!helper || !command) return { ok: false, error: 'No uninstaller for this program here.' };
         return runInTerminal(command, `Uninstalling ${helper.name}`, reportTerminalDone(win, action, helper.id))
           ? { ok: true }
@@ -1957,7 +1986,7 @@ ipcMain.handle('mdzip:system-integration-action', async (event, payload) => {
       }
       case 'upgrade-helper': {
         const helper = HELPER_PROGRAMS.find((candidate) => candidate.id === payload?.id);
-        const command = helper ? upgradeCommandFor(helper, process.platform) : null;
+        const command = helper ? upgradeCommandFor(helper, process.platform, await commandOptions(helper)) : null;
         if (!helper || !command) return { ok: false, error: 'No updater for this program here.' };
         return runInTerminal(command, `Updating ${helper.name}`, reportTerminalDone(win, action, helper.id))
           ? { ok: true }

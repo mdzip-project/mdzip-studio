@@ -14,6 +14,9 @@ const {
   parseMissingReaders,
   requirementFor,
   requirementInstalled,
+  choosePython,
+  parsePythonList,
+  usesPip,
   uninstallCommandFor,
   terminalScript,
   parseExitCode,
@@ -335,6 +338,45 @@ describe('helper programs', () => {
     expect(await requirementInstalled(markitdown, 'darwin', python('Python 3.15.0rc1\n'))).toBe(false);
     expect(await requirementInstalled(markitdown, 'linux', python('', 'Python 2.7.18\n'))).toBe(false);
     expect(await requirementInstalled(markitdown, 'darwin', python(''))).toBe(true); // no version printed
+  });
+
+  // A fake set of installed Pythons: `py` (or python3) runs `usual`; `py -3.x`
+  // and `python3.x` run the ones in `others`; `py -0` lists them all.
+  const pythons = (usual, others, listing) => async (command, args) => {
+    const ok = (version) => ({ code: 0, stdout: `Python ${version}\n`, stderr: '' });
+    const missing = { code: 1, stdout: '', stderr: 'not found' };
+    if (command === 'py' && args[0] === '-0') return { code: 0, stdout: listing, stderr: '' };
+    if (command === 'py' && /^-3\.\d+$/.test(args[0])) return others.includes(`${args[0].slice(1)}.0`) ? ok(`${args[0].slice(1)}.0`) : missing;
+    if (command === 'py' || command === 'python3') return usual ? ok(usual) : missing;
+    const version = /^python(3\.\d+)$/.exec(command)?.[1];
+    return version && others.includes(`${version}.0`) ? ok(`${version}.0`) : missing;
+  };
+
+  it('picks a usable Python beside one that is too new or too old', async () => {
+    // py runs 3.15; 3.14 is installed too (the Python install manager's list).
+    const listing = ' -V:3.15 *        Python 3.15 (64-bit)\n -V:3.14          Python 3.14 (64-bit)\n -V:3.14t         Python 3.14 (64-bit, freethreaded)\n';
+    expect(await choosePython('win32', pythons('3.15.0', ['3.15.0', '3.14.0'], listing))).toEqual({ python: 'py -3.14', found: true });
+    // The usual one is fine: kept.
+    expect(await choosePython('win32', pythons('3.13.1', ['3.13.1'], ' -V:3.13 *\n'))).toEqual({ python: 'py', found: true });
+    // Only 3.15: none, and the card shows the usual command.
+    expect(await choosePython('win32', pythons('3.15.0', ['3.15.0'], ' -V:3.15 *\n'))).toEqual({ python: 'py', found: false });
+    // A Mac: Apple's python3 is 3.9, python.org's 3.13 is python3.13.
+    expect(await choosePython('darwin', pythons('3.9.6', ['3.13.0']))).toEqual({ python: 'python3.13', found: true });
+    expect(await choosePython('darwin', pythons(null, []))).toEqual({ python: 'python3', found: false });
+
+    const markitdown = HELPER_PROGRAMS.find((h) => h.id === 'markitdown-mdz');
+    expect(await requirementInstalled(markitdown, 'win32', pythons('3.15.0', ['3.14.0'], listing))).toBe(true);
+    expect(installCommandFor(markitdown, 'win32', { python: 'py -3.14' })).toBe('py -3.14 -m pip install --user "markitdown-mdzip[all]"');
+    expect(upgradeCommandFor(markitdown, 'darwin', { python: 'python3.13' })).toBe('python3.13 -m pip install --user --upgrade "markitdown-mdzip[all]"');
+    expect(uninstallCommandFor(markitdown, 'win32', { python: 'py -3.14' })).toBe('py -3.14 -m pip uninstall -y markitdown-mdzip');
+    // Not pip: no Python in its commands.
+    expect(usesPip(HELPER_PROGRAMS.find((h) => h.id === 'mmdc'), 'win32')).toBe(false);
+  });
+
+  it("reads the versions py -0 lists, old and new launcher, without free-threaded builds", () => {
+    expect(parsePythonList(' -V:3.14 *        C:\\Python314\\python.exe\n -V:3.12          C:\\Python312\\python.exe\n')).toEqual(['3.14', '3.12']);
+    expect(parsePythonList(' -3.11-64 *\n -3.10-32\n')).toEqual(['3.11', '3.10']);
+    expect(parsePythonList(' -V:PythonCore/3.13\n -V:3.14t\n -V:Astral/CPython3.12\n')).toEqual(['3.13']);
   });
 
   it('uninstalls with the same tool that installed, without its own question for pip', () => {

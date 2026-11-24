@@ -349,17 +349,13 @@ function requirementFor(helper, platform) {
   };
 }
 
-// Whether `helper`'s requirement is there, at least its `minVersion` and below
-// its `belowVersion` when it names them: `run(command, ['--version'])` as for
-// helperStatus. A version it doesn't print counts. True when there's nothing
-// to check.
-async function requirementInstalled(helper, platform, run) {
-  const requirement = requirementFor(helper, platform);
-  if (!requirement) return true;
+// Whether `command --version` runs and prints a version `requirement` allows
+// (at least its `minVersion`, below its `belowVersion`). A version it doesn't
+// print counts.
+async function runsAllowedVersion(run, command, args, requirement) {
   try {
-    const result = await run(requirement.command, ['--version']);
+    const result = await run(command, [...args, '--version']);
     if (result.code !== 0) return false;
-    if (!requirement.minVersion && !requirement.belowVersion) return true;
     const version = parseVersion(`${result.stdout ?? ''} ${result.stderr ?? ''}`);
     if (!version) return true;
     if (requirement.minVersion && compareVersions(version, requirement.minVersion) < 0) return false;
@@ -367,6 +363,60 @@ async function requirementInstalled(helper, platform, run) {
   } catch {
     return false;
   }
+}
+
+// The Python versions REQUIREMENTS.pip allows, newest first: ['3.14', ..., '3.10'].
+function allowedPythons() {
+  const { minVersion, belowVersion } = REQUIREMENTS.pip;
+  const [major, lowest] = minVersion.split('.').map(Number);
+  const highest = Number(belowVersion.split('.')[1]) - 1;
+  return Array.from({ length: highest - lowest + 1 }, (_, i) => `${major}.${highest - i}`);
+}
+
+// The Python versions `py -0` lists (" -V:3.14 *", " -3.12-64", "PythonCore/3.13").
+// Free-threaded builds (3.14t) are left out: not every package has them.
+function parsePythonList(text) {
+  return [...String(text ?? '').matchAll(/-(?:V:)?(?:PythonCore\/)?(\d+\.\d+)(?![\w.])/g)].map((match) => match[1]);
+}
+
+// The Python pip installs with. The usual one (`py`, `python3`) when it's a
+// version markitdown-mdzip can use; otherwise the newest usable one installed
+// beside it: `py -3.14` on Windows, from `py -0`'s list (py runs the newest
+// installed, 3.15 say), or `python3.14` elsewhere (a Mac's python3 is Apple's
+// 3.9; python.org's and Homebrew's add python3.x). `found`: false when there's
+// none, and `python` is then the usual one, for the card's command.
+async function choosePython(platform, run) {
+  const requirement = REQUIREMENTS.pip;
+  const usual = requirement.command[platform] ?? requirement.command.other;
+  if (await runsAllowedVersion(run, usual, [], requirement)) return { python: usual, found: true };
+  const allowed = allowedPythons();
+  if (platform === 'win32') {
+    let listed = [];
+    try {
+      const result = await run('py', ['-0']);
+      listed = result.code === 0 ? parsePythonList(`${result.stdout ?? ''} ${result.stderr ?? ''}`) : [];
+    } catch {
+      listed = [];
+    }
+    for (const version of allowed.filter((candidate) => listed.includes(candidate))) {
+      if (await runsAllowedVersion(run, 'py', [`-${version}`], requirement)) return { python: `py -${version}`, found: true };
+    }
+  } else {
+    for (const version of allowed) {
+      if (await runsAllowedVersion(run, `python${version}`, [], requirement)) return { python: `python${version}`, found: true };
+    }
+  }
+  return { python: usual, found: false };
+}
+
+// Whether `helper`'s requirement is there, and a version it allows: `run(
+// command, ['--version'])` as for helperStatus; for pip, any usable Python
+// (choosePython). True when there's nothing to check.
+async function requirementInstalled(helper, platform, run) {
+  const requirement = requirementFor(helper, platform);
+  if (!requirement) return true;
+  if (usesPip(helper, platform)) return (await choosePython(platform, run)).found;
+  return runsAllowedVersion(run, requirement.command, [], requirement);
 }
 
 // Installing MDZip Studio from its portable version (Windows). Both package
@@ -453,39 +503,50 @@ function npmGlobal(verb, platform) {
   return platform === 'win32' ? `npm ${verb} -g` : `npm ${verb} -g --prefix ~/.local`;
 }
 
+// `<python> -m pip`: `python` from choosePython, or the usual one (py, python3).
+function pip(platform, python) {
+  return `${python ?? (platform === 'win32' ? 'py' : 'python3')} -m pip`;
+}
+
+// Whether `helper` installs with pip on `platform` (so its commands take a Python).
+function usesPip(helper, platform) {
+  return Boolean((helper.install[platform] ?? helper.install.all)?.pip);
+}
+
 // The terminal command that installs `helper` on `platform`, or null when
 // there's no package to install (the row links to the download page instead).
-function installCommandFor(helper, platform) {
+// `python`: the Python pip runs with, from choosePython.
+function installCommandFor(helper, platform, { python } = {}) {
   const spec = helper.install[platform] ?? helper.install.all;
   if (!spec) return null;
   if (spec.winget) return `winget install --id ${spec.winget} --exact --source winget`;
   if (spec.brew) return `brew install ${spec.brew}`;
   if (spec.npm) return `${npmGlobal('install', platform)} ${spec.npm}`;
-  if (spec.pip) return platform === 'win32' ? `py -m pip install --user ${pipPackage(spec)}` : `python3 -m pip install --user ${pipPackage(spec)}`;
+  if (spec.pip) return `${pip(platform, python)} install --user ${pipPackage(spec)}`;
   return null;
 }
 
 // The terminal command that updates `helper` to its newest release on `platform`.
-function upgradeCommandFor(helper, platform) {
+function upgradeCommandFor(helper, platform, { python } = {}) {
   const spec = helper.install[platform] ?? helper.install.all;
   if (!spec) return null;
   if (spec.winget) return `winget upgrade --id ${spec.winget} --exact --source winget`;
   if (spec.brew) return `brew upgrade ${spec.brew}`;
   if (spec.npm) return `${npmGlobal('install', platform)} ${spec.npm}@latest`;
-  if (spec.pip) return platform === 'win32' ? `py -m pip install --user --upgrade ${pipPackage(spec)}` : `python3 -m pip install --user --upgrade ${pipPackage(spec)}`;
+  if (spec.pip) return `${pip(platform, python)} install --user --upgrade ${pipPackage(spec)}`;
   return null;
 }
 
 // The terminal command that removes `helper` on `platform`. pip's own
 // "Proceed?" is answered (-y): Studio asks first. Only the program itself:
 // what it brought along stays (see `uninstallNote`).
-function uninstallCommandFor(helper, platform) {
+function uninstallCommandFor(helper, platform, { python } = {}) {
   const spec = helper.install[platform] ?? helper.install.all;
   if (!spec) return null;
   if (spec.winget) return `winget uninstall --id ${spec.winget} --exact --source winget`;
   if (spec.brew) return `brew uninstall ${spec.brew}`;
   if (spec.npm) return `${npmGlobal('uninstall', platform)} ${spec.npm}`;
-  if (spec.pip) return platform === 'win32' ? `py -m pip uninstall -y ${spec.pip}` : `python3 -m pip uninstall -y ${spec.pip}`;
+  if (spec.pip) return `${pip(platform, python)} uninstall -y ${spec.pip}`;
   return null;
 }
 
@@ -657,6 +718,9 @@ module.exports = {
   parseMissingReaders,
   requirementFor,
   requirementInstalled,
+  choosePython,
+  parsePythonList,
+  usesPip,
   installCommandFor,
   latestVersion,
   latestVersionUrl,
