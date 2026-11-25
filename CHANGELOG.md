@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Video in documents.** A video in the `.mdz` plays in the preview, and a link to it with a time (`reel.mp4#t=1:23`) plays it from there. A video beside the `.mdz` (`../reel.mp4`) plays too, when you click it; its hover tip says where the file is. **File → Trust Files in This Folder** lets such videos in the `.mdz`'s folder, or below it, load without the click.
+
 ### Changed
 - **System Integration finds a Python markitdown-mdz can use.** When `py` or `python3` runs a Python that's too new (3.15) or too old (a Mac's 3.9), but 3.10 to 3.14 is installed too, the markitdown-mdz card installs, updates and uninstalls with that one (`py -3.14`, `python3.14`) instead of asking for another Python.
 

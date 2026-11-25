@@ -13,6 +13,9 @@ const DEFAULT_SETTINGS = Object.freeze({
   outlinePosition: 'right',
   outlineWidth: null,
   documentStyles: true,
+  // File > Trust Files in This Folder: folders whose videos outside a .mdz
+  // play without a click first (spec §9.6: none by default).
+  trustedFolders: Object.freeze([]),
 });
 
 // The editor's own choices Studio remembers: the color scheme and page width
@@ -78,12 +81,15 @@ function loadSettings(file) {
         outlinePosition: isValidViewSetting('outlinePosition', parsed.outlinePosition) ? parsed.outlinePosition : DEFAULT_SETTINGS.outlinePosition,
         outlineWidth: isValidViewSetting('outlineWidth', parsed.outlineWidth) ? parsed.outlineWidth : DEFAULT_SETTINGS.outlineWidth,
         documentStyles: isValidViewSetting('documentStyles', parsed.documentStyles) ? parsed.documentStyles : DEFAULT_SETTINGS.documentStyles,
+        trustedFolders: Array.isArray(parsed.trustedFolders)
+          ? parsed.trustedFolders.filter((folder) => typeof folder === 'string' && folder !== '')
+          : [],
       };
     }
   } catch {
     // Fall through to the defaults.
   }
-  return { ...DEFAULT_SETTINGS };
+  return { ...DEFAULT_SETTINGS, trustedFolders: [] };
 }
 
 function saveSettings(file, settings) {

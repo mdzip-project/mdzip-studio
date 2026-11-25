@@ -3,7 +3,7 @@ const { buildMenuTemplate, buildPreviewMenuTemplate, buildDockMenuTemplate, rece
 const HANDLER_NAMES = [
   'newDocument', 'newWindow', 'openDocument', 'openRecentPath', 'importDocument', 'packFolder', 'unpackMdz',
   'save', 'saveAs', 'exportDocument', 'print', 'showInFolder', 'insertAgentsGuide', 'insertReadme', 'insertWordTemplate', 'closeDocument', 'quit',
-  'reload', 'openReadingView', 'toggleLineNumbers', 'toggleRemoteImages', 'toggleOutlineSide', 'toggleDocumentStyles', 'toggleDevTools',
+  'reload', 'openReadingView', 'toggleLineNumbers', 'toggleRemoteImages', 'toggleTrustFolder', 'toggleOutlineSide', 'toggleDocumentStyles', 'toggleDevTools',
   'showHelp', 'showSystemIntegration', 'showKnownIssues', 'showChangelog', 'checkForUpdates', 'showAbout',
   'exportDraft',
 ];
@@ -311,6 +311,26 @@ describe('View > Load Remote Images', () => {
     const { handlers, entry } = item(true);
     entry.click();
     expect(handlers.toggleRemoteImages).toHaveBeenCalled();
+  });
+});
+
+describe('File > Trust Files in This Folder', () => {
+  const find = (handlers, folderTrust, documentOpen = true) =>
+    findMenu(buildMenuTemplate({ documentOpen, isDev: false, platform: 'win32', handlers, folderTrust }), 'File')
+      .submenu.find((i) => i.label === 'Trust Files in This Folder');
+
+  it('shows for a saved .mdz only, checked when its folder is trusted', () => {
+    const handlers = stubHandlers();
+    expect(find(handlers, null)).toBeUndefined();
+    expect(find(handlers, { trusted: false }, false)).toBeUndefined();
+    expect(find(handlers, { trusted: false })).toMatchObject({ type: 'checkbox', checked: false });
+    expect(find(handlers, { trusted: true }).checked).toBe(true);
+  });
+
+  it('calls the toggle handler', () => {
+    const handlers = stubHandlers();
+    find(handlers, { trusted: false }).click();
+    expect(handlers.toggleTrustFolder).toHaveBeenCalled();
   });
 });
 

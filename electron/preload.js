@@ -130,6 +130,8 @@ contextBridge.exposeInMainWorld('mdzipStudio', {
   },
   writeMarkdownImage: (payload) => ipcRenderer.invoke('mdzip:write-markdown-image', payload),
   readMarkdownAsset: (payload) => ipcRenderer.invoke('mdzip:read-markdown-asset', payload),
+  findOutsideVideo: (path) => ipcRenderer.invoke('mdzip:find-outside-video', { path }),
+  allowOutsideVideo: (path) => ipcRenderer.invoke('mdzip:allow-outside-video', { path }),
   showInFolder: (filePath) => ipcRenderer.invoke('mdzip:show-in-folder', { filePath }),
   pathAction: (filePath, action) => ipcRenderer.invoke('mdzip:path-action', { filePath, action }),
   printPreview: (payload) => ipcRenderer.invoke('mdzip:print-preview', payload),

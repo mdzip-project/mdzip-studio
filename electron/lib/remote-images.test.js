@@ -36,13 +36,13 @@ describe('settings file', () => {
   });
 
   it('defaults to remote images on, System colors, the default page width and a closed outline on the right when there is no file', () => {
-    expect(loadSettings(path.join(dir, 'missing.json'))).toEqual({ remoteImages: true, colorScheme: 'system', previewWidth: 'default', outlineVisible: false, outlinePosition: 'right', outlineWidth: null, documentStyles: true });
+    expect(loadSettings(path.join(dir, 'missing.json'))).toEqual({ remoteImages: true, colorScheme: 'system', previewWidth: 'default', outlineVisible: false, outlinePosition: 'right', outlineWidth: null, documentStyles: true, trustedFolders: [] });
   });
 
   it('round-trips and keeps unknown keys', () => {
     const file = path.join(dir, 'settings.json');
     saveSettings(file, { remoteImages: false, colorScheme: 'dark', previewWidth: 'full', theme: 'dark' });
-    expect(loadSettings(file)).toEqual({ remoteImages: false, colorScheme: 'dark', previewWidth: 'full', outlineVisible: false, outlinePosition: 'right', outlineWidth: null, documentStyles: true, theme: 'dark' });
+    expect(loadSettings(file)).toEqual({ remoteImages: false, colorScheme: 'dark', previewWidth: 'full', outlineVisible: false, outlinePosition: 'right', outlineWidth: null, documentStyles: true, trustedFolders: [], theme: 'dark' });
     saveSettings(file, { outlineVisible: true, outlinePosition: 'left', outlineWidth: 320 });
     expect(loadSettings(file)).toMatchObject({ outlineVisible: true, outlinePosition: 'left', outlineWidth: 320 });
   });

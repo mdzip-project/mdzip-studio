@@ -31,6 +31,7 @@ import {
   MdzipFileAction,
   MdzipFileActionTarget,
   MdzipFileCardHelp,
+  MdzipOutsideVideo,
   MdzipMarkdownRenderContext,
   MdzipMarkdownRenderExtension,
   MdzipOutlinePosition,
@@ -418,6 +419,8 @@ interface ElectronBridge {
     documentPath: string;
     relativePath: string;
   }) => Promise<{ dataUri?: string; error?: string }>;
+  findOutsideVideo?: (path: string) => Promise<{ location?: string; trusted?: boolean; error?: string }>;
+  allowOutsideVideo?: (path: string) => Promise<{ url?: string; error?: string }>;
   showInFolder?: (filePath: string) => Promise<{ ok?: boolean; error?: string }>;
   pathAction?: (filePath: string, action: 'copy-path' | 'copy-folder') => Promise<{ ok?: boolean; text?: string; error?: string }>;
   printPreview?: (payload: { html: string; title: string }) => Promise<{ ok?: boolean; error?: string }>;
@@ -723,6 +726,7 @@ interface ArchiveTreeData {
                 [fileCardHelp]="fileCardHelp"
                 [hostFileActions]="hostFileActions"
                 [fileNote]="fileNote"
+                [resolveOutsideVideo]="resolveOutsideVideo"
                 (colorSchemePreferenceChanged)="onColorSchemePreferenceChanged($event)"
                 (previewWidthChanged)="onPreviewWidthChanged($event)"
                 (outlineVisibilityChanged)="onOutlineVisibilityChanged($event)"
@@ -1720,6 +1724,21 @@ export class AppComponent implements OnDestroy {
         },
       ]
     : [];
+
+  // A video beside the .mdz (`../reel.mp4` in the document): the player names
+  // where it is, and once the reader clicks it (or at once, with View > Load
+  // Videos Beside the Document), streams it from there.
+  readonly resolveOutsideVideo = async (path: string): Promise<MdzipOutsideVideo | null> => {
+    const bridge = window.mdzipStudio;
+    if (!bridge?.findOutsideVideo || !bridge.allowOutsideVideo) return null;
+    const found = await bridge.findOutsideVideo(path);
+    if (!found.location) return null;
+    return {
+      location: found.location,
+      trusted: found.trusted === true,
+      load: async () => (await bridge.allowOutsideVideo!(path)).url ?? null,
+    };
+  };
 
   // A line on the file's card while it's open in another app.
   readonly fileNote = (file: MdzipFileActionTarget): string | null => {

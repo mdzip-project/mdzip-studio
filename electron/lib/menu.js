@@ -36,7 +36,7 @@ function recentLabel(filePath, platform = process.platform) {
 // state that decides shape (documentOpen/isDev/platform) plus a bag of click
 // handlers, and returns a plain template array — no Menu/BrowserWindow/app
 // references, so it's unit-testable without a running main process.
-function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvailableVersion = null, recentFiles = [], remoteImages = true, outlineLeft = false, documentStyles = true }) {
+function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvailableVersion = null, recentFiles = [], remoteImages = true, folderTrust = null, outlineLeft = false, documentStyles = true }) {
   // Electron's native Windows menu doesn't expose a styleable disabled state, so
   // the document-only items would look enabled until hovered. Instead of greying
   // them out, omit them entirely when no document is open — unambiguous, and they
@@ -71,6 +71,12 @@ function buildMenuTemplate({ documentOpen, isDev, platform, handlers, updateAvai
       { label: isMac ? 'Reveal in Finder' : 'Show in File Manager', click: handlers.showInFolder },
       { label: 'Copy File Path', click: handlers.copyFilePath },
       { label: 'Copy Folder Path', click: handlers.copyFolderPath },
+      // A saved .mdz's folder: files there that the document uses from
+      // outside it (a video beside it) load without asking (spec §9.6).
+      // `folderTrust` is { trusted } for a saved .mdz, null otherwise.
+      ...(folderTrust
+        ? [{ label: 'Trust Files in This Folder', type: 'checkbox', checked: folderTrust.trusted === true, click: handlers.toggleTrustFolder }]
+        : []),
       { type: 'separator' },
       { label: 'Insert AGENTS.md', click: handlers.insertAgentsGuide },
       { label: 'Insert README.md', click: handlers.insertReadme },

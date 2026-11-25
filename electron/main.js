@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeTheme, net, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, nativeTheme, net, protocol, session, shell } = require('electron');
 const { runPathAction } = require('./lib/path-actions');
 const { autoUpdater } = require('electron-updater');
 const fs = require('fs/promises');
@@ -40,6 +40,15 @@ const { buildJumpList, wantsNewWindow, startupActionFromArgs, recentDocumentsFor
 const { createOpenFileQueue } = require('./lib/open-file-queue');
 const { helpStartupAction } = require('./lib/help-window');
 const { navigationAction } = require('./lib/navigation');
+const {
+  MEDIA_SCHEME,
+  AllowedMedia,
+  isTrustedFolder,
+  isTrustedOutsideFile,
+  mediaResponse,
+  outsideVideoFile,
+  toggleTrustedFolder,
+} = require('./lib/outside-media');
 const { readerSnapshot, saveCopyFilters, shouldCloseLeftoverReaders } = require('./lib/reader-window');
 const convert = require('./lib/convert');
 const { statsDiffer } = require('./lib/file-watch');
@@ -354,6 +363,9 @@ function watchDocument(win, filePath) {
 // newly-active document in one call — used everywhere a window's document
 // path is set to a real, on-disk file.
 async function trackDocument(win, filePath) {
+  // The window has a new path (opened, saved as): File > Trust Files in This
+  // Folder is about its folder.
+  if (!win.isDestroyed()) refreshWindowMenu(win);
   await snapshotDocumentStat(win, filePath);
   watchDocument(win, filePath);
 }
@@ -598,6 +610,63 @@ function getSettings() {
   return studioSettings;
 }
 
+// Videos outside a .mdz (lib/outside-media.js): the player streams one the
+// reader has allowed from mdzip-media:, in pieces. Registered before 'ready'.
+const allowedMedia = new AllowedMedia();
+protocol.registerSchemesAsPrivileged([
+  { scheme: MEDIA_SCHEME, privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true } },
+]);
+app.on('ready', () => {
+  protocol.handle(MEDIA_SCHEME, (request) => {
+    const filePath = allowedMedia.fileFor(request.url);
+    if (!filePath) return new Response(null, { status: 404 });
+    return mediaResponse(filePath, request.headers.get('range'));
+  });
+});
+
+// File > Trust Files in This Folder's state for a window's menu: null unless
+// it shows a saved .mdz.
+function folderTrustFor(win) {
+  const mdzPath = win && !win.isDestroyed() ? mdzPathFor(win) : null;
+  return mdzPath ? { trusted: isTrustedFolder(getSettings().trustedFolders, path.dirname(mdzPath)) } : null;
+}
+
+// The .mdz a window shows, for videos beside it: its own, or for a reading
+// window, its editing window's. Null for a .md file or an unsaved document.
+function mdzPathFor(win) {
+  const state = windowState(win);
+  if (!state) return null;
+  const source = state.reader && state.readerSource && !state.readerSource.isDestroyed()
+    ? windowState(state.readerSource)
+    : state;
+  const documentPath = source?.documentPath ?? null;
+  return documentPath && /\.mdz$/i.test(documentPath) ? documentPath : null;
+}
+
+// A video outside the .mdz: where it is, for the player to name before the
+// reader allows it (a click on it), and whether File > Trust Files in This
+// Folder already has (only for a file in the .mdz's folder or below). Nothing
+// is read.
+ipcMain.handle('mdzip:find-outside-video', async (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const filePath = outsideVideoFile(mdzPathFor(win), payload?.path);
+  if (!filePath) return { error: 'unsupported-path' };
+  try {
+    if (!(await fs.stat(filePath)).isFile()) return { error: 'not-found' };
+  } catch {
+    return { error: 'not-found' };
+  }
+  return { location: filePath, trusted: isTrustedOutsideFile(getSettings().trustedFolders, mdzPathFor(win), filePath) };
+});
+
+// The reader allowed it: a URL the player streams it from.
+ipcMain.handle('mdzip:allow-outside-video', async (event, payload) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const filePath = outsideVideoFile(mdzPathFor(win), payload?.path);
+  if (!win || !filePath) return { error: 'unsupported-path' };
+  return { url: allowedMedia.allow(win.id, filePath) };
+});
+
 // Remote images in documents (spec §9.2): https only, and only while
 // View > Load Remote Images is on. Filtered here rather than with a page CSP so
 // the UI's own resources (and the dev server) are untouched. data:/blob:/file:
@@ -674,6 +743,23 @@ function toggleDocumentStyles() {
       `window.dispatchEvent(new CustomEvent('mdzip-studio:document-styles', { detail: ${JSON.stringify(documentStyles)} }))`
     ).catch(() => {});
   }
+}
+
+// File > Trust Files in This Folder, for the window's .mdz. Players already
+// showing keep waiting for a click; the next time a document is shown, they
+// don't. Every window's menu changes: others may be in the same folder.
+function toggleTrustFolder(win) {
+  const mdzPath = mdzPathFor(win);
+  if (!mdzPath) return;
+  const trustedFolders = toggleTrustedFolder(getSettings().trustedFolders, path.dirname(mdzPath));
+  const settings = { ...getSettings(), trustedFolders };
+  studioSettings = settings;
+  try {
+    saveSettings(settingsFile(), settings);
+  } catch (error) {
+    console.error('Could not save settings:', error);
+  }
+  refreshAllWindowMenus();
 }
 
 function toggleRemoteImages() {
@@ -1043,6 +1129,7 @@ function createWindow({ pendingOpenPath = null, startupAction = null, readerSour
   const windowId = win.id;
   win.on('closed', () => {
     void externalEdits.stop(windowId);
+    allowedMedia.forget(windowId);
     unwatchDocument(win);
     windows.delete(win);
     if (lastFocusedWindow === win) lastFocusedWindow = null;
@@ -1336,6 +1423,7 @@ ipcMain.on('mdzip:set-current-document-path', (event, payload) => {
     trackDocument(win, resolved).catch(() => {});
   } else {
     unwatchDocument(win);
+    refreshWindowMenu(win);
   }
 });
 
@@ -2812,6 +2900,7 @@ function menuHandlersFor(win) {
     openReadingView: () => dispatchAppEvent(win, 'mdzip-studio:open-reading-view'),
     toggleLineNumbers: () => dispatchAppEvent(win, 'mdzip-studio:toggle-line-numbers'),
     toggleRemoteImages: () => toggleRemoteImages(),
+    toggleTrustFolder: () => toggleTrustFolder(win),
     toggleOutlineSide: () => toggleOutlineSide(),
     toggleDocumentStyles: () => toggleDocumentStyles(),
     toggleDevTools: () => win?.webContents.toggleDevTools(),
@@ -2847,6 +2936,7 @@ function refreshWindowMenu(win) {
     updateAvailableVersion: availableUpdateInfo?.version ?? null,
     recentFiles: latestRecentFiles,
     remoteImages: getSettings().remoteImages,
+    folderTrust: folderTrustFor(win),
     outlineLeft: getSettings().outlinePosition === 'left',
     documentStyles: getSettings().documentStyles !== false,
   });
@@ -2896,6 +2986,7 @@ function applyDarwinMenu(win) {
       updateAvailableVersion,
       recentFiles: latestRecentFiles,
       remoteImages: getSettings().remoteImages,
+      folderTrust: folderTrustFor(target),
       outlineLeft: getSettings().outlinePosition === 'left',
       documentStyles: getSettings().documentStyles !== false,
     });
